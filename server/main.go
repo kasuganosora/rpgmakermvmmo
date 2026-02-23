@@ -105,7 +105,13 @@ func main() {
 
 	// ---- Game Systems ----
 	sm := player.NewSessionManager(logger)
-	wm := world.NewWorldManager(logger)
+	gameState := world.NewGameState(db)
+	if err := gameState.LoadFromDB(); err != nil {
+		logger.Warn("failed to load game state from DB", zap.Error(err))
+	} else {
+		logger.Info("game state loaded from DB")
+	}
+	wm := world.NewWorldManager(res, gameState, logger)
 	defer wm.StopAll()
 	partyMgr := party.NewManager(logger)
 
@@ -141,8 +147,10 @@ func main() {
 	sh := apows.NewSkillItemHandlers(db, res, wm, skillSvc, logger)
 	sh.RegisterHandlers(wsRouter)
 
-	npcH := apows.NewNPCHandlers(db, res, logger)
+	npcH := apows.NewNPCHandlers(db, res, wm, logger)
+	npcH.SetTransferFunc(gh.EnterMapRoom)
 	npcH.RegisterHandlers(wsRouter)
+	gh.SetAutorunFunc(npcH.ExecuteAutoruns)
 
 	tradeH := apows.NewTradeHandlers(db, tradeSvc, sm, logger)
 	tradeH.RegisterHandlers(wsRouter)
@@ -183,7 +191,7 @@ func main() {
 
 	// ---- REST API routes ----
 	authH := apirest.NewAuthHandler(db, c, cfg.Security)
-	charH := apirest.NewCharacterHandler(db, res)
+	charH := apirest.NewCharacterHandler(db, res, cfg.Game)
 	invH := apirest.NewInventoryHandler(db)
 	socialH := apirest.NewSocialHandler(db, sm)
 	guildH := apirest.NewGuildHandler(db)

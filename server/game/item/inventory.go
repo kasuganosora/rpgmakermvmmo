@@ -75,6 +75,28 @@ func (svc *InventoryService) RemoveItem(ctx context.Context, charID int64, itemT
 	})
 }
 
+// UseItem consumes 1 quantity of the inventory row identified by its primary
+// key (invID). Returns the row so callers can read ItemID/Kind for effects.
+func (svc *InventoryService) UseItem(ctx context.Context, charID int64, invID int64) (*model.Inventory, error) {
+	var inv model.Inventory
+	err := svc.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("id = ? AND char_id = ?", invID, charID).First(&inv).Error; err != nil {
+			return err
+		}
+		if inv.Kind != model.ItemKindItem {
+			return errors.New("only consumable items can be used")
+		}
+		if inv.Qty <= 1 {
+			return tx.Delete(&inv).Error
+		}
+		return tx.Model(&inv).Update("qty", inv.Qty-1).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &inv, nil
+}
+
 // List returns all inventory rows for charID.
 func (svc *InventoryService) List(ctx context.Context, charID int64) ([]model.Inventory, error) {
 	var items []model.Inventory

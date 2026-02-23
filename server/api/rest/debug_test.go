@@ -24,7 +24,7 @@ func TestDebugCharCreation(t *testing.T) {
 	sec := config.SecurityConfig{JWTSecret: "test-secret", JWTTTLH: 72 * time.Hour}
 
 	authHandler := rest.NewAuthHandler(db, c, sec)
-	charHandler := rest.NewCharacterHandler(db, nil)
+	charHandler := rest.NewCharacterHandler(db, nil, config.GameConfig{StartMapID: 1, StartX: 5, StartY: 5})
 
 	r := gin.New()
 	r.POST("/api/auth/login", authHandler.Login)

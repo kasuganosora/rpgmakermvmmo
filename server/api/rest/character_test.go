@@ -51,7 +51,7 @@ func newCharRouter(t *testing.T) (*gin.Engine, string) {
 	sec := config.SecurityConfig{JWTSecret: "test-secret", JWTTTLH: 72 * time.Hour}
 
 	authHandler := rest.NewAuthHandler(db, c, sec)
-	charHandler := rest.NewCharacterHandler(db, nil) // no resource loader in tests
+	charHandler := rest.NewCharacterHandler(db, nil, config.GameConfig{StartMapID: 1, StartX: 5, StartY: 5}) // no resource loader in tests
 
 	r := gin.New()
 	r.POST("/api/auth/login", authHandler.Login)
@@ -157,7 +157,7 @@ func newDeleteCharRouter(t *testing.T) (*gin.Engine, *model.Account, string) {
 	sec := config.SecurityConfig{JWTSecret: "test-secret", JWTTTLH: 72 * time.Hour}
 
 	authH := rest.NewAuthHandler(db, c, sec)
-	charH := rest.NewCharacterHandler(db, nil)
+	charH := rest.NewCharacterHandler(db, nil, config.GameConfig{StartMapID: 1, StartX: 5, StartY: 5})
 
 	r := gin.New()
 	r.POST("/api/auth/login", authH.Login)

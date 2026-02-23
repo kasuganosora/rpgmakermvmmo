@@ -30,6 +30,7 @@
         'mmo-game-window.js',
         'mmo-auth.js',
         'mmo-other-players.js',
+        'mmo-npc.js',
         'mmo-battle.js',
         'mmo-hud.js',
         'mmo-skill-bar.js',

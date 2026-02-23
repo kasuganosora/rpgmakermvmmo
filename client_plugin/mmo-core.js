@@ -149,7 +149,18 @@
             if (this._heartbeatTimer) { clearInterval(this._heartbeatTimer); this._heartbeatTimer = null; }
         },
 
-        isConnected: function () { return this._state === STATE.CONNECTED; }
+        isConnected: function () { return this._state === STATE.CONNECTED; },
+
+        // Bottom-UI registry: panels hidden when RMMV message/choice is active.
+        _bottomUI: [],
+        _eventBusy: false,
+        registerBottomUI: function (panel) {
+            if (this._bottomUI.indexOf(panel) < 0) this._bottomUI.push(panel);
+        },
+        unregisterBottomUI: function (panel) {
+            var idx = this._bottomUI.indexOf(panel);
+            if (idx >= 0) this._bottomUI.splice(idx, 1);
+        }
     };
 
     // Disable local RMMV save.
@@ -197,34 +208,24 @@
     };
 
     // -----------------------------------------------------------------
-    // Server-driven map transfers.
-    // Override RMMV's Transfer Player command (code 201) to send the
-    // request to the server instead of executing locally. The server
-    // validates, updates map rooms, and responds with map_init.
-    // This prevents the client from changing maps without server knowledge.
+    // Disable client-side Transfer Player (code 201).
+    // All map transfers are handled server-side: the NPC executor calls
+    // enterMapRoom when it encounters command 201, which sends map_init.
+    // This override is a safety net for any remaining client-side
+    // interpreters (e.g. common events) — they must not trigger transfers.
     // -----------------------------------------------------------------
     Game_Interpreter.prototype.command201 = function () {
-        if ($MMO.isConnected()) {
-            var p = this._params;
-            // params: [mode(0=direct), mapId, x, y, dir, fadeType]
-            var mapId = p[1], x = p[2], y = p[3], dir = p[4];
-            var fadeType = p[5] != null ? p[5] : 0; // 0=black, 1=white, 2=none
-            // mode 1 = variable reference (rare, handle just in case)
-            if (p[0] === 1) {
-                mapId = $gameVariables.value(p[1]);
-                x = $gameVariables.value(p[2]);
-                y = $gameVariables.value(p[3]);
-            }
-            // Store fadeType for use when map_init arrives.
-            $MMO._pendingFadeType = fadeType;
-            $MMO.send('map_transfer', { map_id: mapId, x: x, y: y, dir: dir });
-            this.setWaitMode('transfer');
-        }
-        return true;
+        return true; // no-op — server handles all transfers
     };
 
     // On map_init, transfer the player to the correct map and position from server.
     // Handles: initial login, re-login, and server-side map transfers.
+    //
+    // IMPORTANT: Always force setTransparent(false) here. Many RMMV games set
+    // $dataSystem.optTransparent = true which makes $gamePlayer invisible on init.
+    // Normally an autorun event clears this, but in MMO mode autorun events are
+    // suppressed (server handles event logic). This single line prevents player
+    // invisibility regardless of the game's transparency setting.
     $MMO.on('map_init', function (data) {
         if (!data || !data.self) return;
         var s = data.self;
@@ -237,25 +238,35 @@
         $MMO._lastSelf = s;
 
         if ($gamePlayer && $gameMap) {
+            // Force player visible — handles $dataSystem.optTransparent = true.
+            $gamePlayer.setTransparent(false);
+
             if ($gameMap.mapId() !== mapId) {
-                var fadeType = $MMO._pendingFadeType != null ? $MMO._pendingFadeType : 0;
-                $MMO._pendingFadeType = null;
-                $gamePlayer.reserveTransfer(mapId, x, y, dir, fadeType);
+                $gamePlayer.reserveTransfer(mapId, x, y, dir, 0);
             } else {
                 $gamePlayer.locate(x, y);
                 $gamePlayer.setDirection(dir);
             }
+
+            // Force refresh to apply server walk_name immediately.
+            // Without this, same-map re-entry (re-login to same map) would
+            // leave the player sprite stale from the previous session.
+            $gamePlayer.refresh();
         }
     });
 
     // Override Game_Player.refresh so the walk sprite comes from the MMO
     // server instead of $gameParty.leader(). Without this, reserveTransfer →
     // performTransfer → refresh() would reset the sprite to the default actor.
+    //
+    // Also forces setTransparent(false) to ensure visibility even if refresh
+    // is called during initialization before map_init arrives.
     var _GamePlayer_refresh = Game_Player.prototype.refresh;
     Game_Player.prototype.refresh = function () {
         var s = $MMO._lastSelf;
         if (s && s.walk_name) {
             this.setImage(s.walk_name, s.walk_index || 0);
+            this.setTransparent(false);
         } else {
             _GamePlayer_refresh.call(this);
         }
@@ -266,17 +277,36 @@
         if ($MMO._debug) console.log('[MMO] Pong, latency:', Date.now() - (payload.ts || 0), 'ms');
     });
 
+    // Handle move_reject: server rejected a player_move due to passability or
+    // speed violation. Snap the player to the server's authoritative position
+    // to prevent cascading desync (every subsequent move would be rejected).
+    $MMO.on('move_reject', function (data) {
+        if (!data || !$gamePlayer) return;
+        console.warn('[MMO] Move rejected — snapping to server position:',
+            data.x, data.y, 'dir', data.dir);
+        $gamePlayer.locate(data.x, data.y);
+        if (data.dir) $gamePlayer.setDirection(data.dir);
+    });
+
+    // Handle generic server errors.
+    $MMO.on('error', function (data) {
+        console.warn('[MMO] Server error:', data && data.message);
+    });
+
     // -----------------------------------------------------------------
     // Disconnect dialog: show alert and return to login screen.
     // -----------------------------------------------------------------
     $MMO.on('_disconnected', function () {
-        // Only show the dialog if we are in-game (not on login/char-select).
+        // Only show the dialog if we are in-game (not on login/char-select/create).
         if (!SceneManager._scene || SceneManager._scene instanceof Scene_Title) return;
         if (typeof Scene_Login !== 'undefined' && SceneManager._scene instanceof Scene_Login) return;
+        if (typeof Scene_CharacterSelect !== 'undefined' && SceneManager._scene instanceof Scene_CharacterSelect) return;
+        if (typeof Scene_CharacterCreate !== 'undefined' && SceneManager._scene instanceof Scene_CharacterCreate) return;
 
-        // Clean up state.
+        // Clean up state — clear server data to prevent stale sprites on re-login.
         $MMO.token = null;
         $MMO.charID = null;
+        $MMO._lastSelf = null;
 
         alert('与服务器的连接已断开');
         SceneManager.goto(Scene_Title);
@@ -450,6 +480,22 @@
             if (!$MMO.closeTopWindow()) {
                 $MMO._triggerAction('system');
             }
+        }
+        // Hide bottom MMO UI when RMMV message/choice windows are active.
+        var busy = !!($gameMessage && $gameMessage.isBusy());
+        if (busy !== $MMO._eventBusy) {
+            $MMO._eventBusy = busy;
+            $MMO._bottomUI.forEach(function (panel) {
+                if (busy) {
+                    panel._mmoHiddenByEvent = panel.visible;
+                    if (typeof panel.hide === 'function') panel.hide();
+                    else panel.visible = false;
+                } else if (panel._mmoHiddenByEvent) {
+                    if (typeof panel.show === 'function') panel.show();
+                    else panel.visible = true;
+                    panel._mmoHiddenByEvent = false;
+                }
+            });
         }
     };
 

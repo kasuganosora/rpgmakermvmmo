@@ -112,11 +112,12 @@ func (sh *SkillItemHandlers) HandleUseItem(_ context.Context, s *player.PlayerSe
 		return err
 	}
 	ctx := context.Background()
-	if err := sh.invSvc.RemoveItem(ctx, s.CharID, 1 /*ItemKindItem*/, int(req.InvID), 1); err != nil {
+	inv, err := sh.invSvc.UseItem(ctx, s.CharID, req.InvID)
+	if err != nil {
 		sendError(s, "use item failed: "+err.Error())
 		return nil
 	}
 	// TODO: apply item effects (HP/MP restore, buff) based on Items.json effects[]
-	sh.logger.Info("item used", zap.Int64("char_id", s.CharID), zap.Int64("inv_id", req.InvID))
+	sh.logger.Info("item used", zap.Int64("char_id", s.CharID), zap.Int64("inv_id", req.InvID), zap.Int("item_id", inv.ItemID))
 	return nil
 }

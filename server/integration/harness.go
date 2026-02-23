@@ -68,10 +68,11 @@ func NewTestServer(t *testing.T) *TestServer {
 
 	// ---- Game Systems ----
 	sm := player.NewSessionManager(logger)
-	wm := world.NewWorldManager(logger)
 
 	// Empty resource loader (no RMMV data files needed for integration tests).
 	res := resource.NewLoader("", "")
+	gameState := world.NewGameState(nil)
+	wm := world.NewWorldManager(res, gameState, logger)
 
 	// ---- Services ----
 	skillSvc := gskill.NewSkillService(c, res, wm, logger)
@@ -97,7 +98,7 @@ func NewTestServer(t *testing.T) *TestServer {
 	sh := apows.NewSkillItemHandlers(db, res, wm, skillSvc, logger)
 	sh.RegisterHandlers(wsRouter)
 
-	npcH := apows.NewNPCHandlers(db, res, logger)
+	npcH := apows.NewNPCHandlers(db, res, wm, logger)
 	npcH.RegisterHandlers(wsRouter)
 
 	tradeH := apows.NewTradeHandlers(db, tradeSvc, sm, logger)
@@ -119,7 +120,7 @@ func NewTestServer(t *testing.T) *TestServer {
 
 	// ---- REST API routes (mirrors main.go) ----
 	authH := apirest.NewAuthHandler(db, c, sec)
-	charH := apirest.NewCharacterHandler(db, nil) // nil res skips class/image validation in tests
+	charH := apirest.NewCharacterHandler(db, nil, config.GameConfig{StartMapID: 1, StartX: 5, StartY: 5})
 	invH := apirest.NewInventoryHandler(db)
 	socialH := apirest.NewSocialHandler(db, sm)
 	guildH := apirest.NewGuildHandler(db)

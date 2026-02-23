@@ -160,20 +160,76 @@ type EventCommand struct {
 	Parameters []interface{} `json:"parameters"`
 }
 
+// EventPageConditions holds the activation conditions for an event page.
+type EventPageConditions struct {
+	Switch1Valid    bool   `json:"switch1Valid"`
+	Switch1ID       int    `json:"switch1Id"`
+	Switch2Valid    bool   `json:"switch2Valid"`
+	Switch2ID       int    `json:"switch2Id"`
+	VariableValid   bool   `json:"variableValid"`
+	VariableID      int    `json:"variableId"`
+	VariableValue   int    `json:"variableValue"`
+	SelfSwitchValid bool   `json:"selfSwitchValid"`
+	SelfSwitchCh    string `json:"selfSwitchCh"`
+	ActorValid      bool   `json:"actorValid"`
+	ActorID         int    `json:"actorId"`
+	ItemValid       bool   `json:"itemValid"`
+	ItemID          int    `json:"itemId"`
+}
+
+// EventImage holds the character sprite image for an event page.
+type EventImage struct {
+	TileID         int    `json:"tileId"`
+	CharacterName  string `json:"characterName"`
+	CharacterIndex int    `json:"characterIndex"`
+	Direction      int    `json:"direction"`
+	Pattern        int    `json:"pattern"`
+}
+
+// MoveCommand is a single command in a move route.
+type MoveCommand struct {
+	Code       int           `json:"code"`
+	Parameters []interface{} `json:"parameters"`
+}
+
+// MoveRoute defines a custom movement path for an event.
+type MoveRoute struct {
+	List      []*MoveCommand `json:"list"`
+	Repeat    bool           `json:"repeat"`
+	Skippable bool           `json:"skippable"`
+	Wait      bool           `json:"wait"`
+}
+
 // EventPage is one page of an event's command list.
 // Trigger: 0=ActionButton, 1=PlayerTouch, 2=EventTouch, 3=Autorun, 4=Parallel
 type EventPage struct {
-	Trigger int              `json:"trigger"`
-	List    []*EventCommand  `json:"list"`
+	Conditions    EventPageConditions `json:"conditions"`
+	Image         EventImage          `json:"image"`
+	Trigger       int                 `json:"trigger"`
+	List          []*EventCommand     `json:"list"`
+	MoveType      int                 `json:"moveType"`      // 0=fixed,1=random,2=approach,3=custom
+	MoveSpeed     int                 `json:"moveSpeed"`     // 1-6
+	MoveFrequency int                 `json:"moveFrequency"` // 1-5
+	MoveRoute     *MoveRoute          `json:"moveRoute"`
+	PriorityType  int                 `json:"priorityType"`  // 0=below,1=same,2=above
+	StepAnime     bool                `json:"stepAnime"`
+	DirectionFix  bool                `json:"directionFix"`
+	Through       bool                `json:"through"`
+	WalkAnime     bool                `json:"walkAnime"`
 }
 
 // MapEvent is an event object placed on a map.
 type MapEvent struct {
 	ID    int          `json:"id"`
 	Name  string       `json:"name"`
+	Note  string       `json:"note"`
 	X     int          `json:"x"`
 	Y     int          `json:"y"`
 	Pages []*EventPage `json:"pages"`
+	// OriginalPages stores the event's original pages before TemplateEvent resolution.
+	// Used by TE_CALL_ORIGIN_EVENT to call back to the source event's commands.
+	// Nil if the event is not a template event.
+	OriginalPages []*EventPage `json:"-"`
 }
 
 // MapData represents an RMMV Map*.json file.
@@ -253,8 +309,11 @@ type MapInfo struct {
 }
 
 type CommonEvent struct {
-	ID   int    `json:"id"`
-	Name string `json:"name"`
+	ID       int             `json:"id"`
+	Name     string          `json:"name"`
+	Trigger  int             `json:"trigger"`
+	SwitchID int             `json:"switchId"`
+	List     []*EventCommand `json:"list"`
 }
 
 type Tileset struct {
@@ -263,13 +322,16 @@ type Tileset struct {
 	Flags    []int  `json:"flags"` // passability flags per tileId
 }
 
-// PassabilityMap stores passability for each (x, y) in 4 directions.
+// PassabilityMap stores passability for each (x, y) in 4 directions,
+// plus region IDs from RMMV's layer 5.
 // dir: 0=down(2), 1=left(4), 2=right(6), 3=up(8)
 type PassabilityMap struct {
 	Width  int
 	Height int
 	// data[y][x][dir]
 	data [][][4]bool
+	// regions[y][x] = region ID (RMMV layer 5); nil if map has < 6 layers.
+	regions [][]int
 }
 
 func newPassabilityMap(w, h int) *PassabilityMap {
@@ -283,6 +345,43 @@ func newPassabilityMap(w, h int) *PassabilityMap {
 		}
 	}
 	return pm
+}
+
+// NewPassabilityMap creates a PassabilityMap with all tiles passable by default.
+// Exported for use by other packages (e.g., tests).
+func NewPassabilityMap(w, h int) *PassabilityMap {
+	return newPassabilityMap(w, h)
+}
+
+// SetPass sets the passability for a specific RMMV direction (2/4/6/8) at (x, y).
+func (pm *PassabilityMap) SetPass(x, y, dir int, passable bool) {
+	if x < 0 || x >= pm.Width || y < 0 || y >= pm.Height {
+		return
+	}
+	switch dir {
+	case 2:
+		pm.data[y][x][0] = passable
+	case 4:
+		pm.data[y][x][1] = passable
+	case 6:
+		pm.data[y][x][2] = passable
+	case 8:
+		pm.data[y][x][3] = passable
+	}
+}
+
+// SetRegion sets the region ID at (x, y), initializing the region layer if needed.
+func (pm *PassabilityMap) SetRegion(x, y, regionID int) {
+	if x < 0 || x >= pm.Width || y < 0 || y >= pm.Height {
+		return
+	}
+	if pm.regions == nil {
+		pm.regions = make([][]int, pm.Height)
+		for i := range pm.regions {
+			pm.regions[i] = make([]int, pm.Width)
+		}
+	}
+	pm.regions[y][x] = regionID
 }
 
 // CanPass reports whether movement in the given RPG Maker direction (2/4/6/8) is allowed at (x,y).
@@ -299,6 +398,59 @@ func (pm *PassabilityMap) CanPass(x, y, dir int) bool {
 		return pm.data[y][x][2]
 	case 8:
 		return pm.data[y][x][3]
+	}
+	return false
+}
+
+// RegionAt returns the region ID at (x, y), or 0 if out of bounds / no region data.
+func (pm *PassabilityMap) RegionAt(x, y int) int {
+	if pm.regions == nil || x < 0 || x >= pm.Width || y < 0 || y >= pm.Height {
+		return 0
+	}
+	return pm.regions[y][x]
+}
+
+// RegionRestrictions stores the region-based movement restriction config
+// parsed from the YEP_RegionRestrictions plugin.
+type RegionRestrictions struct {
+	EventRestrict []int // regions that block event/NPC movement
+	AllRestrict   []int // regions that block all movement
+	EventAllow    []int // regions that always allow event movement
+	AllAllow      []int // regions that always allow all movement
+}
+
+// IsEventRestricted returns true if the given region blocks NPC/event movement.
+func (rr *RegionRestrictions) IsEventRestricted(regionID int) bool {
+	if regionID == 0 {
+		return false
+	}
+	for _, r := range rr.EventRestrict {
+		if r == regionID {
+			return true
+		}
+	}
+	for _, r := range rr.AllRestrict {
+		if r == regionID {
+			return true
+		}
+	}
+	return false
+}
+
+// IsEventAllowed returns true if the given region always allows NPC/event movement.
+func (rr *RegionRestrictions) IsEventAllowed(regionID int) bool {
+	if regionID == 0 {
+		return false
+	}
+	for _, r := range rr.EventAllow {
+		if r == regionID {
+			return true
+		}
+	}
+	for _, r := range rr.AllAllow {
+		if r == regionID {
+			return true
+		}
 	}
 	return false
 }
@@ -325,6 +477,25 @@ type ResourceLoader struct {
 	CommonEvents []*CommonEvent
 	Tilesets     []*Tileset
 	Passability  map[int]*PassabilityMap
+
+	// IncomingTransfers maps destMapID → list of arrival positions.
+	// Built by scanning all maps for transfer commands (code 201) and recording
+	// the destination coordinates grouped by destination map ID.
+	IncomingTransfers map[int][]EntryPoint
+
+	// RegionRestr holds region-based movement restriction config from
+	// the YEP_RegionRestrictions plugin. Nil if plugin is not active.
+	RegionRestr *RegionRestrictions
+
+	// CPStarPassFix is true when the CP_Star_Passability_Fix plugin is active.
+	// Changes star tile (flag & 0x10) behavior: star tiles CAN block passage
+	// if their direction bit is set.
+	CPStarPassFix bool
+}
+
+// EntryPoint is a position where players arrive when transferring to a map.
+type EntryPoint struct {
+	X, Y int
 }
 
 // NewLoader creates a ResourceLoader for the given RMMV data directory.
@@ -361,7 +532,13 @@ func (rl *ResourceLoader) Load() error {
 			return err
 		}
 	}
+	// Apply plugin adapters after maps are loaded but before derived data.
+	// This resolves template events, etc. based on detected RMMV plugins.
+	if err := rl.applyPluginAdapters(); err != nil {
+		return err
+	}
 	rl.buildPassability()
+	rl.buildIncomingTransfers()
 	return nil
 }
 
@@ -503,6 +680,14 @@ func (rl *ResourceLoader) loadMaps() error {
 }
 
 // buildPassability pre-computes passability for each map using tile flags.
+// Matches RMMV's Game_Map.checkPassage logic: iterate tiles from top layer to
+// bottom, skip star tiles (flag & 0x10), and use the FIRST non-star tile to
+// determine passability per direction.
+//
+// If CPStarPassFix is true (CP_Star_Passability_Fix plugin active), star tiles
+// CAN block passage when their direction bit is set.
+//
+// Also extracts region IDs from layer 5 of the map data.
 func (rl *ResourceLoader) buildPassability() {
 	// Build a map from tilesetID → tileset for quick lookup.
 	tilesetMap := make(map[int]*Tileset)
@@ -512,11 +697,14 @@ func (rl *ResourceLoader) buildPassability() {
 		}
 	}
 
+	cpStarFix := rl.CPStarPassFix
+
 	for mapID, md := range rl.Maps {
 		ts, ok := tilesetMap[md.TilesetID]
 		if !ok || len(ts.Flags) == 0 {
 			// No tileset data – mark everything passable.
 			pm := newPassabilityMap(md.Width, md.Height)
+			rl.extractRegions(pm, md)
 			rl.Passability[mapID] = pm
 			continue
 		}
@@ -524,36 +712,120 @@ func (rl *ResourceLoader) buildPassability() {
 		pm := newPassabilityMap(md.Width, md.Height)
 		layers := len(md.Data) / (md.Width * md.Height)
 
+		// RMMV direction bits: bit0=down(2), bit1=left(4), bit2=right(6), bit3=up(8)
+		dirBits := [4]int{0x01, 0x02, 0x04, 0x08}
+
+		// Only check tile layers 0-3, matching RMMV's layeredTiles().
+		// Layer 4 = shadows, layer 5 = regions — NOT real tiles.
+		tileLayers := layers
+		if tileLayers > 4 {
+			tileLayers = 4
+		}
+
 		for y := 0; y < md.Height; y++ {
 			for x := 0; x < md.Width; x++ {
-				for layer := 0; layer < layers; layer++ {
-					tileID := md.Data[layer*md.Height*md.Width+y*md.Width+x]
-					if tileID <= 0 || tileID >= len(ts.Flags) {
-						continue
+				// Check each direction independently, matching RMMV's checkPassage.
+				for di, bit := range dirBits {
+					passable := false
+					// Iterate layers from bottom (0) to top (3), matching RMMV's
+					// layeredTiles() order in checkPassage. The FIRST non-star
+					// tile encountered determines passability for that direction.
+					for layer := 0; layer < tileLayers; layer++ {
+						tileID := md.Data[layer*md.Height*md.Width+y*md.Width+x]
+						if tileID < 0 || tileID >= len(ts.Flags) {
+							continue
+						}
+						flag := ts.Flags[tileID]
+						if flag&0x10 != 0 {
+							// Star tile.
+							if cpStarFix {
+								// CP_Star_Passability_Fix: star tiles CAN block.
+								// If direction bit is clear → passable, check next layer.
+								// If direction bit is set → BLOCKED.
+								if (flag & bit) == 0 {
+									continue
+								}
+								passable = false
+								break
+							}
+							// Base RMMV: star tiles are always skipped.
+							continue
+						}
+						// First non-star tile determines passability.
+						passable = (flag & bit) == 0
+						break
 					}
-					flag := ts.Flags[tileID]
-					// RPG Maker MV flag bits: bit0=down, bit1=left, bit2=right, bit3=up
-					// If bit is set → NOT passable in that direction.
-					if flag&0x01 != 0 {
-						pm.data[y][x][0] = false // down
-					}
-					if flag&0x02 != 0 {
-						pm.data[y][x][1] = false // left
-					}
-					if flag&0x04 != 0 {
-						pm.data[y][x][2] = false // right
-					}
-					if flag&0x08 != 0 {
-						pm.data[y][x][3] = false // up
-					}
-					// 0x0F = fully impassable
-					if flag&0x0F == 0x0F {
-						pm.data[y][x] = [4]bool{false, false, false, false}
-					}
+					pm.data[y][x][di] = passable
 				}
 			}
 		}
+		rl.extractRegions(pm, md)
 		rl.Passability[mapID] = pm
+	}
+}
+
+// extractRegions reads region IDs from layer 5 of the map data into the PassabilityMap.
+func (rl *ResourceLoader) extractRegions(pm *PassabilityMap, md *MapData) {
+	if md.Width <= 0 || md.Height <= 0 || len(md.Data) == 0 {
+		return
+	}
+	layers := len(md.Data) / (md.Width * md.Height)
+	if layers < 6 {
+		return // no region layer
+	}
+	pm.regions = make([][]int, md.Height)
+	for y := 0; y < md.Height; y++ {
+		pm.regions[y] = make([]int, md.Width)
+		for x := 0; x < md.Width; x++ {
+			pm.regions[y][x] = md.Data[5*md.Height*md.Width+y*md.Width+x]
+		}
+	}
+}
+
+// buildIncomingTransfers scans all maps for transfer commands (code 201) and
+// records the destination coordinates grouped by destination map ID. This builds
+// a reverse index: for each map, where do players arrive from other maps?
+func (rl *ResourceLoader) buildIncomingTransfers() {
+	rl.IncomingTransfers = make(map[int][]EntryPoint)
+	seen := make(map[int]map[[2]int]bool) // destMapID → set of (x,y) already added
+	for _, md := range rl.Maps {
+		if md == nil {
+			continue
+		}
+		for _, ev := range md.Events {
+			if ev == nil {
+				continue
+			}
+			for _, page := range ev.Pages {
+				if page == nil {
+					continue
+				}
+				for _, cmd := range page.List {
+					if cmd == nil || cmd.Code != 201 || len(cmd.Parameters) < 5 {
+						continue
+					}
+					mode := paramIntP(cmd.Parameters, 0)
+					if mode != 0 {
+						continue // skip variable-based transfers
+					}
+					destMap := paramIntP(cmd.Parameters, 1)
+					destX := paramIntP(cmd.Parameters, 2)
+					destY := paramIntP(cmd.Parameters, 3)
+					if destMap <= 0 {
+						continue
+					}
+					if seen[destMap] == nil {
+						seen[destMap] = make(map[[2]int]bool)
+					}
+					key := [2]int{destX, destY}
+					if seen[destMap][key] {
+						continue
+					}
+					seen[destMap][key] = true
+					rl.IncomingTransfers[destMap] = append(rl.IncomingTransfers[destMap], EntryPoint{X: destX, Y: destY})
+				}
+			}
+		}
 	}
 }
 
@@ -603,11 +875,17 @@ func (rl *ResourceLoader) ValidWalkName(name string) bool {
 }
 
 // ValidFaceName checks that the given face sheet name exists in img/faces/.
+// If the faces directory doesn't exist, falls back to checking img/characters/.
 func (rl *ResourceLoader) ValidFaceName(name string) bool {
 	if rl.ImgPath == "" {
 		return true
 	}
-	path := filepath.Join(rl.ImgPath, "faces", name+".png")
+	facesDir := filepath.Join(rl.ImgPath, "faces")
+	if _, err := os.Stat(facesDir); os.IsNotExist(err) {
+		// No faces directory — accept character sprite names instead
+		return rl.ValidWalkName(name)
+	}
+	path := filepath.Join(facesDir, name+".png")
 	_, err := os.Stat(path)
 	return err == nil
 }

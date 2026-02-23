@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/rand"
 	"time"
 
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/battle"
@@ -19,18 +18,27 @@ import (
 
 const resetPosCooldown = 3 * time.Minute
 
+// AutorunFunc is called after a player enters a map to execute autorun events.
+type AutorunFunc func(s *player.PlayerSession, mapID int)
+
 // GameHandlers bundles the dependencies needed by in-game WS message handlers.
 type GameHandlers struct {
-	db     *gorm.DB
-	wm     *world.WorldManager
-	sm     *player.SessionManager
-	res    *resource.ResourceLoader
-	logger *zap.Logger
+	db        *gorm.DB
+	wm        *world.WorldManager
+	sm        *player.SessionManager
+	res       *resource.ResourceLoader
+	logger    *zap.Logger
+	autorunFn AutorunFunc // called after entering a map to execute autorun events
 }
 
 // NewGameHandlers creates a new GameHandlers.
 func NewGameHandlers(db *gorm.DB, wm *world.WorldManager, sm *player.SessionManager, res *resource.ResourceLoader, logger *zap.Logger) *GameHandlers {
 	return &GameHandlers{db: db, wm: wm, sm: sm, res: res, logger: logger}
+}
+
+// SetAutorunFunc sets the callback for executing autorun events when a player enters a map.
+func (gh *GameHandlers) SetAutorunFunc(fn AutorunFunc) {
+	gh.autorunFn = fn
 }
 
 // RegisterHandlers registers all in-game handlers on the given Router.
@@ -114,12 +122,10 @@ func (gh *GameHandlers) HandleEnterMap(_ context.Context, s *player.PlayerSessio
 		mapID = 1
 	}
 
-	// Determine spawn position and validate passability.
+	// Use saved position directly — map maker's coordinates are authoritative.
 	spawnX, spawnY, spawnDir := char.MapX, char.MapY, char.Direction
-	// Validate DB position is still passable (map may have been updated).
-	spawnX, spawnY = gh.findNearestPassable(mapID, spawnX, spawnY)
 
-	gh.enterMapRoom(s, mapID, spawnX, spawnY, spawnDir)
+	gh.EnterMapRoom(s, mapID, spawnX, spawnY, spawnDir)
 	return nil
 }
 
@@ -143,29 +149,70 @@ func (gh *GameHandlers) HandleMove(_ context.Context, s *player.PlayerSession, r
 
 	curX, curY, _ := s.Position()
 
-	// Distance check: allow at most 1 tile per tick with 1.3× tolerance.
-	dx := req.X - curX
-	dy := req.Y - curY
-	if dx < 0 {
-		dx = -dx
-	}
-	if dy < 0 {
-		dy = -dy
-	}
-	if float64(dx+dy) > maxMovePerTick {
-		gh.logger.Warn("speed hack detected",
-			zap.Int64("char_id", s.CharID),
-			zap.Int("dx", dx), zap.Int("dy", dy))
-		sendError(s, "move rejected: speed violation")
-		return nil
+	// After a map transfer or resetpos, skip the speed check for a grace period.
+	// The server has already switched maps but the client may still be mid-fade,
+	// causing a position desync. Accepting moves without speed check allows the
+	// server to re-sync with the client's actual position on the new map.
+	inGrace := time.Since(s.LastTransfer) < 3*time.Second
+
+	if !inGrace {
+		// Distance check: allow at most 1 tile per tick with 1.3× tolerance.
+		dx := req.X - curX
+		dy := req.Y - curY
+		if dx < 0 {
+			dx = -dx
+		}
+		if dy < 0 {
+			dy = -dy
+		}
+		if float64(dx+dy) > maxMovePerTick {
+			gh.logger.Warn("speed hack detected",
+				zap.Int64("char_id", s.CharID),
+				zap.Int("dx", dx), zap.Int("dy", dy))
+			sendMoveReject(s)
+			return nil
+		}
 	}
 
-	// Passability check.
+	// Passability check — match RMMV's two-way check:
+	// 1. Can leave current tile in the move direction
+	// 2. Can enter destination tile from the reverse direction
 	if gh.res != nil {
 		pm := gh.res.Passability[s.MapID]
-		if pm != nil && !pm.CanPass(req.X, req.Y, req.Dir) {
-			sendError(s, "move rejected: impassable tile")
-			return nil
+		if pm != nil {
+			// Determine the movement direction from position delta.
+			moveDir := req.Dir
+			ddx, ddy := req.X-curX, req.Y-curY
+			if ddx == 1 && ddy == 0 {
+				moveDir = 6 // right
+			} else if ddx == -1 && ddy == 0 {
+				moveDir = 4 // left
+			} else if ddx == 0 && ddy == 1 {
+				moveDir = 2 // down
+			} else if ddx == 0 && ddy == -1 {
+				moveDir = 8 // up
+			}
+			// Check source tile: can leave in the move direction.
+			if !pm.CanPass(curX, curY, moveDir) {
+				sendMoveReject(s)
+				return nil
+			}
+			// Check destination tile: can enter from the reverse direction.
+			revDir := moveDir
+			switch moveDir {
+			case 2:
+				revDir = 8
+			case 4:
+				revDir = 6
+			case 6:
+				revDir = 4
+			case 8:
+				revDir = 2
+			}
+			if !pm.CanPass(req.X, req.Y, revDir) {
+				sendMoveReject(s)
+				return nil
+			}
 		}
 	}
 
@@ -185,8 +232,33 @@ func (gh *GameHandlers) HandleMove(_ context.Context, s *player.PlayerSession, r
 		"state":     "normal",
 	})
 	syncPkt, _ := json.Marshal(&player.Packet{Type: "player_sync", Payload: syncPayload})
-	if room := gh.wm.Get(s.MapID); room != nil {
+	room := gh.wm.Get(s.MapID)
+	if room != nil {
 		room.BroadcastExcept(syncPkt, s.CharID)
+	}
+
+	// Server-side auto-transfer: check if player stepped on a transfer event
+	// (trigger 1=Player Touch or 2=Event Touch with command 201=Transfer Player).
+	// Since the client no longer processes events (_events = []), the server
+	// must detect and execute map transfers.
+	if room != nil {
+		if td := room.GetTransferAt(req.X, req.Y); td != nil && td.MapID > 0 {
+			// Use exact coordinates from the map maker — do NOT adjust with
+			// findNearestPassable. The BFS ring search ignores walls and can
+			// place the player on the wrong side of a wall.
+			destDir := td.Dir
+			if destDir <= 0 {
+				destDir = dir
+			}
+			fromMap := s.MapID
+			gh.EnterMapRoom(s, td.MapID, td.X, td.Y, destDir)
+			gh.logger.Info("auto-transfer triggered",
+				zap.Int64("char_id", s.CharID),
+				zap.Int("from_map", fromMap),
+				zap.Int("to_map", td.MapID),
+				zap.Int("to_x", td.X),
+				zap.Int("to_y", td.Y))
+		}
 	}
 
 	return nil
@@ -215,22 +287,21 @@ func (gh *GameHandlers) HandleMapTransfer(_ context.Context, s *player.PlayerSes
 		return nil
 	}
 
-	// Validate destination passability, find nearest passable if needed.
-	destX, destY := gh.findNearestPassable(req.MapID, req.X, req.Y)
+	// Use exact coordinates from the event — the map maker's positions are authoritative.
 	destDir := req.Dir
 	if destDir <= 0 {
 		destDir = 2
 	}
 
 	fromMap := s.MapID
-	gh.enterMapRoom(s, req.MapID, destX, destY, destDir)
+	gh.EnterMapRoom(s, req.MapID, req.X, req.Y, destDir)
 
 	gh.logger.Info("map transfer",
 		zap.Int64("char_id", s.CharID),
 		zap.Int("from_map", fromMap),
 		zap.Int("to_map", req.MapID),
-		zap.Int("to_x", destX),
-		zap.Int("to_y", destY))
+		zap.Int("to_x", req.X),
+		zap.Int("to_y", req.Y))
 	return nil
 }
 
@@ -251,41 +322,44 @@ func (gh *GameHandlers) HandleResetPos(_ context.Context, s *player.PlayerSessio
 		return nil
 	}
 
-	// Find passable tiles from server passability data.
-	if gh.res == nil {
-		sendError(s, "no resource data")
-		return nil
-	}
-	pm := gh.res.Passability[s.MapID]
-	if pm == nil {
-		sendError(s, "no passability data for current map")
-		return nil
-	}
-
-	type tile struct{ x, y int }
-	var candidates []tile
-	for y := 0; y < pm.Height; y++ {
-		for x := 0; x < pm.Width; x++ {
-			if pm.CanPass(x, y, 2) || pm.CanPass(x, y, 4) ||
-				pm.CanPass(x, y, 6) || pm.CanPass(x, y, 8) {
-				candidates = append(candidates, tile{x, y})
-			}
-		}
-	}
-
-	if len(candidates) == 0 {
+	// Use incoming transfer destinations as reset targets.
+	// These are the coordinates where players arrive when transferring TO this map
+	// from other maps — guaranteed valid positions within the playable area.
+	incoming := gh.res.IncomingTransfers[s.MapID]
+	if len(incoming) == 0 {
 		payload, _ := json.Marshal(map[string]interface{}{
-			"error": "No walkable tile found on this map.",
+			"error": "No entry point found on this map.",
 		})
 		s.Send(&player.Packet{Type: "reset_pos", Payload: payload})
 		return nil
 	}
 
-	pick := candidates[rand.Intn(len(candidates))]
+	// Pick the nearest entry point to the player's current position.
+	curX, curY, _ := s.Position()
+	bestIdx := 0
+	bestDist := 999999
+	for i, p := range incoming {
+		dx := p.X - curX
+		dy := p.Y - curY
+		if dx < 0 {
+			dx = -dx
+		}
+		if dy < 0 {
+			dy = -dy
+		}
+		dist := dx + dy
+		if dist < bestDist {
+			bestDist = dist
+			bestIdx = i
+		}
+	}
+	type tile struct{ x, y int }
+	pick := tile{incoming[bestIdx].X, incoming[bestIdx].Y}
 	s.SetPosition(pick.x, pick.y, 2)
 
-	// Set cooldown.
+	// Set cooldown and transfer grace period (resetpos causes same desync as transfers).
 	s.SetResetPosCooldown()
+	s.LastTransfer = time.Now()
 
 	// Send new position to the requesting player.
 	payload, _ := json.Marshal(map[string]interface{}{
@@ -330,7 +404,7 @@ func formatCooldown(totalSecs int) string {
 // enterMapRoom moves a player into a map room at the given position,
 // sends map_init, broadcasts player_join, and schedules protection end.
 // It is used by HandleEnterMap (login) and server-side map transfers.
-func (gh *GameHandlers) enterMapRoom(s *player.PlayerSession, mapID, x, y, dir int) {
+func (gh *GameHandlers) EnterMapRoom(s *player.PlayerSession, mapID, x, y, dir int) {
 	// Leave current map if any.
 	if s.MapID != 0 {
 		leaveMap(s, gh.wm, gh.logger)
@@ -338,6 +412,7 @@ func (gh *GameHandlers) enterMapRoom(s *player.PlayerSession, mapID, x, y, dir i
 
 	s.MapID = mapID
 	s.SetPosition(x, y, dir)
+	s.LastTransfer = time.Now()
 
 	// Join the target MapRoom.
 	room := gh.wm.GetOrCreate(mapID)
@@ -447,11 +522,12 @@ func (gh *GameHandlers) enterMapRoom(s *player.PlayerSession, mapID, x, y, dir i
 			"dir":        dir0,
 			"map_id":     s.MapID,
 		},
-		"skills":   skillList,
-		"players":  room.PlayerSnapshot(),
-		"npcs":     []interface{}{},
-		"monsters": []interface{}{},
-		"drops":    []interface{}{},
+		"skills":      skillList,
+		"players":     room.PlayerSnapshot(),
+		"npcs":        room.NPCSnapshot(),
+		"monsters":    []interface{}{},
+		"drops":       []interface{}{},
+		"passability": room.PassabilitySnapshot(),
 	})
 	s.Send(&player.Packet{Type: "map_init", Payload: initPayload})
 
@@ -483,6 +559,11 @@ func (gh *GameHandlers) enterMapRoom(s *player.PlayerSession, mapID, x, y, dir i
 	gh.logger.Info("player entered map",
 		zap.Int64("char_id", s.CharID),
 		zap.Int("map_id", mapID))
+
+	// Execute autorun events (trigger=3) for this player on the new map.
+	if gh.autorunFn != nil {
+		go gh.autorunFn(s, mapID)
+	}
 }
 
 // findNearestPassable finds a passable tile near (x, y) on the given map.
@@ -543,4 +624,16 @@ func leaveMap(s *player.PlayerSession, wm *world.WorldManager, logger *zap.Logge
 func sendError(s *player.PlayerSession, msg string) {
 	payload, _ := json.Marshal(map[string]string{"message": msg})
 	s.Send(&player.Packet{Type: "error", Payload: payload})
+}
+
+// sendMoveReject sends the server's authoritative position to the client
+// so it can correct any position desync caused by a rejected move.
+func sendMoveReject(s *player.PlayerSession) {
+	x, y, dir := s.Position()
+	payload, _ := json.Marshal(map[string]interface{}{
+		"x":   x,
+		"y":   y,
+		"dir": dir,
+	})
+	s.Send(&player.Packet{Type: "move_reject", Payload: payload})
 }

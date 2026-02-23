@@ -95,6 +95,7 @@
         this._monsterDots = [];
         this._terrainCache = null;
         this._cachedMapId = -1;
+        this._serverPass = null; // server passability data from map_init
         $MMO.makeDraggable(this, 'minimap');
     };
 
@@ -105,9 +106,25 @@
 
     Minimap.prototype.standardPadding = function () { return 0; };
 
+    Minimap.prototype.setPassability = function (data) {
+        this._serverPass = data;
+        // Force terrain rebuild on next refresh.
+        this._cachedMapId = -1;
+    };
+
     Minimap.prototype._buildTerrain = function () {
-        if (!$gameMap || !$gameMap.width()) return;
-        var mw = $gameMap.width(), mh = $gameMap.height();
+        var mw, mh;
+        var passData = this._serverPass; // from map_init
+        if (passData && passData.width && passData.height) {
+            mw = passData.width;
+            mh = passData.height;
+        } else if ($gameMap && $gameMap.width()) {
+            mw = $gameMap.width();
+            mh = $gameMap.height();
+        } else {
+            return;
+        }
+
         var cw = this.cw(), ch = this.ch();
         var scaleX = cw / mw, scaleY = ch / mh;
 
@@ -116,8 +133,16 @@
         bmp.fillRect(0, 0, cw, ch, '#0a0a1a');
         for (var y = 0; y < mh; y++) {
             for (var x = 0; x < mw; x++) {
-                if ($gameMap.isPassable(x, y, 2) || $gameMap.isPassable(x, y, 4) ||
-                    $gameMap.isPassable(x, y, 6) || $gameMap.isPassable(x, y, 8)) {
+                var passable;
+                if (passData && passData.tiles) {
+                    // Use server-authoritative passability data.
+                    passable = passData.tiles[y * mw + x] === 1;
+                } else {
+                    // Fallback to client-side check.
+                    passable = $gameMap.isPassable(x, y, 2) || $gameMap.isPassable(x, y, 4) ||
+                               $gameMap.isPassable(x, y, 6) || $gameMap.isPassable(x, y, 8);
+                }
+                if (passable) {
                     var px = Math.floor(x * scaleX);
                     var py = Math.floor(y * scaleY);
                     var pw = Math.max(1, Math.ceil(scaleX));
@@ -126,7 +151,7 @@
                 }
             }
         }
-        this._cachedMapId = $gameMap.mapId();
+        this._cachedMapId = $gameMap ? $gameMap.mapId() : -1;
     };
 
     Minimap.prototype.setPlayers = function (p) { this._playerDots = p; this.refresh(); };
@@ -263,6 +288,9 @@
     $MMO.on('map_init', function (data) {
         if (data.self && SceneManager._scene && SceneManager._scene._mmoStatusBar) {
             SceneManager._scene._mmoStatusBar.setData(data.self);
+        }
+        if (data.passability && SceneManager._scene && SceneManager._scene._mmoMinimap) {
+            SceneManager._scene._mmoMinimap.setPassability(data.passability);
         }
     });
 

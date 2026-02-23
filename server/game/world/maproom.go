@@ -6,18 +6,11 @@ import (
 	"time"
 
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/player"
+	"github.com/kasuganosora/rpgmakermvmmo/server/resource"
 	"go.uber.org/zap"
 )
 
 const tickInterval = 50 * time.Millisecond // 20 TPS
-
-// NPCInstance is a placeholder for NPC runtime data (Task 05+).
-type NPCInstance struct {
-	ID   int64  `json:"id"`
-	Name string `json:"name"`
-	X, Y int    `json:"x"`
-	Dir  int    `json:"dir"`
-}
 
 // MonsterInstance is the client-visible monster state for map_init payloads.
 type MonsterInstance struct {
@@ -40,31 +33,47 @@ type DropRuntimeEntry struct {
 
 // MapRoom manages a single map instance with its own game loop.
 type MapRoom struct {
-	MapID          int
-	players        map[int64]*player.PlayerSession
-	npcs           []*NPCInstance
-	monsters       []*MonsterInstance           // client-visible snapshot list
-	runtimeMonsters map[int64]*MonsterRuntime   // instID → runtime state
-	drops          map[int64]*DropRuntimeEntry
-	broadcastQ     chan []byte
-	mu             sync.RWMutex
-	stopCh         chan struct{}
-	logger         *zap.Logger
+	MapID           int
+	mapWidth        int // map width in tiles (for NPC bounds when passMap is nil)
+	mapHeight       int // map height in tiles
+	players         map[int64]*player.PlayerSession
+	npcs            []*NPCRuntime
+	monsters        []*MonsterInstance           // client-visible snapshot list
+	runtimeMonsters map[int64]*MonsterRuntime    // instID → runtime state
+	drops           map[int64]*DropRuntimeEntry
+	res             *resource.ResourceLoader
+	state           *GameState
+	passMap         *resource.PassabilityMap
+	broadcastQ      chan []byte
+	mu              sync.RWMutex
+	stopCh          chan struct{}
+	logger          *zap.Logger
 }
 
 // newMapRoom creates a MapRoom but does not start the game loop.
-func newMapRoom(mapID int, logger *zap.Logger) *MapRoom {
-	return &MapRoom{
+func newMapRoom(mapID int, res *resource.ResourceLoader, state *GameState, logger *zap.Logger) *MapRoom {
+	room := &MapRoom{
 		MapID:           mapID,
 		players:         make(map[int64]*player.PlayerSession),
-		npcs:            []*NPCInstance{},
+		npcs:            []*NPCRuntime{},
 		monsters:        []*MonsterInstance{},
 		runtimeMonsters: make(map[int64]*MonsterRuntime),
 		drops:           make(map[int64]*DropRuntimeEntry),
+		res:             res,
+		state:           state,
 		broadcastQ:      make(chan []byte, 512),
 		stopCh:          make(chan struct{}),
 		logger:          logger,
 	}
+	if res != nil {
+		room.passMap = res.Passability[mapID]
+		if md, ok := res.Maps[mapID]; ok {
+			room.mapWidth = md.Width
+			room.mapHeight = md.Height
+		}
+		room.populateNPCs()
+	}
+	return room
 }
 
 // Run starts the 20 TPS game loop. Call in a goroutine.
@@ -98,10 +107,36 @@ func (room *MapRoom) StopChan() <-chan struct{} {
 	return room.stopCh
 }
 
+// PassabilitySnapshot returns a flat boolean array (row-major, width*height)
+// where true means the tile is passable in at least one direction.
+// Used by the client minimap to render terrain accurately.
+func (room *MapRoom) PassabilitySnapshot() map[string]interface{} {
+	pm := room.passMap
+	if pm == nil {
+		return nil
+	}
+	w, h := pm.Width, pm.Height
+	tiles := make([]int, w*h)
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			if pm.CanPass(x, y, 2) || pm.CanPass(x, y, 4) ||
+				pm.CanPass(x, y, 6) || pm.CanPass(x, y, 8) {
+				tiles[y*w+x] = 1
+			}
+		}
+	}
+	return map[string]interface{}{
+		"width":  w,
+		"height": h,
+		"tiles":  tiles,
+	}
+}
+
 // tick is called every 50 ms (20 TPS).
 func (room *MapRoom) tick() {
 	room.cleanStaleSessions()
 	room.broadcastDirtyPlayers()
+	room.tickNPCs()
 	room.tickMonsters()
 	room.cleanExpiredDrops()
 }

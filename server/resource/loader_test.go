@@ -94,6 +94,100 @@ func TestPassabilityMap_AllDirectionsBlocked(t *testing.T) {
 	assert.False(t, pm.CanPass(0, 0, 8))
 }
 
+// ---- buildPassability layer order regression test ----
+
+// TestBuildPassability_SkipsShadowAndRegionLayers verifies that the passability
+// computation only reads tile layers 0-3, matching RMMV's layeredTiles().
+// Layer 4 (shadows) and layer 5 (regions) must NOT affect passability.
+// Regression test: the server previously iterated ALL layers (0-5) which caused
+// shadow/region values to be looked up in tileset flags, producing incorrect results.
+func TestBuildPassability_SkipsShadowAndRegionLayers(t *testing.T) {
+	// Create a 2x2 map with 6 layers.
+	// Layers 0-3: tile 1 (passable, flag=0)
+	// Layer 4 (shadow): value 5
+	// Layer 5 (region): value 200
+	w, h := 2, 2
+	data := make([]int, 6*w*h)
+	for layer := 0; layer < 4; layer++ {
+		for i := 0; i < w*h; i++ {
+			data[layer*w*h+i] = 1 // tile 1
+		}
+	}
+	for i := 0; i < w*h; i++ {
+		data[4*w*h+i] = 5   // shadow value
+		data[5*w*h+i] = 200 // region value
+	}
+
+	// Tileset: tile 1 = fully passable (flag 0).
+	// tile 5 = fully blocked (flag 0x0F = all direction bits set).
+	// tile 200 = fully blocked (flag 0x0F).
+	// If shadow/region layers are incorrectly processed, they'd hit tiles 5 or 200
+	// and potentially block movement.
+	flags := make([]int, 256)
+	flags[0] = 0x10 // tile 0: star tile (skipped)
+	flags[1] = 0    // tile 1: fully passable
+	flags[5] = 0x0F // tile 5: fully blocked (shadow value)
+	flags[200] = 0x0F // tile 200: fully blocked (region value)
+
+	rl := NewLoader("", "")
+	rl.Tilesets = []*Tileset{{ID: 1, Flags: flags}}
+	rl.Maps = map[int]*MapData{
+		1: {ID: 1, Width: w, Height: h, TilesetID: 1, Data: data},
+	}
+	rl.buildPassability()
+
+	pm := rl.Passability[1]
+	require.NotNil(t, pm)
+
+	// All tiles should be passable — shadow (5) and region (200) must NOT be
+	// checked against tileset flags.
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			for _, dir := range []int{2, 4, 6, 8} {
+				assert.True(t, pm.CanPass(x, y, dir),
+					"(%d,%d) dir=%d should be passable (shadow/region must not affect passability)", x, y, dir)
+			}
+		}
+	}
+}
+
+// TestBuildPassability_BottomLayerFirst verifies that RMMV's layer iteration
+// order is correct: layer 0 (bottom) is checked first, not layer 3 (top).
+// The first non-star tile determines passability.
+func TestBuildPassability_BottomLayerFirst(t *testing.T) {
+	w, h := 1, 1
+	// Layer 0: tile 1 (passable, flag=0)
+	// Layer 1: tile 2 (blocked, flag=0x0F)
+	// Layer 2-3: tile 0 (star, flag=0x10, skipped)
+	data := make([]int, 4*w*h) // 4 layers only
+	data[0] = 1 // layer 0: passable tile
+	data[1] = 2 // layer 1: blocked tile
+	data[2] = 0 // layer 2: star tile
+	data[3] = 0 // layer 3: star tile
+
+	flags := make([]int, 16)
+	flags[0] = 0x10 // star tile (skipped)
+	flags[1] = 0    // fully passable
+	flags[2] = 0x0F // fully blocked
+
+	rl := NewLoader("", "")
+	rl.Tilesets = []*Tileset{{ID: 1, Flags: flags}}
+	rl.Maps = map[int]*MapData{
+		1: {ID: 1, Width: w, Height: h, TilesetID: 1, Data: data},
+	}
+	rl.buildPassability()
+
+	pm := rl.Passability[1]
+	require.NotNil(t, pm)
+
+	// Layer 0 (tile 1, passable) should win since it's checked first.
+	// If the server incorrectly iterates top-to-bottom, layer 1 (blocked) would win.
+	for _, dir := range []int{2, 4, 6, 8} {
+		assert.True(t, pm.CanPass(0, 0, dir),
+			"dir=%d: layer 0 (passable) should take priority over layer 1 (blocked)", dir)
+	}
+}
+
 // ---- ResourceLoader construction ----
 
 func TestNewLoader(t *testing.T) {

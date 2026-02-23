@@ -89,6 +89,12 @@
             }
             e.stopPropagation();
         });
+        // Prevent RMMV's canvas/TouchInput from processing mouse events on the input.
+        // Without this, clicking the input triggers TouchInput which can interfere
+        // with focus state, and clicking back after blurring may fail to refocus.
+        el.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+        el.addEventListener('touchstart', function (e) { e.stopPropagation(); });
+        el.addEventListener('keyup', function (e) { e.stopPropagation(); });
         document.body.appendChild(el);
     };
 
@@ -350,6 +356,7 @@
         _Scene_Map_createAllWindows6.call(this);
         _chatBox = new ChatBox();
         this.addChild(_chatBox);
+        $MMO.registerBottomUI(_chatBox);
     };
 
     var _Scene_Map_start_chat = Scene_Map.prototype.start;
@@ -362,6 +369,7 @@
     Scene_Map.prototype.terminate = function () {
         _Scene_Map_terminate3.call(this);
         if (_chatBox) {
+            $MMO.unregisterBottomUI(_chatBox);
             _chatBox.hide();
             _chatBox.destroy();
             _chatBox = null;

@@ -150,6 +150,7 @@
         _Scene_Map_createAllWindows2.call(this);
         this._mmoSkillBar = new SkillBar();
         this.addChild(this._mmoSkillBar);
+        $MMO.registerBottomUI(this._mmoSkillBar);
     };
 
     // -----------------------------------------------------------------

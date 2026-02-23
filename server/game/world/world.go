@@ -3,6 +3,7 @@ package world
 import (
 	"sync"
 
+	"github.com/kasuganosora/rpgmakermvmmo/server/resource"
 	"go.uber.org/zap"
 )
 
@@ -10,16 +11,23 @@ import (
 type WorldManager struct {
 	mu     sync.RWMutex
 	rooms  map[int]*MapRoom
+	res    *resource.ResourceLoader
+	state  *GameState
 	logger *zap.Logger
 }
 
 // NewWorldManager creates a new WorldManager.
-func NewWorldManager(logger *zap.Logger) *WorldManager {
+func NewWorldManager(res *resource.ResourceLoader, state *GameState, logger *zap.Logger) *WorldManager {
 	return &WorldManager{
 		rooms:  make(map[int]*MapRoom),
+		res:    res,
+		state:  state,
 		logger: logger,
 	}
 }
+
+// GameState returns the global game state.
+func (wm *WorldManager) GameState() *GameState { return wm.state }
 
 // GetOrCreate returns the MapRoom for mapID, creating and starting it if needed.
 func (wm *WorldManager) GetOrCreate(mapID int) *MapRoom {
@@ -38,7 +46,7 @@ func (wm *WorldManager) GetOrCreate(mapID int) *MapRoom {
 	if room, ok = wm.rooms[mapID]; ok {
 		return room
 	}
-	room = newMapRoom(mapID, wm.logger)
+	room = newMapRoom(mapID, wm.res, wm.state, wm.logger)
 	wm.rooms[mapID] = room
 	go room.Run()
 	wm.logger.Info("map room created", zap.Int("map_id", mapID))

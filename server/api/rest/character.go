@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/kasuganosora/rpgmakermvmmo/server/config"
 	mw "github.com/kasuganosora/rpgmakermvmmo/server/middleware"
 	"github.com/kasuganosora/rpgmakermvmmo/server/model"
 	"github.com/kasuganosora/rpgmakermvmmo/server/resource"
@@ -16,13 +17,14 @@ const maxCharacters = 3
 
 // CharacterHandler handles character REST endpoints.
 type CharacterHandler struct {
-	db  *gorm.DB
-	res *resource.ResourceLoader
+	db   *gorm.DB
+	res  *resource.ResourceLoader
+	game config.GameConfig
 }
 
 // NewCharacterHandler creates a new CharacterHandler.
-func NewCharacterHandler(db *gorm.DB, res *resource.ResourceLoader) *CharacterHandler {
-	return &CharacterHandler{db: db, res: res}
+func NewCharacterHandler(db *gorm.DB, res *resource.ResourceLoader, game config.GameConfig) *CharacterHandler {
+	return &CharacterHandler{db: db, res: res, game: game}
 }
 
 // List handles GET /api/characters.
@@ -83,6 +85,14 @@ func (h *CharacterHandler) Create(c *gin.Context) {
 		}
 	}
 
+	// Use RMMV System.json start position if available; fall back to config.
+	startMap, startX, startY := h.game.StartMapID, h.game.StartX, h.game.StartY
+	if h.res != nil && h.res.System != nil && h.res.System.StartMapID > 0 {
+		startMap = h.res.System.StartMapID
+		startX = h.res.System.StartX
+		startY = h.res.System.StartY
+	}
+
 	char := &model.Character{
 		AccountID: accountID,
 		Name:      req.Name,
@@ -94,9 +104,9 @@ func (h *CharacterHandler) Create(c *gin.Context) {
 		Level:     1,
 		HP:        100, MaxHP: 100,
 		MP:        50, MaxMP: 50,
-		MapID:     1,
-		MapX:      5,
-		MapY:      5,
+		MapID:     startMap,
+		MapX:      startX,
+		MapY:      startY,
 		Direction: 2,
 	}
 

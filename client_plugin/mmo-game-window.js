@@ -96,7 +96,11 @@
         var faceName = s && (s.face_name || s.walk_name);
         if (faceName && !this._faceBmp) {
             var self = this;
-            this._faceBmp = ImageManager.loadFace(faceName);
+            // This project has no img/faces/ directory — face images are
+            // actually character sprite sheets in img/characters/.
+            // Load as character sprite and extract the front-facing frame.
+            this._faceBmp = ImageManager.loadCharacter(faceName);
+            this._faceIsCharSprite = true;
             this._faceBmp.addLoadListener(function () { self.refresh(); });
         }
         this.refresh();
@@ -113,8 +117,34 @@
         L2_Theme.strokeRoundRect(c, P, y, faceSize, faceSize, 2, L2_Theme.borderDark);
         if (this._faceBmp && this._faceBmp.isReady() && (s.face_name || s.walk_name)) {
             var fi = s.face_index != null ? s.face_index : (s.walk_index || 0);
-            var sx = (fi % 4) * 144, sy = Math.floor(fi / 4) * 144;
-            c.blt(this._faceBmp, sx, sy, 144, 144, P + 2, y + 2, faceSize - 4, faceSize - 4);
+            if (this._faceIsCharSprite) {
+                // Character sprite sheet: extract front-facing middle frame.
+                // Standard RMMV character sheet: 4 cols * 2 rows of characters,
+                // each character cell = 3 frames wide * 4 directions tall.
+                var isBig = (s.face_name || s.walk_name).charAt(0) === '$';
+                var pw, ph, cx, cy;
+                if (isBig) {
+                    // Single-character sheet ($ prefix): 3 frames * 4 dirs
+                    pw = this._faceBmp.width / 3;
+                    ph = this._faceBmp.height / 4;
+                    cx = pw;  // middle frame (column 1)
+                    cy = 0;   // down-facing direction (row 0)
+                } else {
+                    // Standard 8-character sheet: 4 chars wide * 2 chars tall
+                    var charW = this._faceBmp.width / 4;
+                    var charH = this._faceBmp.height / 2;
+                    pw = charW / 3;  // one frame width
+                    ph = charH / 4;  // one frame height
+                    var col = fi % 4, row = Math.floor(fi / 4);
+                    cx = col * charW + pw;  // middle frame within character cell
+                    cy = row * charH;       // down-facing direction (row 0 of cell)
+                }
+                c.blt(this._faceBmp, cx, cy, pw, ph, P + 2, y + 2, faceSize - 4, faceSize - 4);
+            } else {
+                // Standard RMMV face image: 4 cols * 2 rows, each 144x144.
+                var sx = (fi % 4) * 144, sy = Math.floor(fi / 4) * 144;
+                c.blt(this._faceBmp, sx, sy, 144, 144, P + 2, y + 2, faceSize - 4, faceSize - 4);
+            }
         }
 
         // Name + Level + Class
@@ -532,6 +562,7 @@
         // Action bar
         this._mmoActionBar = new ActionBar();
         this.addChild(this._mmoActionBar);
+        $MMO.registerBottomUI(this._mmoActionBar);
     };
 
 })();

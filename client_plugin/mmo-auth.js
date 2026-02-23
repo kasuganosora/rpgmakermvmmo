@@ -223,18 +223,21 @@
     // Character creation presets
     // -----------------------------------------------------------------
     var CLASS_OPTIONS = [
-        { label: 'Warrior', value: 1 },
-        { label: 'Mage',    value: 2 },
-        { label: 'Archer',  value: 3 },
-        { label: 'Thief',   value: 4 }
+        { label: '未变身', value: 1 },
+        { label: '变身中', value: 2 },
+        { label: '魅魔',   value: 3 }
     ];
 
-    var FACE_PRESETS = [];
-    (function () {
-        for (var i = 0; i < 8; i++) {
-            FACE_PRESETS.push({ faceName: 'Actor1', faceIndex: i });
-        }
-    })();
+    var FACE_PRESETS = [
+        { faceName: 'actor01_0001', faceIndex: 0 },
+        { faceName: 'actor01_0002', faceIndex: 0 },
+        { faceName: 'actor01_0003', faceIndex: 0 },
+        { faceName: 'actor01_0004', faceIndex: 0 },
+        { faceName: 'actor02_0001', faceIndex: 0 },
+        { faceName: 'actor03_0001', faceIndex: 0 },
+        { faceName: 'Actor_Heroine', faceIndex: 0 },
+        { faceName: 'actor_Memoria', faceIndex: 0 }
+    ];
 
     // =================================================================
     //  Scene_Login
@@ -495,7 +498,7 @@
         card._charData = charData;
         card._selected = selected;
         card._hover = false;
-        card._faceBmp = ImageManager.loadFace(charData.face_name || 'Actor1');
+        card._faceBmp = ImageManager.loadCharacter(charData.walk_name || charData.face_name || 'actor01_0001');
         card._faceBmp.addLoadListener(function () { self._refreshCard(card); });
 
         var origUpdate = L2_Base.prototype.update;
@@ -526,13 +529,18 @@
         L2_Theme.fillRoundRect(c, 0, 0, cw, ch, L2_Theme.cornerRadius, bg);
         L2_Theme.strokeRoundRect(c, 0, 0, cw, ch, L2_Theme.cornerRadius, border);
 
-        // Face avatar (centered 56x56)
+        // Character avatar (centered 56x56)
         var aSize = 56, ax = (cw - aSize) / 2;
         if (card._faceBmp && card._faceBmp.isReady()) {
-            var fw = 144, fh = 144;
-            var fi = d.face_index || 0;
-            c.blt(card._faceBmp, (fi % 4) * fw, Math.floor(fi / 4) * fh,
-                fw, fh, ax, 10, aSize, aSize);
+            var wn = d.walk_name || d.face_name || '';
+            var isBig = wn.indexOf('$') === 0;
+            var pw = card._faceBmp.width / (isBig ? 3 : 12);
+            var ph = card._faceBmp.height / (isBig ? 4 : 8);
+            var fi = d.walk_index || d.face_index || 0;
+            var cx = (isBig ? 1 : (fi % 4) * 3 + 1) * pw;
+            var cy = (isBig ? 0 : Math.floor(fi / 4) * 4) * ph;
+            c.blt(card._faceBmp, cx, cy, pw, ph,
+                ax, 10, aSize, aSize);
         }
 
         c.fontSize = L2_Theme.fontNormal;
@@ -614,6 +622,13 @@
         $MMO.charID = ch.id;
         $MMO.charName = ch.name;
 
+        // Always disconnect first to ensure a clean connection state.
+        // Without this, a stale WS (from auto-reconnect after a previous
+        // session) would cause $MMO.connect() to no-op, the _connected
+        // handler would never fire, and enter_map would never be sent —
+        // leaving the user on an empty Scene_Map.
+        $MMO.disconnect();
+
         var onConnected = function () {
             $MMO.off('_connected', onConnected);
             $MMO.send('enter_map', { char_id: ch.id });
@@ -647,7 +662,13 @@
                         removeEl(self._delPwInput);
                         self._delPwInput = null;
                         $MMO.http.del('/api/characters/' + ch.id, { password: pw })
-                            .then(function () { SceneManager.goto(Scene_CharacterSelect); })
+                            .then(function () {
+                                // Disconnect any stale WS and clear charID to
+                                // prevent auto-reconnect from interfering.
+                                $MMO.disconnect();
+                                $MMO.charID = null;
+                                SceneManager.goto(Scene_CharacterSelect);
+                            })
                             .catch(function (e) { L2_Message.error(e.message); });
                     }
                 },
@@ -796,10 +817,10 @@
 
         var key = preset.faceName;
         if (!this._faceBitmaps[key]) {
-            this._faceBitmaps[key] = ImageManager.loadFace(key);
+            this._faceBitmaps[key] = ImageManager.loadCharacter(key);
         }
-        var faceBmp = this._faceBitmaps[key];
-        faceBmp.addLoadListener(function () { self._refreshFaceBtn(btn); });
+        var charBmp = this._faceBitmaps[key];
+        charBmp.addLoadListener(function () { self._refreshFaceBtn(btn); });
 
         var origUpdate = L2_Base.prototype.update;
         btn.update = function () {
@@ -830,13 +851,17 @@
         L2_Theme.strokeRoundRect(c, 0, 0, s, s, 2, border);
 
         var key = btn._preset.faceName;
-        var faceBmp = this._faceBitmaps[key];
-        if (faceBmp && faceBmp.isReady()) {
-            var fw = 144, fh = 144;
+        var charBmp = this._faceBitmaps[key];
+        if (charBmp && charBmp.isReady()) {
+            // Character sprite: show front-facing (down, middle frame)
+            var isBig = key.indexOf('$') === 0;
+            var pw = charBmp.width / (isBig ? 3 : 12);
+            var ph = charBmp.height / (isBig ? 4 : 8);
             var fi = btn._preset.faceIndex;
+            var cx = (isBig ? 1 : (fi % 4) * 3 + 1) * pw;
+            var cy = (isBig ? 0 : Math.floor(fi / 4) * 4) * ph;
             var pad = 3;
-            c.blt(faceBmp,
-                (fi % 4) * fw, Math.floor(fi / 4) * fh, fw, fh,
+            c.blt(charBmp, cx, cy, pw, ph,
                 pad, pad, s - pad * 2, s - pad * 2);
         }
     };
@@ -864,14 +889,16 @@
         var preset = FACE_PRESETS[this._selectedFace];
         if (!preset) return;
         var key = preset.faceName;
-        if (!this._faceBitmaps[key]) return;
-        var faceBmp = this._faceBitmaps[key];
-        if (faceBmp && faceBmp.isReady()) {
-            var fw = 144, fh = 144;
+        var charBmp = this._faceBitmaps[key];
+        if (charBmp && charBmp.isReady()) {
+            var isBig = key.indexOf('$') === 0;
+            var pw = charBmp.width / (isBig ? 3 : 12);
+            var ph = charBmp.height / (isBig ? 4 : 8);
             var fi = preset.faceIndex;
+            var cx = (isBig ? 1 : (fi % 4) * 3 + 1) * pw;
+            var cy = (isBig ? 0 : Math.floor(fi / 4) * 4) * ph;
             var pad = 4;
-            c.blt(faceBmp,
-                (fi % 4) * fw, Math.floor(fi / 4) * fh, fw, fh,
+            c.blt(charBmp, cx, cy, pw, ph,
                 pad, pad, s - pad * 2, s - pad * 2);
         }
     };

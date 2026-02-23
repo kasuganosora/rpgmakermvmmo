@@ -1,13 +1,13 @@
 server:
   port: 8080
-  debug: false
+  debug: true
   debug_port: 9229
   admin_key: "change-me-in-production"
-  game_dir: "../../Project1/www"
+  game_dir: "../../projectb/www"
 
 rpgmaker:
-  data_path: "./data/rpgmaker"
-  img_path:  "../../Project1/www/img"
+  data_path: "../../projectb/www/data"
+  img_path:  "../../projectb/www/img"
 
 database:
   mode: "sqlite"
@@ -30,9 +30,11 @@ game:
   save_interval_s: 300
   max_party_size: 4
   pvp_enabled: false
-  start_map_id: 1
-  start_x: 5
-  start_y: 5
+  # start_map_id / start_x / start_y: read from RMMV System.json automatically.
+  # Uncomment below to override:
+  # start_map_id: 14
+  # start_x: 30
+  # start_y: 20
   protection_ms: 3000
   drop_lifetime_s: 300
   chat_nearby_range: 10
