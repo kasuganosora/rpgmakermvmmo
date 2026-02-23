@@ -250,9 +250,12 @@
     SkillWindow.prototype.constructor = SkillWindow;
 
     SkillWindow.prototype.onOpen = function () {
-        this._skills = ($MMO._skillBar || []).filter(function (s) { return s; });
+        this._skills = ($MMO._knownSkills || []).slice();
         this._scrollY = 0;
         this._hoverIdx = -1;
+        this._dragIdx = -1;
+        this._dragStartX = 0;
+        this._dragStartY = 0;
         this.refresh();
     };
 
@@ -294,8 +297,11 @@
             if (sk.cd_ms > 0) info += '  CD: ' + (sk.cd_ms / 1000) + 's';
             c.drawText(info, SK_PAD + 34, iy + 16, w - SK_PAD * 2 - 34, 14, 'left');
 
-            // Hotkey label (F-key)
-            var barIdx = $MMO._skillBar.indexOf(sk);
+            // Hotkey label (F-key) — find by skill_id since objects may differ
+            var barIdx = -1;
+            for (var b = 0; b < $MMO._skillBar.length; b++) {
+                if ($MMO._skillBar[b] && $MMO._skillBar[b].skill_id === sk.skill_id) { barIdx = b; break; }
+            }
             if (barIdx >= 0) {
                 c.fontSize = 9;
                 c.textColor = L2_Theme.textGold;
@@ -311,6 +317,13 @@
             c.fontSize = 12;
             c.textColor = L2_Theme.textGray;
             c.drawText('暂无技能', 0, topY + 20, w, 18, 'center');
+        }
+
+        // Drag hint at bottom
+        if (skills.length > 0) {
+            c.fontSize = 9;
+            c.textColor = L2_Theme.textGray;
+            c.drawText('拖拽技能到快捷栏使用', 0, h - 14, w, 12, 'center');
         }
 
         // Scrollbar
@@ -331,6 +344,24 @@
         var h = this.ch();
         var listH = h - topY - SK_PAD;
 
+        // Handle active drag (skill → skillbar)
+        if (this._dragIdx >= 0) {
+            if (TouchInput.isPressed()) {
+                $MMO._uiDrag = {
+                    type: 'skill',
+                    data: this._skills[this._dragIdx],
+                    x: TouchInput.x,
+                    y: TouchInput.y
+                };
+            } else {
+                // Released — check if dropped on a SkillBar slot
+                $MMO._handleDrop(TouchInput.x, TouchInput.y);
+                this._dragIdx = -1;
+                $MMO._uiDrag = null;
+            }
+            return;
+        }
+
         // Hover
         var oldHover = this._hoverIdx;
         this._hoverIdx = -1;
@@ -339,6 +370,13 @@
             if (idx >= 0 && idx < this._skills.length) this._hoverIdx = idx;
         }
         if (this._hoverIdx !== oldHover) this.refresh();
+
+        // Start drag on press & move
+        if (TouchInput.isTriggered() && this._hoverIdx >= 0) {
+            this._dragIdx = this._hoverIdx;
+            this._dragStartX = TouchInput.x;
+            this._dragStartY = TouchInput.y;
+        }
 
         // Scroll
         if (this.isInside(TouchInput.x, TouchInput.y) && TouchInput.wheelY) {

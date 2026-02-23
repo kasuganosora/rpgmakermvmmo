@@ -228,6 +228,7 @@
     // Trade request dialog — L2_Dialog
     // -----------------------------------------------------------------
     var _tradeRequestDialog = null;
+    var _tradeRequestTimer = null;
 
     function showTradeRequestDialog(data) {
         if (_tradeRequestDialog) return;
@@ -253,7 +254,7 @@
         var scene = SceneManager._scene;
         if (scene) scene.addChild(dlg);
 
-        var timer = setInterval(function () {
+        _tradeRequestTimer = setInterval(function () {
             countdown--;
             if (countdown <= 0) { respond(false); return; }
             dlg._content = (data.from_name || '?') + ' 请求与你交易\n' +
@@ -263,7 +264,8 @@
         }, 1000);
 
         function respond(accept) {
-            clearInterval(timer);
+            clearInterval(_tradeRequestTimer);
+            _tradeRequestTimer = null;
             dlg.close();
             _tradeRequestDialog = null;
             if (accept) {
@@ -292,7 +294,8 @@
             $MMO.send('trade_cancel', {});
             $MMO._tradeWindow.close();
         }
-        if (_tradeRequestDialog) _tradeRequestDialog.respond(false);
+        if (_tradeRequestTimer) { clearInterval(_tradeRequestTimer); _tradeRequestTimer = null; }
+        if (_tradeRequestDialog) { _tradeRequestDialog = null; }
         this._tradeWindow = null;
         $MMO._tradeWindow = null;
     };
@@ -331,7 +334,9 @@
 
     $MMO.on('_disconnected', function () {
         if ($MMO._tradeWindow) $MMO._tradeWindow.close();
-        if (_tradeRequestDialog) _tradeRequestDialog.respond(false);
+        // Clean up trade dialog without sending (WS already closed)
+        if (_tradeRequestTimer) { clearInterval(_tradeRequestTimer); _tradeRequestTimer = null; }
+        _tradeRequestDialog = null;
     });
 
     window.Window_Trade = TradeWindow;

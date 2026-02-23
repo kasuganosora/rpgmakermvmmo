@@ -28,12 +28,20 @@ type Actor struct {
 	FaceName     string `json:"faceName"`
 }
 
+// ClassLearning represents a skill learned at a certain level.
+type ClassLearning struct {
+	Level   int    `json:"level"`
+	SkillID int    `json:"skillId"`
+	Note    string `json:"note"`
+}
+
 // Class params is a 2D array: [param_id][level] = value
 // params[0] = max HP, [1] = max MP, [2] = ATK, [3] = DEF, [4] = MAT, [5] = MDF, [6] = AGI, [7] = LUK
 type Class struct {
-	ID       int       `json:"id"`
-	Name     string    `json:"name"`
-	Params   [][]int   `json:"params"`
+	ID        int              `json:"id"`
+	Name      string           `json:"name"`
+	Params    [][]int          `json:"params"`
+	Learnings []ClassLearning  `json:"learnings"`
 }
 
 // SkillDamage holds the damage formula and element from RMMV Skills.json.
@@ -554,6 +562,31 @@ func (rl *ResourceLoader) ClassByID(id int) *Class {
 	for _, c := range rl.Classes {
 		if c != nil && c.ID == id {
 			return c
+		}
+	}
+	return nil
+}
+
+// SkillsForLevel returns skill IDs a class learns at or below the given level.
+func (rl *ResourceLoader) SkillsForLevel(classID, level int) []int {
+	cls := rl.ClassByID(classID)
+	if cls == nil {
+		return nil
+	}
+	var ids []int
+	for _, l := range cls.Learnings {
+		if l.Level <= level {
+			ids = append(ids, l.SkillID)
+		}
+	}
+	return ids
+}
+
+// SkillByID returns the Skill with the given ID, or nil.
+func (rl *ResourceLoader) SkillByID(id int) *Skill {
+	for _, s := range rl.Skills {
+		if s != nil && s.ID == id {
+			return s
 		}
 	}
 	return nil

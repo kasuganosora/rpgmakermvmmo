@@ -674,6 +674,12 @@
         this._delFocusTimer = setTimeout(function () { self._delPwInput.focus(); }, 50);
     };
 
+    Scene_CharacterSelect.prototype.terminate = function () {
+        Scene_Base.prototype.terminate.call(this);
+        if (this._delFocusTimer) { clearTimeout(this._delFocusTimer); this._delFocusTimer = null; }
+        if (this._delPwInput) { removeEl(this._delPwInput); this._delPwInput = null; }
+    };
+
     // =================================================================
     //  Scene_CharacterCreate
     // =================================================================

@@ -108,6 +108,16 @@ func (h *CharacterHandler) Create(c *gin.Context) {
 		}
 		return
 	}
+
+	// Assign starting skills based on class learnings at level 1.
+	if h.res != nil {
+		skillIDs := h.res.SkillsForLevel(req.ClassID, 1)
+		for _, sid := range skillIDs {
+			cs := &model.CharSkill{CharID: char.ID, SkillID: sid, Level: 1}
+			h.db.Create(cs)
+		}
+	}
+
 	c.JSON(http.StatusCreated, char)
 }
 

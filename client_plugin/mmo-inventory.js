@@ -64,6 +64,8 @@
         this._loadInventory();
         this._selectedIdx = -1;
         this._contextMenu = null;
+        this._dragItemIdx = -1;
+        this._dragActive = false;
         this.refresh();
     };
 
@@ -228,12 +230,58 @@
     };
 
     // -----------------------------------------------------------------
-    // Click / hover handling
+    // Click / hover / drag handling
     // -----------------------------------------------------------------
     InventoryWindow.prototype.updateContent = function () {
         var mx = TouchInput.x - this.x, my = TouchInput.y - this.y;
         var topY = this.contentTop();
         var items = $MMO._inventory.items;
+
+        // Handle active item drag (item → skillbar, after threshold)
+        if (this._dragActive) {
+            if (TouchInput.isPressed()) {
+                var dragItem = items[this._dragItemIdx];
+                if (dragItem) {
+                    var dData = resolveItemData(dragItem);
+                    $MMO._uiDrag = {
+                        type: 'item',
+                        data: {
+                            item_id: dragItem.item_id,
+                            kind: dragItem.kind,
+                            inv_id: dragItem.id,
+                            icon_index: dData.iconIndex,
+                            name: dData.name,
+                            mp_cost: 0
+                        },
+                        x: TouchInput.x,
+                        y: TouchInput.y
+                    };
+                }
+            } else {
+                // Released — check if dropped on a SkillBar slot
+                if ($MMO._handleDrop) $MMO._handleDrop(TouchInput.x, TouchInput.y);
+                this._dragActive = false;
+                this._dragItemIdx = -1;
+                $MMO._uiDrag = null;
+            }
+            return;
+        }
+
+        // Pending drag: check if threshold exceeded to start real drag
+        if (this._dragItemIdx >= 0 && !this._dragActive) {
+            if (TouchInput.isPressed()) {
+                var dist = Math.abs(TouchInput.x - this._dragStartX) + Math.abs(TouchInput.y - this._dragStartY);
+                if (dist > 6) {
+                    // Threshold exceeded — switch to drag mode, close context menu
+                    this._dragActive = true;
+                    this._contextMenu = null;
+                    return;
+                }
+            } else {
+                // Released without moving — it was a click, not a drag
+                this._dragItemIdx = -1;
+            }
+        }
 
         // Context menu interaction takes priority
         if (this._contextMenu) {
@@ -273,10 +321,18 @@
         }
         if (this._hoverIdx !== oldHover) this.refresh();
 
-        // Click on item → open context menu
+        // Click on item: open context menu + start pending drag (consumables only)
         if (TouchInput.isTriggered() && this._hoverIdx >= 0) {
             this._selectedIdx = this._hoverIdx;
             this._openContextMenu(this._hoverIdx);
+            // Also set up pending drag for consumable items
+            var clickedItem = items[this._hoverIdx];
+            if (clickedItem && clickedItem.kind === ITEM_TYPE.ITEM) {
+                this._dragItemIdx = this._hoverIdx;
+                this._dragStartX = TouchInput.x;
+                this._dragStartY = TouchInput.y;
+                this._dragActive = false;
+            }
         }
     };
 

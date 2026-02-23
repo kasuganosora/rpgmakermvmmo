@@ -398,6 +398,27 @@ func (gh *GameHandlers) enterMapRoom(s *player.PlayerSession, mapID, x, y, dir i
 		luk = stats.Luk
 	}
 
+	// Load character skills from DB and resolve display data from resources.
+	var charSkills []model.CharSkill
+	gh.db.Where("char_id = ?", s.CharID).Find(&charSkills)
+	var skillList []map[string]interface{}
+	for _, cs := range charSkills {
+		sk := gh.res.SkillByID(cs.SkillID)
+		if sk == nil {
+			continue
+		}
+		skillList = append(skillList, map[string]interface{}{
+			"skill_id":   sk.ID,
+			"name":       sk.Name,
+			"icon_index": sk.IconIndex,
+			"mp_cost":    sk.MPCost,
+			"cd_ms":      1000, // default cooldown
+		})
+	}
+	if skillList == nil {
+		skillList = []map[string]interface{}{}
+	}
+
 	initPayload, _ := json.Marshal(map[string]interface{}{
 		"self": map[string]interface{}{
 			"char_id":    s.CharID,
@@ -426,6 +447,7 @@ func (gh *GameHandlers) enterMapRoom(s *player.PlayerSession, mapID, x, y, dir i
 			"dir":        dir0,
 			"map_id":     s.MapID,
 		},
+		"skills":   skillList,
 		"players":  room.PlayerSnapshot(),
 		"npcs":     []interface{}{},
 		"monsters": []interface{}{},

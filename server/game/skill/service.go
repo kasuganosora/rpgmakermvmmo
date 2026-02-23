@@ -142,12 +142,14 @@ func (svc *SkillService) UseSkill(
 		}
 	}
 
-	// Broadcast skill_effect.
+	// Broadcast skill_effect with remaining CD in ms (client-safe, no system clock dependency).
 	payload, _ := json.Marshal(map[string]interface{}{
-		"caster_id":    s.CharID,
-		"skill_id":     skillID,
-		"animation_id": skill.IconIndex, // placeholder
-		"targets":      targetResults,
+		"caster_id":      s.CharID,
+		"char_id":        s.CharID,
+		"skill_id":       skillID,
+		"animation_id":   skill.IconIndex, // placeholder
+		"cd_remaining_ms": 1000,
+		"targets":        targetResults,
 	})
 	pkt, _ := json.Marshal(&player.Packet{Type: "skill_effect", Payload: payload})
 	room.Broadcast(pkt)
