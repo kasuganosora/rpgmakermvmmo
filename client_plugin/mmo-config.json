@@ -1,0 +1,15 @@
+{
+  "serverUrl": "ws://localhost:8080",
+  "debug": false,
+  "reconnectMax": 10,
+  "minimap": {
+    "visible": true
+  },
+  "chat": {
+    "maxMessages": 100,
+    "defaultChannel": "world"
+  },
+  "skillBar": {
+    "slots": 12
+  }
+}

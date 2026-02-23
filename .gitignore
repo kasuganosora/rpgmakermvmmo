@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Build artifacts
+server/server
+server/server.exe
+server/mmo-server.exe
+*.exe
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Test artifacts
+coverage/
+*.out
+
+# Database
+server/data/game.db
+
+# Test results
+e2e/test-results/

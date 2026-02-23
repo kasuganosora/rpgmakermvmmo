@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>L2 UI Component Test Page</title>
+<style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0D0D1A; overflow: hidden; }
+    canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="gameCanvas"></canvas>
+
+<script>
+/**
+ * Minimal RMMV shim for testing L2 UI components in a standalone browser.
+ * Provides just enough of the RMMV API for components to render.
+ */
+(function () {
+    'use strict';
+
+    var SCREEN_W = 1024, SCREEN_H = 700;
+    var canvas = document.getElementById('gameCanvas');
+    canvas.width = SCREEN_W;
+    canvas.height = SCREEN_H;
+
+    // ── Graphics ──
+    window.Graphics = {
+        boxWidth: SCREEN_W,
+        boxHeight: SCREEN_H,
+        frameCount: 0,
+        _canvas: canvas,
+        _renderer: null,
+    };
+
+    // ── Bitmap (canvas wrapper) ──
+    function Bitmap(w, h) {
+        this._canvas = document.createElement('canvas');
+        this._canvas.width = Math.max(1, w || 1);
+        this._canvas.height = Math.max(1, h || 1);
+        this._context = this._canvas.getContext('2d');
+        this._dirty = true;
+        this.fontSize = 13;
+        this.textColor = '#FFFFFF';
+        this.outlineColor = 'rgba(0,0,0,0.5)';
+        this.outlineWidth = 0;
+        this._loadListeners = [];
+    }
+    Bitmap.prototype.clear = function () {
+        this._context.clearRect(0, 0, this._canvas.width, this._canvas.height);
+        this._dirty = true;
+    };
+    Bitmap.prototype.resize = function (w, h) {
+        this._canvas.width = Math.max(1, w);
+        this._canvas.height = Math.max(1, h);
+        this._dirty = true;
+    };
+    Bitmap.prototype.fillRect = function (x, y, w, h, color) {
+        this._context.fillStyle = color;
+        this._context.fillRect(x, y, w, h);
+        this._dirty = true;
+    };
+    Bitmap.prototype.gradientFillRect = function (x, y, w, h, c1, c2, vertical) {
+        var ctx = this._context;
+        var grad = vertical
+            ? ctx.createLinearGradient(x, y, x, y + h)
+            : ctx.createLinearGradient(x, y, x + w, y);
+        grad.addColorStop(0, c1);
+        grad.addColorStop(1, c2);
+        ctx.fillStyle = grad;
+        ctx.fillRect(x, y, w, h);
+        this._dirty = true;
+    };
+    Bitmap.prototype.drawText = function (text, x, y, maxW, lineH, align) {
+        var ctx = this._context;
+        ctx.save();
+        ctx.font = this.fontSize + 'px sans-serif';
+        ctx.fillStyle = this.textColor;
+        ctx.textBaseline = 'middle';
+        var tx = x;
+        if (align === 'center') tx = x + (maxW || 0) / 2;
+        else if (align === 'right') tx = x + (maxW || 0);
+        ctx.textAlign = align || 'left';
+        ctx.fillText(String(text), tx, y + (lineH || this.fontSize) / 2, maxW || undefined);
+        ctx.restore();
+        this._dirty = true;
+    };
+    Bitmap.prototype.measureTextWidth = function (text) {
+        this._context.font = this.fontSize + 'px sans-serif';
+        return this._context.measureText(text).width;
+    };
+    Bitmap.prototype.blt = function (src, sx, sy, sw, sh, dx, dy, dw, dh) {
+        if (!src || !src._canvas) return;
+        this._context.drawImage(src._canvas, sx, sy, sw, sh, dx, dy, dw || sw, dh || sh);
+        this._dirty = true;
+    };
+    Bitmap.prototype._setDirty = function () { this._dirty = true; };
+    Bitmap.prototype.isReady = function () { return true; };
+    Bitmap.prototype.addLoadListener = function (fn) { fn(this); };
+    Bitmap.prototype.width = 0;
+    Bitmap.prototype.height = 0;
+    Object.defineProperty(Bitmap.prototype, 'width', {
+        get: function () { return this._canvas.width; },
+        set: function (v) { /* read-only from canvas */ }
+    });
+    Object.defineProperty(Bitmap.prototype, 'height', {
+        get: function () { return this._canvas.height; },
+        set: function (v) { /* read-only from canvas */ }
+    });
+    window.Bitmap = Bitmap;
+
+    // ── ImageManager ──
+    var _emptyBitmap = new Bitmap(1, 1);
+    window.ImageManager = {
+        loadSystem: function () { return _emptyBitmap; },
+        loadFace: function () { return _emptyBitmap; },
+    };
+
+    // ── Window_Base ──
+    function Window_Base() { this.initialize.apply(this, arguments); }
+    Window_Base.prototype = Object.create(Object.prototype);
+    Window_Base.prototype.constructor = Window_Base;
+    Window_Base.prototype.initialize = function (x, y, w, h) {
+        this.x = x || 0;
+        this.y = y || 0;
+        this.width = w || 100;
+        this.height = h || 100;
+        this.opacity = 255;
+        this.backOpacity = 192;
+        this.visible = true;
+        this.parent = null;
+        this.children = [];
+        this.padding = this.standardPadding();
+        this.createContents();
+    };
+    Window_Base.prototype.standardPadding = function () { return 18; };
+    Window_Base.prototype.createContents = function () {
+        var cw = Math.max(1, this.width - this.padding * 2);
+        var ch = Math.max(1, this.height - this.padding * 2);
+        this.contents = new Bitmap(cw, ch);
+    };
+    Window_Base.prototype.contentsWidth = function () {
+        return Math.max(0, this.width - this.padding * 2);
+    };
+    Window_Base.prototype.contentsHeight = function () {
+        return Math.max(0, this.height - this.padding * 2);
+    };
+    Window_Base.prototype.update = function () {
+        for (var i = 0; i < this.children.length; i++) {
+            if (this.children[i] && this.children[i].update) {
+                this.children[i].update();
+            }
+        }
+    };
+    Window_Base.prototype.addChild = function (child) {
+        child.parent = this;
+        this.children.push(child);
+        return child;
+    };
+    Window_Base.prototype.removeChild = function (child) {
+        var idx = this.children.indexOf(child);
+        if (idx >= 0) this.children.splice(idx, 1);
+        child.parent = null;
+    };
+    Window_Base.prototype.drawText = function () {
+        this.contents.drawText.apply(this.contents, arguments);
+    };
+    window.Window_Base = Window_Base;
+
+    // ── Input ──
+    window.Input = {
+        _keys: {},
+        isTriggered: function (key) {
+            var r = !!this._keys[key];
+            this._keys[key] = false;
+            return r;
+        },
+        isPressed: function () { return false; },
+        clear: function () { this._keys = {}; },
+    };
+
+    // ── TouchInput ──
+    window.TouchInput = {
+        x: 0, y: 0,
+        _triggered: false,
+        _rightTriggered: false,
+        wheelY: 0,
+        isTriggered: function () {
+            var r = this._triggered;
+            this._triggered = false;
+            return r;
+        },
+        isPressed: function () { return this._pressing; },
+        _pressing: false,
+        isRightTriggered: function () {
+            var r = this._rightTriggered;
+            this._rightTriggered = false;
+            return r;
+        },
+    };
+
+    canvas.addEventListener('mousemove', function (e) {
+        TouchInput.x = e.offsetX;
+        TouchInput.y = e.offsetY;
+    });
+    canvas.addEventListener('mousedown', function (e) {
+        if (e.button === 0) { TouchInput._triggered = true; TouchInput._pressing = true; }
+        if (e.button === 2) TouchInput._rightTriggered = true;
+    });
+    canvas.addEventListener('mouseup', function () { TouchInput._pressing = false; });
+    canvas.addEventListener('wheel', function (e) {
+        TouchInput.wheelY = e.deltaY > 0 ? 1 : e.deltaY < 0 ? -1 : 0;
+    });
+    canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') Input._keys['cancel'] = true;
+        if (e.key === 'Enter') Input._keys['ok'] = true;
+        // Forward to any focused L2_Input
+        if (window._l2FocusedInput && window._l2FocusedInput._handleKeyDown) {
+            window._l2FocusedInput._handleKeyDown(e);
+        }
+    });
+
+    // ── SceneManager ──
+    window.SceneManager = {
+        _scene: null,
+    };
+
+    // ── PluginManager ──
+    window.PluginManager = {
+        parameters: function () { return {}; },
+    };
+
+    // ── StorageManager ──
+    window.StorageManager = {
+        save: function () {},
+        load: function () { return null; },
+    };
+})();
+</script>
+
+<!-- Load built UI library -->
+<script src="../mmo-ui.js"></script>
+
+<script>
+/**
+ * Test Scene: creates one instance of each L2 component for visual verification.
+ */
+(function () {
+    'use strict';
+
+    var scene = { children: [], addChild: function (c) { this.children.push(c); c.parent = this; } };
+    SceneManager._scene = scene;
+
+    var scrollX = 0, scrollY = 0;
+    var allComponents = [];
+
+    function add(comp) {
+        scene.addChild(comp);
+        allComponents.push(comp);
+        return comp;
+    }
+
+    // ═══ COLUMN 1: Layout + Base + Navigation ═══
+    var col1X = 20, yy = 20;
+
+    // Section label helper
+    function sectionLabel(text, x, y) {
+        var lbl = new L2_Typography(x, y, 200, { text: text, level: 'h2' });
+        return add(lbl);
+    }
+
+    // ── Layout ──
+    sectionLabel('Layout', col1X, yy);
+    yy += 30;
+
+    add(new L2_Divider(col1X, yy, 220, { text: 'Divider' }));
+    yy += 24;
+
+    add(new L2_Space(8, 8));
+    var layoutH = new L2_Layout(col1X, yy, 220, 50, { direction: 'horizontal', gap: 6 });
+    add(layoutH);
+    // Add buttons as children to show layout concept
+    yy += 58;
+
+    // ── Base ──
+    sectionLabel('Base', col1X, yy);
+    yy += 30;
+
+    add(new L2_Button(col1X, yy, '默认按钮', {}));
+    add(new L2_Button(col1X + 85, yy, '主要按钮', { type: 'primary' }));
+    yy += 36;
+    add(new L2_Button(col1X, yy, '成功', { type: 'success' }));
+    add(new L2_Button(col1X + 65, yy, '危险', { type: 'danger' }));
+    add(new L2_Button(col1X + 130, yy, '文本', { type: 'text' }));
+    yy += 36;
+
+    add(new L2_Icon(col1X, yy, 64));
+    add(new L2_Icon(col1X + 40, yy, 79));
+    add(new L2_Icon(col1X + 80, yy, 128));
+    add(new L2_Link(col1X + 120, yy + 8, '点击链接', { onClick: function () { L2_Message.info('链接被点击'); } }));
+    yy += 40;
+
+    add(new L2_Typography(col1X, yy, 220, { text: 'H1 标题', level: 'h1' }));
+    yy += 26;
+    add(new L2_Typography(col1X, yy, 220, { text: 'H3 标题', level: 'h3' }));
+    yy += 22;
+    add(new L2_Typography(col1X, yy, 220, { text: 'Body 正文 / Caption', level: 'body' }));
+    yy += 24;
+
+    // ── Navigation ──
+    sectionLabel('Navigation', col1X, yy);
+    yy += 30;
+
+    add(new L2_Tabs(col1X, yy, 220, { tabs: ['物品', '装备', '技能'], activeIndex: 0 }));
+    yy += 36;
+
+    add(new L2_Menu(col1X, yy, 100, { items: ['仓库', '商店', '邮件', '设置'], activeIndex: 1 }));
+    yy += 110;
+
+    add(new L2_Pagination(col1X, yy, { total: 50, pageSize: 10, current: 2 }));
+    yy += 34;
+
+    add(new L2_Steps(col1X, yy, 220, { steps: ['选择', '确认', '完成'], current: 1 }));
+    yy += 40;
+
+    add(new L2_Breadcrumb(col1X, yy, { items: ['首页', '商城', '武器'] }));
+    yy += 28;
+
+    // ═══ COLUMN 2: Input ═══
+    var col2X = 270;
+    yy = 20;
+
+    sectionLabel('Input', col2X, yy);
+    yy += 30;
+
+    add(new L2_Input(col2X, yy, 200, { placeholder: '请输入文本...' }));
+    yy += 36;
+
+    add(new L2_Input(col2X, yy, 200, { placeholder: '密码', password: true }));
+    yy += 36;
+
+    add(new L2_InputNumber(col2X, yy, { value: 10, min: 0, max: 100, step: 5 }));
+    yy += 36;
+
+    add(new L2_Select(col2X, yy, 200, {
+        options: [
+            { label: '战士', value: 1 },
+            { label: '法师', value: 2 },
+            { label: '弓手', value: 3 },
+            { label: '牧师', value: 4 },
+        ],
+        selected: 0,
+    }));
+    yy += 36;
+
+    add(new L2_Checkbox(col2X, yy, { label: '自动战斗', checked: true }));
+    add(new L2_Checkbox(col2X + 110, yy, { label: '显示伤害' }));
+    yy += 28;
+
+    add(new L2_Radio(col2X, yy, {
+        items: ['简单', '普通', '困难'],
+        selected: 1,
+        direction: 'horizontal',
+    }));
+    yy += 30;
+
+    add(new L2_Switch(col2X, yy, { on: true, label: '音效' }));
+    add(new L2_Switch(col2X + 100, yy, { on: false, label: '音乐' }));
+    yy += 30;
+
+    add(new L2_Slider(col2X, yy, 200, { value: 60, min: 0, max: 100 }));
+    yy += 36;
+
+    add(new L2_Textarea(col2X, yy, 200, 70, { placeholder: '请输入多行文本...' }));
+    yy += 80;
+
+    // ── Data Display ──
+    sectionLabel('Data Display', col2X, yy);
+    yy += 30;
+
+    add(new L2_Progress(col2X, yy, 200, { value: 0.75, label: 'HP', fillColor: L2_Theme.hpFill, bgColor: L2_Theme.hpBg }));
+    yy += 22;
+    add(new L2_Progress(col2X, yy, 200, { value: 0.45, label: 'MP', fillColor: L2_Theme.mpFill, bgColor: L2_Theme.mpBg }));
+    yy += 22;
+    add(new L2_Progress(col2X, yy, 200, { value: 0.3, label: 'EXP', fillColor: L2_Theme.expFill, bgColor: L2_Theme.expBg }));
+    yy += 28;
+
+    add(new L2_Tag(col2X, yy, '战士', {}));
+    add(new L2_Tag(col2X + 55, yy, 'Lv.50', { bgColor: L2_Theme.primaryColor }));
+    add(new L2_Tag(col2X + 120, yy, '关闭', { closable: true, onClose: function () { L2_Message.info('Tag关闭'); } }));
+    yy += 30;
+
+    add(new L2_Badge(col2X, yy, { count: 5 }));
+    add(new L2_Badge(col2X + 30, yy, { count: 120 }));
+    add(new L2_Badge(col2X + 72, yy, { dot: true }));
+    yy += 30;
+
+    add(new L2_Avatar(col2X, yy, { size: 36, text: 'A', bgColor: '#4488FF' }));
+    add(new L2_Avatar(col2X + 44, yy, { size: 36, text: 'B', bgColor: '#44FF88', shape: 'square' }));
+    add(new L2_Avatar(col2X + 88, yy, { size: 36, text: 'C', bgColor: '#FF4444' }));
+    yy += 44;
+
+    add(new L2_Statistic(col2X, yy, { title: '攻击力', value: 1250, prefix: '', suffix: '' }));
+    add(new L2_Statistic(col2X + 130, yy, { title: '胜率', value: '72%', trend: 'up' }));
+    yy += 60;
+
+    // ═══ COLUMN 3: Data (continued) + Windows + Feedback ═══
+    var col3X = 510;
+    yy = 20;
+
+    sectionLabel('List & Table', col3X, yy);
+    yy += 30;
+
+    add(new L2_List(col3X, yy, 200, 100, {
+        items: ['火焰剑', '冰霜盾', '治愈药水', '传送石', '复活卷轴', '经验书', '暗影斗篷'],
+        selectedIndex: 1,
+    }));
+    yy += 108;
+
+    add(new L2_Table(col3X, yy, 220, 100, {
+        columns: [
+            { key: 'name', title: '名称', width: 80 },
+            { key: 'lv', title: '等级', width: 40 },
+            { key: 'class', title: '职业', width: 60 },
+        ],
+        rows: [
+            { name: 'Alice', lv: 50, class: '战士' },
+            { name: 'Bob', lv: 45, class: '法师' },
+            { name: 'Carol', lv: 48, class: '弓手' },
+            { name: 'Dave', lv: 42, class: '牧师' },
+        ],
+    }));
+    yy += 108;
+
+    // ── Collapse ──
+    add(new L2_Collapse(col3X, yy, 220, {
+        items: [
+            { title: '基本信息', content: '角色名: Alice\n等级: 50\n职业: 战士', expanded: true },
+            { title: '装备属性', content: '攻击力: +120\n防御力: +80\n暴击率: 15%' },
+            { title: '技能列表', content: '火焰斩, 冰霜打击, 治愈术' },
+        ],
+    }));
+    yy += 120;
+
+    // ── Tree ──
+    sectionLabel('Tree', col3X, yy);
+    yy += 28;
+    add(new L2_Tree(col3X, yy, 220, 110, {
+        data: [
+            { label: '背包', expanded: true, children: [
+                { label: '武器', children: [{ label: '火焰剑' }, { label: '冰霜弓' }] },
+                { label: '防具', children: [{ label: '钢铁盔甲' }] },
+            ]},
+            { label: '仓库', children: [{ label: '材料' }, { label: '宝石' }] },
+        ],
+    }));
+    yy += 118;
+
+    // ── Card ──
+    add(new L2_Card(col3X, yy, 220, 80, { title: '任务卡', body: '击败10个史莱姆\n奖励: 500金币, 200经验' }));
+    yy += 88;
+
+    // ═══ COLUMN 4: Feedback + Misc ═══
+    var col4X = 770;
+    yy = 20;
+
+    sectionLabel('Feedback', col4X, yy);
+    yy += 30;
+
+    // Alerts
+    add(new L2_Alert(col4X, yy, 230, { type: 'info', message: '信息提示' }));
+    yy += 38;
+    add(new L2_Alert(col4X, yy, 230, { type: 'success', message: '操作成功' }));
+    yy += 38;
+    add(new L2_Alert(col4X, yy, 230, { type: 'warning', title: '警告', message: '库存不足' }));
+    yy += 58;
+    add(new L2_Alert(col4X, yy, 230, { type: 'error', message: '连接失败', closable: true }));
+    yy += 42;
+
+    // Empty
+    add(new L2_Empty(col4X, yy, 230, { text: '暂无数据' }));
+    yy += 58;
+
+    // Loading
+    add(new L2_Loading(col4X, yy, { text: '加载中...' }));
+    yy += 40;
+
+    // Buttons to trigger feedback
+    sectionLabel('Interactive', col4X, yy);
+    yy += 30;
+
+    add(new L2_Button(col4X, yy, '弹窗Dialog', {
+        type: 'primary',
+        onClick: function () {
+            L2_Dialog.confirm('确认操作', '你确定要删除这个物品吗？\n此操作不可撤销。', function () {
+                L2_Message.success('已删除');
+            });
+        }
+    }));
+    yy += 34;
+
+    add(new L2_Button(col4X, yy, 'Message消息', {
+        type: 'success',
+        onClick: function () {
+            L2_Message.info('这是一条信息');
+            setTimeout(function () { L2_Message.success('操作成功！'); }, 300);
+            setTimeout(function () { L2_Message.warning('注意！'); }, 600);
+            setTimeout(function () { L2_Message.error('发生错误'); }, 900);
+        }
+    }));
+    yy += 34;
+
+    add(new L2_Button(col4X, yy, 'Notification', {
+        onClick: function () {
+            L2_Notification.info('系统通知', '你获得了一件传奇装备！');
+        }
+    }));
+    yy += 34;
+
+    add(new L2_Button(col4X, yy, 'Popconfirm', {
+        type: 'danger',
+        onClick: function () {
+            add(new L2_Popconfirm(col4X + 60, yy + 14, {
+                text: '确认删除？',
+                onOk: function () { L2_Message.success('已删除'); },
+            }));
+        }
+    }));
+    yy += 34;
+
+    // Drawer button
+    var testDrawer = new L2_Drawer({ title: '抽屉面板', width: 260 });
+    add(testDrawer);
+    var drawerContent = new L2_Typography(10, testDrawer.contentY(), 240, { text: '抽屉内容区域', level: 'body' });
+    testDrawer.addContent(drawerContent);
+
+    add(new L2_Button(col4X, yy, '打开Drawer', {
+        onClick: function () { testDrawer.open(); }
+    }));
+    yy += 34;
+
+    // Tooltip test area
+    var tooltip = new L2_Tooltip();
+    add(tooltip);
+    add(new L2_Button(col4X, yy, '悬停Tooltip', {
+        _tooltipRef: tooltip,
+        type: 'text',
+    }));
+    yy += 34;
+
+    // ── SubWindow ──
+    var subWin = new L2_SubWindow(380, 420, 240, 160, { title: '子窗口 (可拖拽)' });
+    subWin.drawContent = function (bmp, cw, ch) {
+        var cy = this.contentY();
+        bmp.fontSize = L2_Theme.fontSmall;
+        bmp.textColor = L2_Theme.textWhite;
+        bmp.drawText('这是一个可拖拽的子窗口。', 8, cy, cw - 16, 20, 'left');
+        bmp.drawText('点击 X 关闭，拖拽标题栏移动。', 8, cy + 22, cw - 16, 20, 'left');
+        L2_Theme.drawBar(bmp, 8, cy + 52, cw - 16, 12, 0.6, L2_Theme.hpBg, L2_Theme.hpFill);
+    };
+    subWin.refresh();
+    add(subWin);
+
+    // ════════════════════════════════════════════════════════
+    //  Render Loop
+    // ════════════════════════════════════════════════════════
+    var mainCtx = canvas.getContext('2d');
+
+    function renderComponent(comp) {
+        if (!comp.visible) return;
+        // Render the component's contents bitmap
+        if (comp.contents && comp.contents._canvas) {
+            var dx = comp.x + (comp.padding || 0);
+            var dy = comp.y + (comp.padding || 0);
+            mainCtx.drawImage(comp.contents._canvas, dx, dy);
+        }
+        // Render children
+        if (comp.children) {
+            for (var i = 0; i < comp.children.length; i++) {
+                renderComponent(comp.children[i]);
+            }
+        }
+    }
+
+    function gameLoop() {
+        Graphics.frameCount++;
+
+        // Update all components
+        for (var i = 0; i < allComponents.length; i++) {
+            if (allComponents[i].update) allComponents[i].update();
+        }
+
+        // Handle tooltip for hover buttons
+        for (var j = 0; j < allComponents.length; j++) {
+            var c = allComponents[j];
+            if (c._tooltipRef && c.isInside && c.isInside(TouchInput.x, TouchInput.y)) {
+                c._tooltipRef.show('这是一个提示信息\nTooltip Content');
+            }
+        }
+
+        // Clear & render
+        mainCtx.clearRect(0, 0, SCREEN_W, SCREEN_H);
+        mainCtx.fillStyle = '#0D0D1A';
+        mainCtx.fillRect(0, 0, SCREEN_W, SCREEN_H);
+
+        // Draw grid bg for visual reference
+        mainCtx.strokeStyle = 'rgba(255,255,255,0.03)';
+        for (var gx = 0; gx < SCREEN_W; gx += 50) {
+            mainCtx.beginPath(); mainCtx.moveTo(gx, 0); mainCtx.lineTo(gx, SCREEN_H); mainCtx.stroke();
+        }
+        for (var gy = 0; gy < SCREEN_H; gy += 50) {
+            mainCtx.beginPath(); mainCtx.moveTo(0, gy); mainCtx.lineTo(SCREEN_W, gy); mainCtx.stroke();
+        }
+
+        for (var k = 0; k < allComponents.length; k++) {
+            renderComponent(allComponents[k]);
+        }
+
+        // Reset per-frame input
+        TouchInput.wheelY = 0;
+
+        requestAnimationFrame(gameLoop);
+    }
+
+    gameLoop();
+})();
+</script>
+</body>
+</html>

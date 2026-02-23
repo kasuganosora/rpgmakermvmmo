@@ -1,0 +1,51 @@
+server:
+  port: 8080
+  debug: false
+  debug_port: 9229
+  admin_key: "change-me-in-production"
+  game_dir: "../../Project1/www"
+
+rpgmaker:
+  data_path: "./data/rpgmaker"
+  img_path:  "../../Project1/www/img"
+
+database:
+  mode: "sqlite"
+  embedded_path: "./data/db"
+  sqlite_path: "./data/game.db"
+  mysql_dsn: "user:pass@tcp(127.0.0.1:3306)/rpg_mmo?charset=utf8mb4&parseTime=True&loc=UTC"
+  mysql_max_open: 50
+  mysql_max_idle: 10
+  mysql_max_life: "1h"
+
+cache:
+  redis_addr: ""
+  redis_password: ""
+  redis_db: 0
+  local_gc_interval: "30s"
+  local_pubsub_buf: 256
+
+game:
+  map_tick_ms: 50
+  save_interval_s: 300
+  max_party_size: 4
+  pvp_enabled: false
+  start_map_id: 1
+  start_x: 5
+  start_y: 5
+  protection_ms: 3000
+  drop_lifetime_s: 300
+  chat_nearby_range: 10
+  global_chat_cooldown_s: 180
+
+security:
+  jwt_secret: "change-me-in-production"
+  jwt_ttl_h: "72h"
+
+plugins:
+  dir: "./plugins"
+  client_dir: "../client_plugin"
+
+script:
+  vm_pool_size: 8
+  timeout: "5s"

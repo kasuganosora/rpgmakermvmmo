@@ -1,0 +1,8 @@
+{
+  "name": "mmo-client-e2e-tests",
+  "private": true,
+  "description": "Full-chain E2E tests: Go server <-> client plugin <-> RMMV mock",
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

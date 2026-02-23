@@ -1,0 +1,19 @@
+{
+  "name": "e2e",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "npx playwright test",
+    "test:auth": "npx playwright test tests/auth.spec.js",
+    "test:party": "npx playwright test tests/party.spec.js",
+    "test:trade": "npx playwright test tests/trade.spec.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@playwright/test": "^1.58.2"
+  }
+}
