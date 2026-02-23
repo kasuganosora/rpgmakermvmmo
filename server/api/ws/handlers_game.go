@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/kasuganosora/rpgmakermvmmo/server/game/battle"
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/player"
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/world"
 	"github.com/kasuganosora/rpgmakermvmmo/server/model"
@@ -88,6 +89,9 @@ func (gh *GameHandlers) HandleEnterMap(_ context.Context, s *player.PlayerSessio
 	s.CharName = char.Name
 	s.WalkName = char.WalkName
 	s.WalkIndex = char.WalkIndex
+	s.FaceName = char.FaceName
+	s.FaceIndex = char.FaceIndex
+	s.ClassID = char.ClassID
 	s.HP = char.HP
 	s.MaxHP = char.MaxHP
 	s.MP = char.MP
@@ -341,18 +345,82 @@ func (gh *GameHandlers) enterMapRoom(s *player.PlayerSession, mapID, x, y, dir i
 
 	// Push map_init to the joining player.
 	x0, y0, dir0 := s.Position()
+
+	// Compute class name from resource data.
+	className := ""
+	if gh.res != nil {
+		if cls := gh.res.ClassByID(s.ClassID); cls != nil {
+			className = cls.Name
+		}
+	}
+
+	// Load character from DB for gold and equipment stats.
+	var char model.Character
+	gold := int64(0)
+	atk, def, mat, mdf, agi, luk := 0, 0, 0, 0, 0, 0
+	if err := gh.db.First(&char, s.CharID).Error; err == nil {
+		gold = char.Gold
+		// Compute combat stats (base + class + equipment).
+		var equips []*resource.EquipStats
+		if gh.res != nil {
+			var invItems []model.Inventory
+			gh.db.Where("char_id = ? AND equipped = ?", s.CharID, true).Find(&invItems)
+			for _, inv := range invItems {
+				var es *resource.EquipStats
+				if inv.Kind == 2 { // weapon
+					for _, w := range gh.res.Weapons {
+						if w != nil && w.ID == inv.ItemID {
+							s := resource.EquipStatsFromParams(w.Params)
+							es = &s
+							break
+						}
+					}
+				} else if inv.Kind == 3 { // armor
+					for _, a := range gh.res.Armors {
+						if a != nil && a.ID == inv.ItemID {
+							s := resource.EquipStatsFromParams(a.Params)
+							es = &s
+							break
+						}
+					}
+				}
+				if es != nil {
+					equips = append(equips, es)
+				}
+			}
+		}
+		stats := player.CalcStats(&char, gh.res, equips)
+		atk = stats.Atk
+		def = stats.Def
+		mat = stats.Mat
+		mdf = stats.Mdf
+		agi = stats.Agi
+		luk = stats.Luk
+	}
+
 	initPayload, _ := json.Marshal(map[string]interface{}{
 		"self": map[string]interface{}{
 			"char_id":    s.CharID,
 			"name":       s.CharName,
 			"walk_name":  s.WalkName,
 			"walk_index": s.WalkIndex,
+			"face_name":  s.FaceName,
+			"face_index": s.FaceIndex,
+			"class_name": className,
 			"level":      s.Level,
 			"exp":        s.Exp,
+			"next_exp":   battle.ExpNeeded(s.Level),
 			"hp":         s.HP,
 			"max_hp":     s.MaxHP,
 			"mp":         s.MP,
 			"max_mp":     s.MaxMP,
+			"atk":        atk,
+			"def":        def,
+			"mat":        mat,
+			"mdf":        mdf,
+			"agi":        agi,
+			"luk":        luk,
+			"gold":       gold,
 			"x":          x0,
 			"y":          y0,
 			"dir":        dir0,

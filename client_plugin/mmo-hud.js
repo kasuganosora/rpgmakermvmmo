@@ -83,7 +83,7 @@
     // =================================================================
     //  Minimap — top-right: terrain passability + dots
     // =================================================================
-    var MM_SIZE = 160;
+    var MM_SIZE = 120;
 
     function Minimap() { this.initialize.apply(this, arguments); }
     Minimap.prototype = Object.create(L2_Base.prototype);
@@ -95,6 +95,12 @@
         this._monsterDots = [];
         this._terrainCache = null;
         this._cachedMapId = -1;
+        $MMO.makeDraggable(this, 'minimap');
+    };
+
+    Minimap.prototype.update = function () {
+        L2_Base.prototype.update.call(this);
+        $MMO.updateDrag(this);
     };
 
     Minimap.prototype.standardPadding = function () { return 0; };

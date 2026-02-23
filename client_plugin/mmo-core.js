@@ -56,6 +56,7 @@
         // Send a message to the server.
         send: function (type, payload) {
             if (this._state !== STATE.CONNECTED) return false;
+            if (this._seq > 0xFFFFFF) this._seq = 0;
             var msg = JSON.stringify({ seq: ++this._seq, type: type, payload: payload || {} });
             if (this._debug) console.log('[MMO] ->', type, payload);
             try {
@@ -105,9 +106,8 @@
             ws.onclose = function () {
                 self._stopHeartbeat();
                 if (self._state === STATE.CONNECTED || self._state === STATE.CONNECTING) {
-                    self._state = STATE.DISCONNECTED;
                     self._ws = null;
-                    self._dispatch('_disconnected', {});
+                    self._scheduleReconnect();
                 }
             };
         },
@@ -118,8 +118,10 @@
                 console.error('[MMO] Max reconnection attempts reached.');
                 this._state = STATE.DISCONNECTED;
                 this._dispatch('_reconnect_failed', {});
+                this._dispatch('_disconnected', {});
                 return;
             }
+            this._state = STATE.RECONNECTING;
             var delay = Math.min(1000 * Math.pow(2, this._reconnectAttempts), MAX_RECONNECT_DELAY);
             this._reconnectAttempts++;
             if (this._debug) console.log('[MMO] Reconnecting in ' + delay + 'ms (attempt ' + this._reconnectAttempts + ')');
@@ -332,7 +334,7 @@
                 }
             } else {
                 if (d.active) {
-                    localStorage.setItem('mmo_ui_' + d.key, JSON.stringify({ x: panel.x, y: panel.y }));
+                    try { localStorage.setItem('mmo_ui_' + d.key, JSON.stringify({ x: panel.x, y: panel.y })); } catch (e) {}
                     if (d.onMove) d.onMove();
                 }
                 d.active = false; d.pending = false;
@@ -380,14 +382,21 @@
     // Central action dispatch for opening/toggling windows.
     $MMO._triggerAction = function (action) {
         if (action === 'status' && $MMO._statusWindow)       $MMO._statusWindow.toggle();
+        else if (action === 'skills' && $MMO._skillWindow)   $MMO._skillWindow.toggle();
         else if (action === 'inventory' && $MMO._inventoryWindow) $MMO._inventoryWindow.toggle();
         else if (action === 'friends' && $MMO._friendListWin) {
             $MMO._friendListWin.visible = !$MMO._friendListWin.visible;
-            if ($MMO._friendListWin.visible) $MMO._friendListWin.loadFriends();
+            if ($MMO._friendListWin.visible) {
+                $MMO._friendListWin.refresh();
+                $MMO._friendListWin.loadFriends();
+            }
         }
         else if (action === 'guild' && $MMO._guildInfoWin) {
             $MMO._guildInfoWin.visible = !$MMO._guildInfoWin.visible;
-            if ($MMO._guildInfoWin.visible && $MMO._guildID) $MMO._guildInfoWin.loadGuild($MMO._guildID);
+            if ($MMO._guildInfoWin.visible) {
+                $MMO._guildInfoWin.refresh();
+                if ($MMO._guildID) $MMO._guildInfoWin.loadGuild($MMO._guildID);
+            }
         }
         else if (action === 'system' && $MMO._systemMenu) $MMO._systemMenu.toggle();
     };
@@ -399,12 +408,16 @@
     Scene_Map.prototype.isMenuCalled = function () { return false; };
     Scene_Map.prototype.callMenu = function () {};
 
-    // Keyboard shortcuts (Alt+T status, ESC close windows).
+    // Keyboard shortcuts (Alt+T status, Alt+S skills, ESC close windows).
     window.addEventListener('keydown', function (e) {
         if (!(SceneManager._scene instanceof Scene_Map)) return;
         if (e.altKey && e.keyCode === 84) { // Alt+T → Status
             e.preventDefault();
             $MMO._triggerAction('status');
+        }
+        if (e.altKey && e.keyCode === 83) { // Alt+S → Skills
+            e.preventDefault();
+            $MMO._triggerAction('skills');
         }
     });
 

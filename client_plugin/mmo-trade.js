@@ -72,7 +72,7 @@
 
     TradeWindow.prototype._sendOffer = function () {
         $MMO.send('trade_update', {
-            item_ids: this._myItems.map(function (i) { return i.inv_id; }),
+            item_ids: this._myItems.map(function (i) { return i.id; }),
             gold: this._myGold
         });
     };
@@ -166,8 +166,8 @@
         var btnH = 36, btnY = h - PAD - btnH;
 
         // Hover detection
-        var mx = this.canvasToLocalX(TouchInput.x);
-        var my = this.canvasToLocalY(TouchInput.y);
+        var mx = TouchInput.x - this.x;
+        var my = TouchInput.y - this.y;
         var oldHover = this._hoverBtn;
         this._hoverBtn = null;
         if (my >= btnY && my <= btnY + btnH) {
@@ -181,7 +181,7 @@
             for (var k = 0; k <= 9; k++) {
                 if (Input.isTriggered(String(k))) {
                     if (this._goldText === '0') this._goldText = '';
-                    this._goldText += String(k);
+                    if (this._goldText.length < 9) this._goldText += String(k);
                     this.refresh();
                 }
             }
@@ -199,8 +199,8 @@
 
         // Click detection
         if (TouchInput.isTriggered()) {
-            var lx = this.canvasToLocalX(TouchInput.x);
-            var ly = this.canvasToLocalY(TouchInput.y);
+            var lx = TouchInput.x - this.x;
+            var ly = TouchInput.y - this.y;
 
             if (!this.isInside(TouchInput.x, TouchInput.y)) return;
 
@@ -288,6 +288,11 @@
     var _Scene_Map_terminate4 = Scene_Map.prototype.terminate;
     Scene_Map.prototype.terminate = function () {
         _Scene_Map_terminate4.call(this);
+        if ($MMO._tradeWindow && $MMO._tradeWindow.visible) {
+            $MMO.send('trade_cancel', {});
+            $MMO._tradeWindow.close();
+        }
+        if (_tradeRequestDialog) _tradeRequestDialog.respond(false);
         this._tradeWindow = null;
         $MMO._tradeWindow = null;
     };

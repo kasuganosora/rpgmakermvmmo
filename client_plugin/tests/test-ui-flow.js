@@ -267,33 +267,26 @@ test('$MMO.makeDraggable clamps position within screen bounds', function () {
     localStorage.clear();
 });
 
-test('ActionBar has correct number of buttons', function () {
+test('ActionBar has correct number of buttons and size', function () {
     var scene = createSceneMap();
     var bar = scene._mmoActionBar;
     assert.ok(bar, 'ActionBar must exist');
-    // Verify it has proper dimensions for 5 buttons
-    // AB_BTN_W=48, AB_BTN_H=26, AB_GAP=3, AB_PAD=5, 5 buttons
-    var expectedW = 5 * (48 + 3) - 3 + 5 * 2; // 255 - 3 + 10 = 262
-    // Allow a small tolerance for rounding
-    assert.ok(bar.width > 200 && bar.width < 300,
-        'ActionBar width should be ~262, got ' + bar.width);
+    // 2x3 grid: AB_COLS=3, AB_ROWS=2, AB_BTN_SIZE=38, AB_GAP=2, AB_PAD=4, AB_TOOLTIP_H=18
+    // Width: 3*(38+2)-2+4*2 = 118-2+8 = 126 (was 206 for 5-button row)
+    // Height: 18+2*(38+2)-2+4*2 = 18+78-2+8 = 104
+    assert.ok(bar.width > 100 && bar.width < 160,
+        'ActionBar width should be ~126, got ' + bar.width);
+    assert.ok(bar.height > 80 && bar.height < 130,
+        'ActionBar height should be ~104, got ' + bar.height);
 });
 
-test('ActionBar is positioned above the skill bar (no overlap)', function () {
+test('ActionBar is at bottom-right of screen', function () {
     var scene = createSceneMap();
     var bar = scene._mmoActionBar;
-    var skillBar = scene.children.find(function (c) {
-        return c.constructor === Window_SkillBar;
-    });
-    if (!skillBar) {
-        console.log('    (skipped - SkillBar not found)');
-        return;
-    }
-    // ActionBar bottom edge should be above (or at) skill bar top edge
-    var barBottom = bar.y + bar.height;
-    var skillTop = skillBar.y;
-    assert.ok(barBottom <= skillTop + 2,
-        'ActionBar bottom (' + barBottom + ') should be above SkillBar top (' + skillTop + ')');
+    assert.ok(bar.x + bar.width > Graphics.boxWidth - 20,
+        'ActionBar should be near the right edge, right=' + (bar.x + bar.width));
+    assert.ok(bar.y + bar.height > Graphics.boxHeight - 20,
+        'ActionBar should be near the bottom edge, bottom=' + (bar.y + bar.height));
 });
 
 test('InventoryWindow extends GameWindow', function () {

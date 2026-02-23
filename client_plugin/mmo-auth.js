@@ -306,7 +306,7 @@
         this._passInput.addEventListener('keydown', function (e) {
             if (e.keyCode === 13) self._doLogin();
         });
-        setTimeout(function () { self._userInput.focus(); }, 100);
+        this._focusTimer = setTimeout(function () { self._userInput.focus(); }, 100);
     };
 
     Scene_Login.prototype._doLogin = function () {
@@ -360,6 +360,7 @@
 
     Scene_Login.prototype.terminate = function () {
         Scene_Base.prototype.terminate.call(this);
+        if (this._focusTimer) { clearTimeout(this._focusTimer); this._focusTimer = null; }
         this._cleanup();
     };
 
@@ -670,7 +671,7 @@
         var dx = dlg.x + (dlg.width - inputW) / 2;
         var dy = dlg.y + dlg._titleH + 8 + 2 * 20 + 8; // after title + 2 text lines + gap
         self._delPwInput = makeL2Input('password', 'Enter password', dx, dy, inputW, 28);
-        setTimeout(function () { self._delPwInput.focus(); }, 50);
+        this._delFocusTimer = setTimeout(function () { self._delPwInput.focus(); }, 50);
     };
 
     // =================================================================
@@ -776,7 +777,7 @@
         this._nameInput.addEventListener('keydown', function (e) {
             if (e.keyCode === 13) self._doCreate();
         });
-        setTimeout(function () { self._nameInput.focus(); }, 100);
+        this._focusTimer = setTimeout(function () { self._nameInput.focus(); }, 100);
     };
 
     Scene_CharacterCreate.prototype._createFaceButton = function (x, y, size, preset, index) {
@@ -905,6 +906,7 @@
 
     Scene_CharacterCreate.prototype.terminate = function () {
         Scene_Base.prototype.terminate.call(this);
+        if (this._focusTimer) { clearTimeout(this._focusTimer); this._focusTimer = null; }
         this._cleanup();
     };
 

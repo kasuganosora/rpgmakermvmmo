@@ -84,7 +84,7 @@
     // =================================================================
     function StatusWindow() {
         GameWindow.prototype.initialize.call(this, {
-            key: 'status', title: '状态', width: 300, height: 360
+            key: 'status', title: '状态', width: 300, height: 280
         });
         this._faceBmp = null;
     }
@@ -93,9 +93,10 @@
 
     StatusWindow.prototype.onOpen = function () {
         var s = $MMO._lastSelf;
-        if (s && s.face_name && !this._faceBmp) {
+        var faceName = s && (s.face_name || s.walk_name);
+        if (faceName && !this._faceBmp) {
             var self = this;
-            this._faceBmp = ImageManager.loadFace(s.face_name);
+            this._faceBmp = ImageManager.loadFace(faceName);
             this._faceBmp.addLoadListener(function () { self.refresh(); });
         }
         this.refresh();
@@ -110,8 +111,8 @@
         var faceSize = 64;
         c.fillRect(P, y, faceSize, faceSize, '#111122');
         L2_Theme.strokeRoundRect(c, P, y, faceSize, faceSize, 2, L2_Theme.borderDark);
-        if (this._faceBmp && this._faceBmp.isReady() && s.face_name) {
-            var fi = s.face_index || 0;
+        if (this._faceBmp && this._faceBmp.isReady() && (s.face_name || s.walk_name)) {
+            var fi = s.face_index != null ? s.face_index : (s.walk_index || 0);
             var sx = (fi % 4) * 144, sy = Math.floor(fi / 4) * 144;
             c.blt(this._faceBmp, sx, sy, 144, 144, P + 2, y + 2, faceSize - 4, faceSize - 4);
         }
@@ -148,7 +149,7 @@
         y += faceSize + 10;
         c.fillRect(P, y, cw, 1, L2_Theme.borderDark); y += 6;
 
-        // Combat stats section
+        // Combat stats section (RMMV: atk/def/mat/mdf/agi/luk)
         c.fontSize = 11; c.textColor = L2_Theme.textGold;
         c.drawText('战斗数值', P, y, cw, 14, 'left'); y += 18;
         var halfW = Math.floor(cw / 2);
@@ -157,24 +158,17 @@
             c.textColor = L2_Theme.textWhite; c.drawText(String(val), sx + 64, sy, halfW - 72, 14, 'right');
         };
         c.fontSize = 11;
-        _sl('攻击力', s.attack || 0, P, y);       _sl('魔法攻击', s.magic_attack || 0, P + halfW, y); y += 16;
-        _sl('防御力', s.defense || 0, P, y);       _sl('魔法防御', s.magic_defense || 0, P + halfW, y); y += 16;
-        _sl('命中率', s.accuracy || 0, P, y);      _sl('回避率', s.evasion || 0, P + halfW, y); y += 16;
-        _sl('攻击速度', s.attack_speed || 0, P, y); _sl('移动速度', s.speed || 0, P + halfW, y); y += 20;
+        _sl('攻击力', s.atk || 0, P, y);       _sl('魔法攻击', s.mat || 0, P + halfW, y); y += 16;
+        _sl('防御力', s.def || 0, P, y);       _sl('魔法防御', s.mdf || 0, P + halfW, y); y += 16;
+        _sl('敏捷', s.agi || 0, P, y);         _sl('幸运', s.luk || 0, P + halfW, y); y += 16;
 
         c.fillRect(P, y, cw, 1, L2_Theme.borderDark); y += 6;
 
-        // Base stats section
+        // Gold
         c.fontSize = 11; c.textColor = L2_Theme.textGold;
-        c.drawText('基本能力', P, y, cw, 14, 'left'); y += 18;
-        var thirdW = Math.floor(cw / 3);
-        var _bs = function (lbl, val, sx, sy) {
-            c.textColor = L2_Theme.textGray; c.drawText(lbl, sx, sy, 28, 14, 'left');
-            c.textColor = L2_Theme.textWhite; c.drawText(String(val), sx + 28, sy, thirdW - 36, 14, 'right');
-        };
-        c.fontSize = 11;
-        _bs('力量', s.str || 0, P, y);            _bs('敏捷', s.dex || 0, P + thirdW, y);        _bs('体质', s.con || 0, P + thirdW * 2, y); y += 16;
-        _bs('智力', s.intelligence || 0, P, y);   _bs('智慧', s.wis || 0, P + thirdW, y);        _bs('精神', s.spirit || 0, P + thirdW * 2, y);
+        c.drawText('金币', P, y, 40, 14, 'left');
+        c.textColor = L2_Theme.textWhite;
+        c.drawText(String(s.gold || 0), P + 40, y, cw - 40, 14, 'left');
     };
 
     // =================================================================
@@ -232,64 +226,244 @@
     };
 
     // =================================================================
-    //  ActionBar — bottom-right button strip for opening windows.
-    //  Positioned above the skill bar to avoid overlap.
+    //  SkillWindow — shows character's skills in a list view.
+    // =================================================================
+    var SK_ITEM_H = 36, SK_ICON_COLS = 16, SK_PAD = 6;
+    var SK_W = 220, SK_MAX_VIS = 6;
+
+    function SkillWindow() {
+        var h = GW_TITLE_H + SK_MAX_VIS * SK_ITEM_H + SK_PAD * 2;
+        GameWindow.prototype.initialize.call(this, {
+            key: 'skills', title: '技能', width: SK_W, height: h
+        });
+        this._skills = [];
+        this._hoverIdx = -1;
+        this._scrollY = 0;
+        this._iconSet = null;
+        var self = this;
+        ImageManager.loadSystem('IconSet').addLoadListener(function (bmp) {
+            self._iconSet = bmp;
+            if (self.visible) self.refresh();
+        });
+    }
+    SkillWindow.prototype = Object.create(GameWindow.prototype);
+    SkillWindow.prototype.constructor = SkillWindow;
+
+    SkillWindow.prototype.onOpen = function () {
+        this._skills = ($MMO._skillBar || []).filter(function (s) { return s; });
+        this._scrollY = 0;
+        this._hoverIdx = -1;
+        this.refresh();
+    };
+
+    SkillWindow.prototype.drawContent = function (c, w, h) {
+        var topY = this.contentTop() + SK_PAD;
+        var listH = h - topY - SK_PAD;
+        var skills = this._skills;
+        var self = this;
+
+        var startIdx = Math.floor(this._scrollY / SK_ITEM_H);
+        var visCount = Math.ceil(listH / SK_ITEM_H) + 1;
+
+        for (var i = startIdx; i < Math.min(startIdx + visCount, skills.length); i++) {
+            var iy = topY + (i * SK_ITEM_H - this._scrollY);
+            if (iy + SK_ITEM_H < topY || iy > h - SK_PAD) continue;
+
+            var sk = skills[i];
+            var isHover = (i === self._hoverIdx);
+
+            // Row background
+            if (isHover) c.fillRect(SK_PAD, iy, w - SK_PAD * 2, SK_ITEM_H - 2, L2_Theme.highlight);
+
+            // Icon
+            if (self._iconSet && sk.icon_index) {
+                var sx = (sk.icon_index % SK_ICON_COLS) * 32;
+                var sy = Math.floor(sk.icon_index / SK_ICON_COLS) * 32;
+                c.blt(self._iconSet, sx, sy, 32, 32, SK_PAD + 2, iy + 2, 28, 28);
+            }
+
+            // Skill name
+            c.fontSize = 12;
+            c.textColor = L2_Theme.textWhite;
+            c.drawText(sk.name || 'Skill', SK_PAD + 34, iy, w - SK_PAD * 2 - 34, 18, 'left');
+
+            // MP cost + CD
+            c.fontSize = 10;
+            c.textColor = L2_Theme.textGray;
+            var info = 'MP: ' + (sk.mp_cost || 0);
+            if (sk.cd_ms > 0) info += '  CD: ' + (sk.cd_ms / 1000) + 's';
+            c.drawText(info, SK_PAD + 34, iy + 16, w - SK_PAD * 2 - 34, 14, 'left');
+
+            // Hotkey label (F-key)
+            var barIdx = $MMO._skillBar.indexOf(sk);
+            if (barIdx >= 0) {
+                c.fontSize = 9;
+                c.textColor = L2_Theme.textGold;
+                c.drawText('F' + (barIdx + 1), w - SK_PAD - 26, iy + 4, 22, 12, 'right');
+            }
+
+            // Row separator
+            c.fillRect(SK_PAD, iy + SK_ITEM_H - 2, w - SK_PAD * 2, 1, L2_Theme.borderDark);
+        }
+
+        // Empty state
+        if (skills.length === 0) {
+            c.fontSize = 12;
+            c.textColor = L2_Theme.textGray;
+            c.drawText('暂无技能', 0, topY + 20, w, 18, 'center');
+        }
+
+        // Scrollbar
+        var totalH = skills.length * SK_ITEM_H;
+        if (totalH > listH) {
+            var sbW = 4;
+            var thumbH = Math.max(12, Math.round(listH * (listH / totalH)));
+            var maxScroll = totalH - listH;
+            var thumbY = topY + Math.round((listH - thumbH) * (maxScroll > 0 ? this._scrollY / maxScroll : 0));
+            c.fillRect(w - sbW, topY, sbW, listH, 'rgba(0,0,0,0.2)');
+            L2_Theme.fillRoundRect(c, w - sbW, thumbY, sbW, thumbH, 2, '#444466');
+        }
+    };
+
+    SkillWindow.prototype.updateContent = function () {
+        var mx = TouchInput.x - this.x, my = TouchInput.y - this.y;
+        var topY = this.contentTop() + SK_PAD;
+        var h = this.ch();
+        var listH = h - topY - SK_PAD;
+
+        // Hover
+        var oldHover = this._hoverIdx;
+        this._hoverIdx = -1;
+        if (mx >= SK_PAD && mx < this.cw() - SK_PAD && my >= topY && my < topY + listH) {
+            var idx = Math.floor((my - topY + this._scrollY) / SK_ITEM_H);
+            if (idx >= 0 && idx < this._skills.length) this._hoverIdx = idx;
+        }
+        if (this._hoverIdx !== oldHover) this.refresh();
+
+        // Scroll
+        if (this.isInside(TouchInput.x, TouchInput.y) && TouchInput.wheelY) {
+            var totalH = this._skills.length * SK_ITEM_H;
+            var maxScroll = Math.max(0, totalH - listH);
+            this._scrollY += TouchInput.wheelY > 0 ? SK_ITEM_H * 2 : -SK_ITEM_H * 2;
+            this._scrollY = Math.max(0, Math.min(this._scrollY, maxScroll));
+            this.refresh();
+        }
+    };
+
+    window.SkillWindow = SkillWindow;
+
+    // =================================================================
+    //  ActionBar — L2-style bottom-right icon button grid (2 rows x 3 cols).
+    //  Shows icon + label per button, tooltip with hotkey on hover.
     // =================================================================
     var AB_BTNS = [
-        { label: '状态', action: 'status' },
-        { label: '背包', action: 'inventory' },
-        { label: '好友', action: 'friends' },
-        { label: '公会', action: 'guild' },
-        { label: '系统', action: 'system' }
+        { label: '角色', action: 'status',    icon: 84,  hotkey: 'Alt+T' },
+        { label: '背包', action: 'inventory', icon: 176, hotkey: 'Alt+I' },
+        { label: '技能', action: 'skills',    icon: 79,  hotkey: 'Alt+S' },
+        { label: '好友', action: 'friends',   icon: 75,  hotkey: 'Alt+F' },
+        { label: '公会', action: 'guild',     icon: 83,  hotkey: 'Alt+G' },
+        { label: '系统', action: 'system',    icon: 236, hotkey: 'ESC' }
     ];
-    var AB_BTN_W = 48, AB_BTN_H = 26, AB_GAP = 3, AB_PAD = 5;
+    var AB_COLS = 3, AB_ROWS = 2;
+    var AB_BTN_SIZE = 38, AB_GAP = 2, AB_PAD = 4;
+    var AB_TOOLTIP_H = 18;
+    var AB_ICON_COLS = 16;
 
     function ActionBar() { this.initialize.apply(this, arguments); }
     ActionBar.prototype = Object.create(L2_Base.prototype);
     ActionBar.prototype.constructor = ActionBar;
 
     ActionBar.prototype.initialize = function () {
-        var totalW = AB_BTNS.length * (AB_BTN_W + AB_GAP) - AB_GAP + AB_PAD * 2;
-        var totalH = AB_BTN_H + AB_PAD * 2;
-        var x = Graphics.boxWidth - totalW - 6;
-        // Place above the skill bar (skill bar is ~46px from bottom)
-        var y = Graphics.boxHeight - totalH - 50;
+        var totalW = AB_COLS * (AB_BTN_SIZE + AB_GAP) - AB_GAP + AB_PAD * 2;
+        var totalH = AB_TOOLTIP_H + AB_ROWS * (AB_BTN_SIZE + AB_GAP) - AB_GAP + AB_PAD * 2;
+        var x = Graphics.boxWidth - totalW - 4;
+        var y = Graphics.boxHeight - totalH - 4;
         L2_Base.prototype.initialize.call(this, x, y, totalW, totalH);
         this._hoverIdx = -1;
+        this._iconSet = null;
+        var self = this;
+        ImageManager.loadSystem('IconSet').addLoadListener(function (bmp) {
+            self._iconSet = bmp;
+            self.refresh();
+        });
         $MMO.makeDraggable(this, 'actionBar');
         this.refresh();
     };
     ActionBar.prototype.standardPadding = function () { return 0; };
 
+    // Only block clicks on the actual button panel, not the transparent tooltip area above.
+    ActionBar.prototype.isInside = function (mx, my) {
+        var panelTop = this.y + AB_TOOLTIP_H;
+        return mx >= this.x && mx <= this.x + this.width &&
+               my >= panelTop && my <= this.y + this.height;
+    };
+
     ActionBar.prototype.refresh = function () {
         var c = this.bmp(); c.clear();
         var w = this.cw(), h = this.ch();
-        // Solid dark background for visibility
-        L2_Theme.fillRoundRect(c, 0, 0, w, h, 4, 'rgba(10,10,24,0.88)');
-        L2_Theme.strokeRoundRect(c, 0, 0, w, h, 4, L2_Theme.borderDark);
+        var btnY = AB_TOOLTIP_H + AB_PAD;
+
+        // Panel background
+        L2_Theme.fillRoundRect(c, 0, AB_TOOLTIP_H, w, h - AB_TOOLTIP_H, 4, 'rgba(10,10,24,0.88)');
+        L2_Theme.strokeRoundRect(c, 0, AB_TOOLTIP_H, w, h - AB_TOOLTIP_H, 4, L2_Theme.borderDark);
+
         var self = this;
         AB_BTNS.forEach(function (btn, i) {
-            var bx = AB_PAD + i * (AB_BTN_W + AB_GAP), by = AB_PAD;
-            // Button background — always visible fill
-            var btnBg = i === self._hoverIdx ? 'rgba(60,60,120,0.90)' : 'rgba(30,30,60,0.80)';
-            L2_Theme.fillRoundRect(c, bx, by, AB_BTN_W, AB_BTN_H, 3, btnBg);
-            L2_Theme.strokeRoundRect(c, bx, by, AB_BTN_W, AB_BTN_H, 3,
-                i === self._hoverIdx ? L2_Theme.textGold : L2_Theme.borderDark);
-            c.fontSize = 12;
-            c.textColor = i === self._hoverIdx ? L2_Theme.textGold : L2_Theme.textWhite;
-            c.drawText(btn.label, bx, by, AB_BTN_W, AB_BTN_H, 'center');
+            var col = i % AB_COLS;
+            var row = Math.floor(i / AB_COLS);
+            var bx = AB_PAD + col * (AB_BTN_SIZE + AB_GAP);
+            var by = btnY + row * (AB_BTN_SIZE + AB_GAP);
+            var isHover = (i === self._hoverIdx);
+
+            // Button background
+            var bg = isHover ? 'rgba(60,60,120,0.92)' : 'rgba(25,25,50,0.80)';
+            L2_Theme.fillRoundRect(c, bx, by, AB_BTN_SIZE, AB_BTN_SIZE, 3, bg);
+            L2_Theme.strokeRoundRect(c, bx, by, AB_BTN_SIZE, AB_BTN_SIZE, 3,
+                isHover ? L2_Theme.textGold : L2_Theme.borderDark);
+
+            // Icon from IconSet (centered, 24x24 scaled from 32x32)
+            if (self._iconSet) {
+                var iconIdx = btn.icon || 0;
+                var sx = (iconIdx % AB_ICON_COLS) * 32;
+                var sy = Math.floor(iconIdx / AB_ICON_COLS) * 32;
+                c.blt(self._iconSet, sx, sy, 32, 32, bx + 7, by + 2, 24, 24);
+            }
+
+            // Text label below icon
+            c.fontSize = 9;
+            c.textColor = isHover ? L2_Theme.textGold : L2_Theme.textGray;
+            c.drawText(btn.label, bx, by + 25, AB_BTN_SIZE, 12, 'center');
         });
+
+        // Tooltip (drawn above the button panel when hovered)
+        if (self._hoverIdx >= 0) {
+            var hBtn = AB_BTNS[self._hoverIdx];
+            var tip = hBtn.label + ' (' + hBtn.hotkey + ')';
+            L2_Theme.fillRoundRect(c, 0, 0, w, AB_TOOLTIP_H, 3, 'rgba(10,10,24,0.95)');
+            L2_Theme.strokeRoundRect(c, 0, 0, w, AB_TOOLTIP_H, 3, L2_Theme.borderDark);
+            c.fontSize = 11;
+            c.textColor = L2_Theme.textGold;
+            c.drawText(tip, 4, 0, w - 8, AB_TOOLTIP_H, 'center');
+        }
     };
 
     ActionBar.prototype.update = function () {
         L2_Base.prototype.update.call(this);
         if ($MMO.updateDrag(this)) return;
-        var mx = TouchInput.x - this.x - AB_PAD, my = TouchInput.y - this.y - AB_PAD;
+        var mx = TouchInput.x - this.x;
+        var my = TouchInput.y - this.y;
+        var btnY = AB_TOOLTIP_H + AB_PAD;
         var oldHover = this._hoverIdx;
-        if (mx >= 0 && my >= 0 && my < AB_BTN_H) {
-            var idx = Math.floor(mx / (AB_BTN_W + AB_GAP));
-            var localX = mx - idx * (AB_BTN_W + AB_GAP);
-            this._hoverIdx = (idx >= 0 && idx < AB_BTNS.length && localX < AB_BTN_W) ? idx : -1;
+
+        var gridH = AB_ROWS * (AB_BTN_SIZE + AB_GAP) - AB_GAP;
+        if (mx >= AB_PAD && my >= btnY && my < btnY + gridH) {
+            var col = Math.floor((mx - AB_PAD) / (AB_BTN_SIZE + AB_GAP));
+            var row = Math.floor((my - btnY) / (AB_BTN_SIZE + AB_GAP));
+            var inBtnX = (mx - AB_PAD) - col * (AB_BTN_SIZE + AB_GAP);
+            var inBtnY = (my - btnY) - row * (AB_BTN_SIZE + AB_GAP);
+            var idx = row * AB_COLS + col;
+            this._hoverIdx = (col >= 0 && col < AB_COLS && row >= 0 && row < AB_ROWS &&
+                              idx < AB_BTNS.length && inBtnX < AB_BTN_SIZE && inBtnY < AB_BTN_SIZE) ? idx : -1;
         } else {
             this._hoverIdx = -1;
         }
@@ -297,28 +471,6 @@
         if (TouchInput.isTriggered() && this._hoverIdx >= 0) {
             $MMO._triggerAction(AB_BTNS[this._hoverIdx].action);
         }
-    };
-
-    // -----------------------------------------------------------------
-    // Prevent map-touch (character movement) when clicking on UI panels.
-    // Uses both _isMMOUI flag and instanceof L2_Base for maximum safety.
-    // This is a backup layer — mmo-core.js also has this check.
-    // -----------------------------------------------------------------
-    var _Scene_Map_processMapTouch = Scene_Map.prototype.processMapTouch;
-    Scene_Map.prototype.processMapTouch = function () {
-        if (TouchInput.isTriggered() || TouchInput.isPressed()) {
-            var tx = TouchInput.x, ty = TouchInput.y;
-            var children = this.children;
-            for (var i = children.length - 1; i >= 0; i--) {
-                var child = children[i];
-                if (child && child.visible &&
-                    (child._isMMOUI || child instanceof L2_Base) &&
-                    typeof child.isInside === 'function' && child.isInside(tx, ty)) {
-                    return; // click is on UI — skip movement
-                }
-            }
-        }
-        _Scene_Map_processMapTouch.call(this);
     };
 
     // -----------------------------------------------------------------
@@ -331,6 +483,10 @@
         $MMO._statusWindow = new StatusWindow();
         this.addChild($MMO._statusWindow);
         $MMO.registerWindow($MMO._statusWindow);
+        // Skill window
+        $MMO._skillWindow = new SkillWindow();
+        this.addChild($MMO._skillWindow);
+        $MMO.registerWindow($MMO._skillWindow);
         // System menu
         $MMO._systemMenu = new SystemMenu();
         this.addChild($MMO._systemMenu);

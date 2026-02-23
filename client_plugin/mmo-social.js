@@ -299,14 +299,18 @@
             var win = $MMO._friendListWin;
             if (!win) return;
             win.visible = !win.visible;
-            if (win.visible) win.loadFriends();
+            if (win.visible) {
+                win.refresh();
+                win.loadFriends();
+            }
         }
         if (e.altKey && e.keyCode === 71) { // Alt+G
             e.preventDefault();
             var gwin = $MMO._guildInfoWin;
             if (!gwin) return;
             gwin.visible = !gwin.visible;
-            if (gwin.visible && $MMO.charID) {
+            if (gwin.visible) {
+                gwin.refresh();
                 if ($MMO._guildID) gwin.loadGuild($MMO._guildID);
             }
         }
@@ -316,16 +320,25 @@
     // WebSocket handlers
     // -----------------------------------------------------------------
     $MMO.on('friend_request', function (data) {
-        L2_Notification.show({
+        var dlg = new L2_Dialog({
             title: '好友请求',
             content: (data.from_name || '?') + ' 想加你为好友',
-            type: 'info',
-            duration: 20 * 60, // 20s in frames
             closable: true,
-            onClose: function () {
-                $MMO.http.post('/api/social/friends/accept/' + data.from_id, {});
-            }
+            buttons: [
+                {
+                    text: '接受', type: 'primary',
+                    onClick: function () {
+                        $MMO.http.post('/api/social/friends/accept/' + data.from_id, {});
+                        dlg.close();
+                    }
+                },
+                {
+                    text: '拒绝', type: 'danger',
+                    onClick: function () { dlg.close(); }
+                }
+            ]
         });
+        if (SceneManager._scene) SceneManager._scene.addChild(dlg);
     });
 
     $MMO.on('friend_online', function (data) {

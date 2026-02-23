@@ -13,7 +13,7 @@
     var PAD = 4;
 
     $MMO._skillBar = Array(SLOT_COUNT).fill(null);  // [{skill_id, icon_index, name, mp_cost, cd_ms}]
-    $MMO._skillCDs = {};   // skill_id → readyAt (ms timestamp)
+    $MMO._skillCDs = {};   // skill_id → readyAt (performance.now() based)
     $MMO._playerMP = 0;
     $MMO._playerMaxMP = 1;
 
@@ -102,7 +102,7 @@
     SkillBar.prototype._getCDRemain = function (skillID) {
         var readyAt = $MMO._skillCDs[skillID];
         if (!readyAt) return 0;
-        return Math.max(0, readyAt - Date.now());
+        return Math.max(0, readyAt - performance.now());
     };
 
     SkillBar.prototype.update = function () {
@@ -124,9 +124,9 @@
 
         // MP check
         if ($MMO._playerMP < skill.mp_cost) return;
-        // CD check
+        // CD check (monotonic timer, not bypassable via system clock)
         var readyAt = $MMO._skillCDs[skill.skill_id];
-        if (readyAt && Date.now() < readyAt) return;
+        if (readyAt && performance.now() < readyAt) return;
         $MMO.send('player_skill', { skill_id: skill.skill_id });
     });
 
@@ -164,7 +164,9 @@
     $MMO.on('skill_effect', function (data) {
         if (data.char_id !== $MMO.charID) return;
         if (data.skill_id && data.cd_ready_at) {
-            $MMO._skillCDs[data.skill_id] = data.cd_ready_at;
+            // Convert server timestamp to monotonic performance.now() based value
+            // so users can't bypass cooldown by changing system clock
+            $MMO._skillCDs[data.skill_id] = performance.now() + (data.cd_ready_at - Date.now());
         }
     });
 

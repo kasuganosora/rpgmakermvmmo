@@ -208,6 +208,7 @@
         },
 
         updatePositions: function () {
+            if (!$gameMap) return;
             var self = this;
             var tileW = $gameMap.tileWidth();
             var tileH = $gameMap.tileHeight();
@@ -256,7 +257,7 @@
             var hit = null;
             Object.keys(MonsterManager._sprites).forEach(function (id) {
                 var sp = MonsterManager._sprites[id];
-                if (Math.abs(sp._tileX - tileX) <= 0 && Math.abs(sp._tileY - tileY) <= 0) hit = parseInt(id);
+                if (sp._tileX === tileX && sp._tileY === tileY) hit = parseInt(id);
             });
             if (hit !== null) {
                 $MMO.send('attack', { target_id: hit, target_type: 'monster' });
@@ -265,7 +266,7 @@
             var dropHit = null;
             Object.keys(MonsterManager._drops).forEach(function (id) {
                 var sp = MonsterManager._drops[id];
-                if (Math.abs(sp._data.x - tileX) <= 0 && Math.abs(sp._data.y - tileY) <= 0) dropHit = parseInt(id);
+                if (sp._data.x === tileX && sp._data.y === tileY) dropHit = parseInt(id);
             });
             if (dropHit !== null) {
                 $MMO.send('pickup_item', { drop_id: dropHit });

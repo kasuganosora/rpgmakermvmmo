@@ -25,7 +25,7 @@
     var LOG_H = CHAT_H - TAB_H - INPUT_H - PAD;
     var LINE_H = 15;
 
-    $MMO._chatHistory = { world: [], party: [], guild: [], battle: [], system: [], private: {} };
+    $MMO._chatHistory = { world: [], party: [], guild: [], battle: [], system: [], private: [] };
     $MMO._chatChannel = 'world';
     $MMO._chatUnread = {};
     CHANNELS.forEach(function (ch) { $MMO._chatUnread[ch] = 0; });
@@ -172,7 +172,7 @@
 
     ChatBox.prototype._drawLog = function (c, w) {
         var ch = $MMO._chatChannel;
-        var hist = ch === 'private' ? [] : ($MMO._chatHistory[ch] || []);
+        var hist = $MMO._chatHistory[ch] || [];
         var logY = TAB_H + 1;
         var logBottom = CHAT_H - INPUT_H;
         var logH = logBottom - logY;
@@ -204,7 +204,7 @@
             var sbW = 4;
             var trackH = logH - 4;
             var thumbH = Math.max(12, Math.round(trackH * (logH / totalH)));
-            var thumbY = logY + 2 + Math.round((trackH - thumbH) * (this._scrollY / maxScroll));
+            var thumbY = logY + 2 + Math.round((trackH - thumbH) * (maxScroll > 0 ? this._scrollY / maxScroll : 0));
             c.fillRect(w - sbW, logY, sbW, logH, 'rgba(0,0,0,0.2)');
             L2_Theme.fillRoundRect(c, w - sbW, thumbY, sbW, thumbH, 2, '#444466');
         }
@@ -212,7 +212,7 @@
 
     ChatBox.prototype.scrollLog = function (delta) {
         var ch = $MMO._chatChannel;
-        var hist = ch === 'private' ? [] : ($MMO._chatHistory[ch] || []);
+        var hist = $MMO._chatHistory[ch] || [];
         var logH = CHAT_H - TAB_H - INPUT_H - 1;
         var totalH = hist.length * LINE_H;
         var maxScroll = Math.max(0, totalH - logH);
@@ -299,7 +299,13 @@
             if (cmd === '/all' || cmd === '/world') { channel = 'world'; text = parts.slice(1).join(' '); }
             else if (cmd === '/party' || cmd === '/p') { channel = 'party'; text = parts.slice(1).join(' '); }
             else if (cmd === '/guild' || cmd === '/g') { channel = 'guild'; text = parts.slice(1).join(' '); }
-            else if (cmd === '/pm' || cmd === '/w') { channel = 'private'; targetID = parts[1] || ''; text = parts.slice(2).join(' '); }
+            else if (cmd === '/pm' || cmd === '/w') {
+                if (parts.length < 3) {
+                    addMessage({ channel: 'system', sender: 'SYSTEM', text: 'Usage: /w <player> <message>' });
+                    return;
+                }
+                channel = 'private'; targetID = parts[1]; text = parts.slice(2).join(' ');
+            }
         }
         if (!text) return;
         $MMO.send('chat_send', { channel: channel, content: text, target_name: targetID || undefined });
@@ -327,13 +333,14 @@
     };
 
     // Enter key focuses chat input
-    window.addEventListener('keydown', function (e) {
+    var _chatKeydownHandler = function (e) {
         if (_chatBox && _chatBox._inputFocused) return;
         if (e.keyCode === 13) { // Enter
             if (_chatBox && _chatBox._inputEl) _chatBox._inputEl.focus();
             e.preventDefault();
         }
-    });
+    };
+    window.addEventListener('keydown', _chatKeydownHandler);
 
     // -----------------------------------------------------------------
     // Inject into Scene_Map
@@ -359,6 +366,7 @@
             _chatBox.destroy();
             _chatBox = null;
         }
+        window.removeEventListener('keydown', _chatKeydownHandler);
     };
 
     // -----------------------------------------------------------------

@@ -32,6 +32,9 @@ type PlayerSession struct {
 	CharName  string
 	WalkName  string
 	WalkIndex int
+	FaceName  string
+	FaceIndex int
+	ClassID   int
 
 	Conn     *websocket.Conn
 	MapID    int

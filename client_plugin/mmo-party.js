@@ -176,10 +176,21 @@
         showInviteDialog(data);
     });
 
+    var _Scene_Map_terminate_party = Scene_Map.prototype.terminate;
+    Scene_Map.prototype.terminate = function () {
+        _Scene_Map_terminate_party.call(this);
+        if (_inviteTimer) { clearInterval(_inviteTimer); _inviteTimer = null; }
+        _inviteDialog = null;
+    };
+
     $MMO.on('_disconnected', function () {
         $MMO._partyData = null;
         if ($MMO._partyPanel) $MMO._partyPanel.visible = false;
-        if (_inviteDialog) _inviteDialog.respond(false);
+        // Clean up invite dialog without sending (WS already closed)
+        if (_inviteDialog) {
+            if (_inviteTimer) { clearInterval(_inviteTimer); _inviteTimer = null; }
+            _inviteDialog = null;
+        }
     });
 
     window.PartyPanel = PartyPanel;
