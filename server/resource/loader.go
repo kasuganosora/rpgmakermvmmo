@@ -232,6 +232,14 @@ type MapEvent struct {
 	OriginalPages []*EventPage `json:"-"`
 }
 
+// AudioFile mirrors RMMV's audio descriptor (bgm/bgs/me/se).
+type AudioFile struct {
+	Name   string `json:"name"`
+	Pan    int    `json:"pan"`
+	Pitch  int    `json:"pitch"`
+	Volume int    `json:"volume"`
+}
+
 // MapData represents an RMMV Map*.json file.
 type MapData struct {
 	ID          int         `json:"id"` // set after load from filename
@@ -241,6 +249,10 @@ type MapData struct {
 	Data        []int       `json:"data"` // tileId array: [layer * height * width + y * width + x]
 	TilesetID   int         `json:"tilesetId"`
 	Events      []*MapEvent `json:"events"` // nil entries are possible (RMMV uses 1-based IDs)
+	AutoplayBgm bool        `json:"autoplayBgm"`
+	Bgm         *AudioFile  `json:"bgm"`
+	AutoplayBgs bool        `json:"autoplayBgs"`
+	Bgs         *AudioFile  `json:"bgs"`
 }
 
 // TransferTarget holds the destination of a map transfer event.

@@ -5,29 +5,38 @@ import (
 
 	"github.com/kasuganosora/rpgmakermvmmo/server/resource"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 // WorldManager manages all active MapRoom instances.
 type WorldManager struct {
-	mu     sync.RWMutex
-	rooms  map[int]*MapRoom
-	res    *resource.ResourceLoader
-	state  *GameState
-	logger *zap.Logger
+	mu        sync.RWMutex
+	rooms     map[int]*MapRoom
+	res       *resource.ResourceLoader
+	state     *GameState
+	psm       *PlayerStateManager
+	whitelist *GlobalWhitelist
+	logger    *zap.Logger
 }
 
 // NewWorldManager creates a new WorldManager.
-func NewWorldManager(res *resource.ResourceLoader, state *GameState, logger *zap.Logger) *WorldManager {
+func NewWorldManager(res *resource.ResourceLoader, state *GameState, wl *GlobalWhitelist, db *gorm.DB, logger *zap.Logger) *WorldManager {
+	psm := NewPlayerStateManager(state, wl, db)
 	return &WorldManager{
-		rooms:  make(map[int]*MapRoom),
-		res:    res,
-		state:  state,
-		logger: logger,
+		rooms:     make(map[int]*MapRoom),
+		res:       res,
+		state:     state,
+		psm:       psm,
+		whitelist: wl,
+		logger:    logger,
 	}
 }
 
 // GameState returns the global game state.
 func (wm *WorldManager) GameState() *GameState { return wm.state }
+
+// PlayerStateManager returns the per-player state manager.
+func (wm *WorldManager) PlayerStateManager() *PlayerStateManager { return wm.psm }
 
 // GetOrCreate returns the MapRoom for mapID, creating and starting it if needed.
 func (wm *WorldManager) GetOrCreate(mapID int) *MapRoom {

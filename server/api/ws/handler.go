@@ -169,6 +169,11 @@ func (h *Handler) handleDisconnect(s *player.PlayerSession) {
 		h.tradeSvc.Cancel(s)
 	}
 
+	// Unload per-player game state cache.
+	if s.CharID != 0 {
+		h.wm.PlayerStateManager().Unload(s.CharID)
+	}
+
 	h.sm.Unregister(s.CharID)
 	h.logger.Info("player disconnected",
 		zap.Int64("account_id", s.AccountID),

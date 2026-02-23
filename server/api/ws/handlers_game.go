@@ -242,7 +242,8 @@ func (gh *GameHandlers) HandleMove(_ context.Context, s *player.PlayerSession, r
 	// Since the client no longer processes events (_events = []), the server
 	// must detect and execute map transfers.
 	if room != nil {
-		if td := room.GetTransferAt(req.X, req.Y); td != nil && td.MapID > 0 {
+		td := gh.getTransferForPlayer(s, room, req.X, req.Y)
+		if td != nil && td.MapID > 0 {
 			// Use exact coordinates from the map maker — do NOT adjust with
 			// findNearestPassable. The BFS ring search ignores walls and can
 			// place the player on the wrong side of a wall.
@@ -494,6 +495,20 @@ func (gh *GameHandlers) EnterMapRoom(s *player.PlayerSession, mapID, x, y, dir i
 		skillList = []map[string]interface{}{}
 	}
 
+	// Build map audio data from resource loader.
+	var mapAudio map[string]interface{}
+	if gh.res != nil {
+		if md, ok := gh.res.Maps[mapID]; ok {
+			mapAudio = map[string]interface{}{}
+			if md.AutoplayBgm && md.Bgm != nil && md.Bgm.Name != "" {
+				mapAudio["bgm"] = md.Bgm
+			}
+			if md.AutoplayBgs && md.Bgs != nil && md.Bgs.Name != "" {
+				mapAudio["bgs"] = md.Bgs
+			}
+		}
+	}
+
 	initPayload, _ := json.Marshal(map[string]interface{}{
 		"self": map[string]interface{}{
 			"char_id":    s.CharID,
@@ -524,10 +539,11 @@ func (gh *GameHandlers) EnterMapRoom(s *player.PlayerSession, mapID, x, y, dir i
 		},
 		"skills":      skillList,
 		"players":     room.PlayerSnapshot(),
-		"npcs":        room.NPCSnapshot(),
+		"npcs":        gh.npcSnapshotForPlayer(s, room),
 		"monsters":    []interface{}{},
 		"drops":       []interface{}{},
 		"passability": room.PassabilitySnapshot(),
+		"audio":       mapAudio,
 	})
 	s.Send(&player.Packet{Type: "map_init", Payload: initPayload})
 
@@ -562,7 +578,18 @@ func (gh *GameHandlers) EnterMapRoom(s *player.PlayerSession, mapID, x, y, dir i
 
 	// Execute autorun events (trigger=3) for this player on the new map.
 	if gh.autorunFn != nil {
-		go gh.autorunFn(s, mapID)
+		autorunFn := gh.autorunFn
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					gh.logger.Error("autorun panic recovered",
+						zap.Int64("char_id", s.CharID),
+						zap.Int("map_id", mapID),
+						zap.Any("panic", r))
+				}
+			}()
+			autorunFn(s, mapID)
+		}()
 	}
 }
 
@@ -636,4 +663,25 @@ func sendMoveReject(s *player.PlayerSession) {
 		"dir": dir,
 	})
 	s.Send(&player.Packet{Type: "move_reject", Payload: payload})
+}
+
+// npcSnapshotForPlayer returns NPC snapshots using the player's per-player state.
+// Falls back to the global snapshot on error.
+func (gh *GameHandlers) npcSnapshotForPlayer(s *player.PlayerSession, room *world.MapRoom) []map[string]interface{} {
+	composite, err := gh.wm.PlayerStateManager().GetComposite(s.CharID)
+	if err != nil {
+		gh.logger.Error("failed to get player state for npc snapshot", zap.Error(err))
+		return room.NPCSnapshot()
+	}
+	return room.NPCSnapshotForPlayer(composite)
+}
+
+// getTransferForPlayer checks transfer events using the player's per-player state.
+// Falls back to the global check on error.
+func (gh *GameHandlers) getTransferForPlayer(s *player.PlayerSession, room *world.MapRoom, x, y int) *world.TransferData {
+	composite, err := gh.wm.PlayerStateManager().GetComposite(s.CharID)
+	if err != nil {
+		return room.GetTransferAt(x, y)
+	}
+	return room.GetTransferAtForPlayer(x, y, composite)
 }

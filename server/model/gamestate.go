@@ -25,3 +25,34 @@ type GameSelfSwitch struct {
 }
 
 func (GameSelfSwitch) TableName() string { return "game_self_switches" }
+
+// ---- Per-character state (keyed by CharID) ----
+
+// CharSwitch stores a per-character RMMV switch state.
+type CharSwitch struct {
+	CharID   int64 `gorm:"primaryKey" json:"char_id"`
+	SwitchID int   `gorm:"primaryKey" json:"switch_id"`
+	Value    bool  `json:"value"`
+}
+
+func (CharSwitch) TableName() string { return "char_switches" }
+
+// CharVariable stores a per-character RMMV variable state.
+type CharVariable struct {
+	CharID     int64 `gorm:"primaryKey" json:"char_id"`
+	VariableID int   `gorm:"primaryKey" json:"variable_id"`
+	Value      int   `json:"value"`
+}
+
+func (CharVariable) TableName() string { return "char_variables" }
+
+// CharSelfSwitch stores a per-character self-switch state.
+type CharSelfSwitch struct {
+	CharID  int64  `gorm:"primaryKey" json:"char_id"`
+	MapID   int    `gorm:"primaryKey" json:"map_id"`
+	EventID int    `gorm:"primaryKey" json:"event_id"`
+	Ch      string `gorm:"primaryKey;size:1" json:"ch"`
+	Value   bool   `json:"value"`
+}
+
+func (CharSelfSwitch) TableName() string { return "char_self_switches" }

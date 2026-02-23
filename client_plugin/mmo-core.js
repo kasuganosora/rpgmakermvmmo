@@ -237,6 +237,14 @@
         // Store for late-loading HUD.
         $MMO._lastSelf = s;
 
+        // Play map BGM/BGS from server data. Supplements RMMV's built-in
+        // $gameMap.autoplay() to ensure correct audio even when client-side
+        // map data loading hasn't completed yet.
+        if (data.audio) {
+            if (data.audio.bgm) AudioManager.playBgm(data.audio.bgm);
+            if (data.audio.bgs) AudioManager.playBgs(data.audio.bgs);
+        }
+
         if ($gamePlayer && $gameMap) {
             // Force player visible — handles $dataSystem.optTransparent = true.
             $gamePlayer.setTransparent(false);
@@ -253,6 +261,17 @@
             // leave the player sprite stale from the previous session.
             $gamePlayer.refresh();
         }
+    });
+
+    // Handle server-initiated map transfer (fallback from NPC executor when
+    // the server-side TransferFn is not available).
+    $MMO.on('transfer_player', function (data) {
+        if (!data || !$gamePlayer) return;
+        var mapId = data.map_id || 1;
+        var x     = data.x != null ? data.x : 0;
+        var y     = data.y != null ? data.y : 0;
+        var dir   = data.dir || 2;
+        $gamePlayer.reserveTransfer(mapId, x, y, dir, 0);
     });
 
     // Override Game_Player.refresh so the walk sprite comes from the MMO

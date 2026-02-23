@@ -205,6 +205,9 @@ func parseOverrideTarget(raw string) overrideTarget {
 
 // applyTemplate replaces the target event's pages with the template event's pages,
 // respecting the OverrideTarget settings per the TemplateEvent.js behavior.
+//
+// OverrideTarget semantics: when a flag is TRUE, the original event's property
+// overrides (replaces) the template's value. When FALSE, the template is used as-is.
 func applyTemplate(target, tmpl *MapEvent, ot overrideTarget) {
 	if len(tmpl.Pages) == 0 {
 		return
@@ -214,14 +217,45 @@ func applyTemplate(target, tmpl *MapEvent, ot overrideTarget) {
 	// which calls back to the source event's commands (e.g., door transfer targets).
 	target.OriginalPages = target.Pages
 
-	// Replace pages entirely — the template provides the command lists.
+	// Replace pages with deep copies from the template.
 	target.Pages = make([]*EventPage, len(tmpl.Pages))
 	for i, tmplPage := range tmpl.Pages {
 		if tmplPage == nil {
 			continue
 		}
-		// Deep copy the template page so mutations don't affect the template.
 		page := copyEventPage(tmplPage)
+
+		// Respect OverrideTarget: when a flag is ON, replace the template's
+		// property with the original event's value.
+		// Only apply if the original event has a page at this index.
+		if i < len(target.OriginalPages) && target.OriginalPages[i] != nil {
+			orig := target.OriginalPages[i]
+			if ot.Trigger {
+				page.Trigger = orig.Trigger
+			}
+			if ot.Priority {
+				page.PriorityType = orig.PriorityType
+			}
+			if ot.Move {
+				page.MoveType = orig.MoveType
+				page.MoveSpeed = orig.MoveSpeed
+				page.MoveFrequency = orig.MoveFrequency
+				page.MoveRoute = orig.MoveRoute
+			}
+			if ot.Image {
+				page.Image = orig.Image
+			}
+			if ot.Direction && !ot.Image {
+				page.Image.Direction = orig.Image.Direction
+			}
+			if ot.Option {
+				page.StepAnime = orig.StepAnime
+				page.DirectionFix = orig.DirectionFix
+				page.Through = orig.Through
+				page.WalkAnime = orig.WalkAnime
+			}
+		}
+
 		target.Pages[i] = page
 	}
 }

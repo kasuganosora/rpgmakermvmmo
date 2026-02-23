@@ -91,7 +91,15 @@ func (h *NPCHandlers) HandleInteract(ctx context.Context, s *player.PlayerSessio
 		return nil
 	}
 
-	activePage := npcInst.ActivePage
+	// Build per-player composite state.
+	composite, err := h.wm.PlayerStateManager().GetComposite(s.CharID)
+	if err != nil {
+		h.logger.Error("failed to get player state", zap.Error(err), zap.Int64("char_id", s.CharID))
+		return nil
+	}
+
+	// Get per-player active page instead of base ActivePage.
+	activePage := room.GetActivePageForPlayer(req.EventID, composite)
 	if activePage == nil {
 		return nil
 	}
@@ -110,10 +118,8 @@ func (h *NPCHandlers) HandleInteract(ctx context.Context, s *player.PlayerSessio
 		return nil
 	}
 
-	// Build execution options with GameState and transfer callback.
-	gs := h.wm.GameState()
 	opts := &npc.ExecuteOpts{
-		GameState:  gs,
+		GameState:  composite,
 		MapID:      s.MapID,
 		EventID:    req.EventID,
 		TransferFn: h.transferFn,
@@ -123,11 +129,8 @@ func (h *NPCHandlers) HandleInteract(ctx context.Context, s *player.PlayerSessio
 	// The executor may block waiting for choice replies.
 	go func() {
 		h.executor.Execute(ctx, s, activePage, opts)
-		// After execution, refresh NPC pages in case state changed.
-		changed := room.RefreshNPCPages()
-		if len(changed) > 0 {
-			h.broadcastPageChanges(room, changed)
-		}
+		// After execution, send per-player page changes (not broadcast).
+		h.sendPageChangesToPlayer(s, room, composite)
 	}()
 
 	return nil
@@ -182,7 +185,14 @@ func (h *NPCHandlers) ExecuteAutoruns(s *player.PlayerSession, mapID int) {
 		return
 	}
 
-	autoruns := room.GetAutorunNPCs()
+	composite, err := h.wm.PlayerStateManager().GetComposite(s.CharID)
+	if err != nil {
+		h.logger.Error("failed to get player state for autoruns", zap.Error(err),
+			zap.Int64("char_id", s.CharID))
+		return
+	}
+
+	autoruns := room.GetAutorunNPCsForPlayer(composite)
 	if len(autoruns) == 0 {
 		return
 	}
@@ -209,43 +219,47 @@ func (h *NPCHandlers) ExecuteAutoruns(s *player.PlayerSession, mapID int) {
 		zap.Int("map_id", mapID),
 		zap.Int("count", len(autoruns)))
 
-	gs := h.wm.GameState()
 	for _, npcInst := range autoruns {
+		activePage := room.GetActivePageForPlayer(npcInst.EventID, composite)
+		if activePage == nil || activePage.Trigger != 3 || len(activePage.List) <= 1 {
+			continue
+		}
 		opts := &npc.ExecuteOpts{
-			GameState:  gs,
+			GameState:  composite,
 			MapID:      mapID,
 			EventID:    npcInst.EventID,
 			TransferFn: h.transferFn,
 		}
-		h.executor.Execute(context.Background(), s, npcInst.ActivePage, opts)
+		h.executor.Execute(context.Background(), s, activePage, opts)
 
-		// Refresh NPC pages after each autorun in case state changed.
-		changed := room.RefreshNPCPages()
-		if len(changed) > 0 {
-			h.broadcastPageChanges(room, changed)
-		}
+		// Send per-player page changes after each autorun.
+		h.sendPageChangesToPlayer(s, room, composite)
 	}
 }
 
-// broadcastPageChanges sends npc_page_change for each changed NPC to all players in the room.
-func (h *NPCHandlers) broadcastPageChanges(room *world.MapRoom, changedEventIDs []int) {
-	for _, eventID := range changedEventIDs {
-		npcInst := room.GetNPC(eventID)
-		if npcInst == nil {
+// sendPageChangesToPlayer re-evaluates all NPC pages for a single player's state
+// and sends npc_page_change packets only to that player for any NPCs whose
+// per-player page differs from the base (global) page.
+func (h *NPCHandlers) sendPageChangesToPlayer(s *player.PlayerSession, room *world.MapRoom, state world.GameStateReader) {
+	npcs := room.AllNPCs()
+	for _, npcInst := range npcs {
+		playerPage := room.GetActivePageForPlayer(npcInst.EventID, state)
+		// Compare with base page — if they differ, send update to this player.
+		if playerPage == npcInst.ActivePage {
 			continue
 		}
 		data := map[string]interface{}{
-			"event_id": eventID,
+			"event_id": npcInst.EventID,
 			"dir":      npcInst.Dir,
 		}
-		if npcInst.ActivePage != nil {
-			data["walk_name"] = npcInst.ActivePage.Image.CharacterName
-			data["walk_index"] = npcInst.ActivePage.Image.CharacterIndex
-			data["priority_type"] = npcInst.ActivePage.PriorityType
-			data["step_anime"] = npcInst.ActivePage.StepAnime
-			data["direction_fix"] = npcInst.ActivePage.DirectionFix
-			data["through"] = npcInst.ActivePage.Through
-			data["walk_anime"] = npcInst.ActivePage.WalkAnime
+		if playerPage != nil {
+			data["walk_name"] = playerPage.Image.CharacterName
+			data["walk_index"] = playerPage.Image.CharacterIndex
+			data["priority_type"] = playerPage.PriorityType
+			data["step_anime"] = playerPage.StepAnime
+			data["direction_fix"] = playerPage.DirectionFix
+			data["through"] = playerPage.Through
+			data["walk_anime"] = playerPage.WalkAnime
 		} else {
 			data["walk_name"] = ""
 			data["walk_index"] = 0
@@ -257,6 +271,6 @@ func (h *NPCHandlers) broadcastPageChanges(room *world.MapRoom, changedEventIDs 
 		}
 		payload, _ := json.Marshal(data)
 		pkt, _ := json.Marshal(&player.Packet{Type: "npc_page_change", Payload: payload})
-		room.Broadcast(pkt)
+		s.SendRaw(pkt)
 	}
 }

@@ -17,6 +17,9 @@ var allModels = []interface{}{
 	&GameSwitch{},
 	&GameVariable{},
 	&GameSelfSwitch{},
+	&CharSwitch{},
+	&CharVariable{},
+	&CharSelfSwitch{},
 }
 
 // AutoMigrate creates or updates all tables in the given database.

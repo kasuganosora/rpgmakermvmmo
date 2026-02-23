@@ -5,6 +5,7 @@ node_modules/
 server/server
 server/server.exe
 server/mmo-server.exe
+server/server~
 *.exe
 
 # IDE / OS

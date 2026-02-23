@@ -26,7 +26,7 @@ func nopLogger() *zap.Logger { l, _ := zap.NewDevelopment(); return l }
 func newAdminRouter(t *testing.T, adminKey string) (*gin.Engine, *rest.AdminHandler) {
 	db := testutil.SetupTestDB(t)
 	sm := player.NewSessionManager(nopLogger())
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), nopLogger())
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, nopLogger())
 	sched := scheduler.New(nopLogger())
 	h := rest.NewAdminHandler(db, sm, wm, sched, nopLogger())
 
@@ -135,7 +135,7 @@ func TestBanAccount_NotFound(t *testing.T) {
 func TestBanAccount_Success(t *testing.T) {
 	db := testutil.SetupTestDB(t)
 	sm := player.NewSessionManager(nopLogger())
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), nopLogger())
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, nopLogger())
 	sched := scheduler.New(nopLogger())
 	h := rest.NewAdminHandler(db, sm, wm, sched, nopLogger())
 
@@ -162,7 +162,7 @@ func TestBanAccount_Success(t *testing.T) {
 func TestBanAccount_Unban(t *testing.T) {
 	db := testutil.SetupTestDB(t)
 	sm := player.NewSessionManager(nopLogger())
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), nopLogger())
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, nopLogger())
 	sched := scheduler.New(nopLogger())
 	h := rest.NewAdminHandler(db, sm, wm, sched, nopLogger())
 

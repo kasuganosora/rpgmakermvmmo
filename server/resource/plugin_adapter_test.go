@@ -106,7 +106,10 @@ func TestTemplateEventAdapter_ByNumericID(t *testing.T) {
 	rl.Maps[10] = targetMap
 
 	adapter := &templateEventAdapter{}
-	params := map[string]string{"TemplateMapId": "2"}
+	params := map[string]string{
+		"TemplateMapId":  "2",
+		"OverrideTarget": `{"Image":"false","Direction":"false","Move":"false","Priority":"false","Trigger":"false","Option":"false"}`,
+	}
 	err := adapter.Apply(rl, params)
 	require.NoError(t, err)
 
@@ -259,7 +262,10 @@ func TestTemplateEventAdapter_UnicodeNames(t *testing.T) {
 	rl.Maps[5] = targetMap
 
 	adapter := &templateEventAdapter{}
-	params := map[string]string{"TemplateMapId": "2"}
+	params := map[string]string{
+		"TemplateMapId":  "2",
+		"OverrideTarget": `{"Image":"false","Direction":"false","Move":"false","Priority":"false","Trigger":"false","Option":"false"}`,
+	}
 	err := adapter.Apply(rl, params)
 	require.NoError(t, err)
 

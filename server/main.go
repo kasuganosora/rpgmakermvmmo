@@ -111,7 +111,38 @@ func main() {
 	} else {
 		logger.Info("game state loaded from DB")
 	}
-	wm := world.NewWorldManager(res, gameState, logger)
+	whitelist := world.NewGlobalWhitelist()
+	// Time/day/weather variables are shared so all players see the same time of day.
+	for _, id := range []int{
+		202, // ターン (day counter)
+		203, // 曜日 (day of week)
+		204, // 時間(h)
+		205, // 時間(m)
+		206, // 時間帯 (time period: dawn/morning/afternoon/evening/night)
+		207, // 天候 (weather)
+		211, // 時間表示 (formatted time display)
+	} {
+		whitelist.Variables[id] = true
+	}
+	for _, id := range []int{
+		11,  // 時間切り替えフラグ (time switch flag)
+		12,  // 時計オン (clock on)
+		20,  // リアルタイム処理 (real-time processing)
+		31,  // その場で時間経過 (time progression on spot)
+		53,  // 日照 (sunlight)
+		54,  // 日没 (sunset)
+		55,  // 天候・雨 (rain)
+		56,  // 天候・雲 (clouds)
+		57,  // 天候・陽光 (sunny)
+		58,  // 天候・瘴気 (miasma)
+		87,  // 日数経過開始 (day count start)
+		89,  // 平日 (weekday)
+		103, // 時間経過オンオフ (time passage toggle)
+		104, // 時間経過呼び出し (time passage call)
+	} {
+		whitelist.Switches[id] = true
+	}
+	wm := world.NewWorldManager(res, gameState, whitelist, db, logger)
 	defer wm.StopAll()
 	partyMgr := party.NewManager(logger)
 

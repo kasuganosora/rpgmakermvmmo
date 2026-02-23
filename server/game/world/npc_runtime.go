@@ -25,7 +25,7 @@ type NPCRuntime struct {
 // selectPage chooses the highest-index page whose conditions are met.
 // RMMV convention: pages are checked from last to first; the first match wins.
 // actorValid and itemValid are skipped (server doesn't track per-player actor/item conditions).
-func selectPage(ev *resource.MapEvent, mapID int, state *GameState) *resource.EventPage {
+func selectPage(ev *resource.MapEvent, mapID int, state GameStateReader) *resource.EventPage {
 	if state == nil {
 		// No game state — return first page as default.
 		if len(ev.Pages) > 0 {
@@ -46,7 +46,7 @@ func selectPage(ev *resource.MapEvent, mapID int, state *GameState) *resource.Ev
 }
 
 // meetsConditions checks whether all enabled conditions on a page are satisfied.
-func meetsConditions(cond *resource.EventPageConditions, mapID, eventID int, state *GameState) bool {
+func meetsConditions(cond *resource.EventPageConditions, mapID, eventID int, state GameStateReader) bool {
 	if cond.Switch1Valid && !state.GetSwitch(cond.Switch1ID) {
 		return false
 	}
@@ -105,6 +105,15 @@ func (room *MapRoom) populateNPCs() {
 	room.logger.Info("populated NPCs",
 		zap.Int("map_id", room.MapID),
 		zap.Int("count", len(room.npcs)))
+}
+
+// AllNPCs returns a snapshot slice of all NPCRuntime entries in the room.
+func (room *MapRoom) AllNPCs() []*NPCRuntime {
+	room.mu.RLock()
+	defer room.mu.RUnlock()
+	out := make([]*NPCRuntime, len(room.npcs))
+	copy(out, room.npcs)
+	return out
 }
 
 // GetNPC returns the NPCRuntime for the given event ID, or nil.
@@ -342,7 +351,8 @@ func (room *MapRoom) GetAutorunNPCs() []*NPCRuntime {
 	return result
 }
 
-// RefreshNPCPages re-evaluates all NPC active pages and returns event IDs that changed.
+// RefreshNPCPages re-evaluates all NPC active pages (global state) and returns event IDs that changed.
+// Used for base/movement page updates. For per-player page changes, use the handler-level logic.
 func (room *MapRoom) RefreshNPCPages() []int {
 	room.mu.Lock()
 	defer room.mu.Unlock()
@@ -360,4 +370,124 @@ func (room *MapRoom) RefreshNPCPages() []int {
 		}
 	}
 	return changed
+}
+
+// ---------------------------------------------------------------------------
+// Per-player variants — compute NPC state using player-specific GameStateReader.
+// ---------------------------------------------------------------------------
+
+// NPCSnapshotForPlayer returns NPC snapshots using per-player page computation.
+func (room *MapRoom) NPCSnapshotForPlayer(state GameStateReader) []map[string]interface{} {
+	room.mu.RLock()
+	defer room.mu.RUnlock()
+	out := make([]map[string]interface{}, 0, len(room.npcs))
+	for _, n := range room.npcs {
+		activePage := selectPage(n.MapEvent, room.MapID, state)
+		snap := map[string]interface{}{
+			"event_id": n.EventID,
+			"name":     n.Name,
+			"x":        n.X,
+			"y":        n.Y,
+			"dir":      n.Dir,
+		}
+		if activePage != nil {
+			snap["walk_name"] = activePage.Image.CharacterName
+			snap["walk_index"] = activePage.Image.CharacterIndex
+			snap["priority_type"] = activePage.PriorityType
+			snap["move_type"] = activePage.MoveType
+			snap["step_anime"] = activePage.StepAnime
+			snap["direction_fix"] = activePage.DirectionFix
+			snap["through"] = activePage.Through
+			snap["walk_anime"] = activePage.WalkAnime
+		} else {
+			snap["walk_name"] = ""
+			snap["walk_index"] = 0
+			snap["priority_type"] = 0
+			snap["move_type"] = 0
+			snap["step_anime"] = false
+			snap["direction_fix"] = false
+			snap["through"] = false
+			snap["walk_anime"] = false
+		}
+		out = append(out, snap)
+	}
+	return out
+}
+
+// GetTransferAtForPlayer checks transfer at (x, y) using per-player state for page selection.
+func (room *MapRoom) GetTransferAtForPlayer(x, y int, state GameStateReader) *TransferData {
+	room.mu.RLock()
+	defer room.mu.RUnlock()
+	for _, n := range room.npcs {
+		if n.X != x || n.Y != y {
+			continue
+		}
+		if n.MapEvent == nil || len(n.MapEvent.Pages) == 0 {
+			continue
+		}
+
+		activePage := selectPage(n.MapEvent, room.MapID, state)
+
+		if activePage != nil {
+			if activePage.Trigger != 1 && activePage.Trigger != 2 {
+				continue
+			}
+			if td := findTransferInPage(activePage); td != nil {
+				return td
+			}
+			hasTE := hasCallOriginEvent(activePage)
+			hasOrig := n.MapEvent.OriginalPages != nil
+			if hasOrig && hasTE {
+				for _, origPage := range n.MapEvent.OriginalPages {
+					if origPage == nil {
+						continue
+					}
+					if td := findTransferInPage(origPage); td != nil {
+						return td
+					}
+				}
+			}
+			return nil
+		}
+
+		// No active page fallback — scan all pages for navigation safety.
+		for _, page := range n.MapEvent.Pages {
+			if page == nil {
+				continue
+			}
+			if page.Trigger != 1 && page.Trigger != 2 {
+				continue
+			}
+			if td := findTransferInPage(page); td != nil {
+				return td
+			}
+		}
+	}
+	return nil
+}
+
+// GetActivePageForPlayer computes the per-player active page for a specific NPC.
+func (room *MapRoom) GetActivePageForPlayer(eventID int, state GameStateReader) *resource.EventPage {
+	room.mu.RLock()
+	defer room.mu.RUnlock()
+	for _, n := range room.npcs {
+		if n.EventID == eventID {
+			return selectPage(n.MapEvent, room.MapID, state)
+		}
+	}
+	return nil
+}
+
+// GetAutorunNPCsForPlayer returns NPCs whose per-player active page has trigger=3.
+func (room *MapRoom) GetAutorunNPCsForPlayer(state GameStateReader) []*NPCRuntime {
+	room.mu.RLock()
+	defer room.mu.RUnlock()
+	var result []*NPCRuntime
+	for _, n := range room.npcs {
+		page := selectPage(n.MapEvent, room.MapID, state)
+		if page != nil && page.Trigger == 3 && len(page.List) > 1 {
+			result = append(result, n)
+		}
+	}
+	return result
 }

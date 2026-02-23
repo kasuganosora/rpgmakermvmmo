@@ -26,7 +26,7 @@ import (
 // ---- GameHandlers: HandlePing ----
 
 func TestHandlePing_SendsPong(t *testing.T) {
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), nop())
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, nop())
 	defer wm.StopAll()
 
 	r := NewRouter(nop())
@@ -48,7 +48,7 @@ func TestHandlePing_SendsPong(t *testing.T) {
 }
 
 func TestHandlePing_EmptyPayload(t *testing.T) {
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), nop())
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, nop())
 	defer wm.StopAll()
 
 	r := NewRouter(nop())
@@ -73,7 +73,7 @@ func TestHandlePing_EmptyPayload(t *testing.T) {
 
 func TestHandleEnterMap_Success(t *testing.T) {
 	db := testutil.SetupTestDB(t)
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), nop())
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, nop())
 	defer wm.StopAll()
 
 	r := NewRouter(nop())
@@ -107,7 +107,7 @@ func TestHandleEnterMap_Success(t *testing.T) {
 
 func TestHandleEnterMap_InvalidChar(t *testing.T) {
 	db := testutil.SetupTestDB(t)
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), nop())
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, nop())
 	defer wm.StopAll()
 
 	r := NewRouter(nop())
@@ -133,7 +133,7 @@ func TestHandleEnterMap_InvalidChar(t *testing.T) {
 
 func TestHandleEnterMap_MalformedPayload(t *testing.T) {
 	db := testutil.SetupTestDB(t)
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), nop())
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, nop())
 	defer wm.StopAll()
 
 	r := NewRouter(nop())
@@ -149,7 +149,7 @@ func TestHandleEnterMap_MalformedPayload(t *testing.T) {
 
 func TestHandleEnterMap_LeavesOldMap(t *testing.T) {
 	db := testutil.SetupTestDB(t)
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), nop())
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, nop())
 	defer wm.StopAll()
 
 	r := NewRouter(nop())
@@ -181,7 +181,7 @@ func TestHandleEnterMap_LeavesOldMap(t *testing.T) {
 // ---- GameHandlers: HandleMove ----
 
 func TestHandleMove_ValidMove(t *testing.T) {
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), nop())
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, nop())
 	defer wm.StopAll()
 	wm.GetOrCreate(1)
 
@@ -205,7 +205,7 @@ func TestHandleMove_ValidMove(t *testing.T) {
 }
 
 func TestHandleMove_NotInMap(t *testing.T) {
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), nop())
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, nop())
 	defer wm.StopAll()
 
 	r := NewRouter(nop())
@@ -232,7 +232,7 @@ func TestHandleMove_NotInMap(t *testing.T) {
 }
 
 func TestHandleMove_SpeedHack_Rejected(t *testing.T) {
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), nop())
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, nop())
 	defer wm.StopAll()
 
 	r := NewRouter(nop())
@@ -263,7 +263,7 @@ func TestHandleMove_SpeedHack_Rejected(t *testing.T) {
 }
 
 func TestHandleMove_MalformedPayload(t *testing.T) {
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), nop())
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, nop())
 	defer wm.StopAll()
 
 	r := NewRouter(nop())
@@ -280,7 +280,7 @@ func TestHandleMove_MalformedPayload(t *testing.T) {
 
 func TestHandleAttack_NotInMap(t *testing.T) {
 	db := testutil.SetupTestDB(t)
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), nop())
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, nop())
 	defer wm.StopAll()
 
 	r := NewRouter(nop())
@@ -306,7 +306,7 @@ func TestHandleAttack_NotInMap(t *testing.T) {
 
 func TestHandleAttack_PvPNotEnabled(t *testing.T) {
 	db := testutil.SetupTestDB(t)
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), nop())
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, nop())
 	defer wm.StopAll()
 	wm.GetOrCreate(1)
 
@@ -334,7 +334,7 @@ func TestHandleAttack_PvPNotEnabled(t *testing.T) {
 
 func TestHandleAttack_UnknownTargetType(t *testing.T) {
 	db := testutil.SetupTestDB(t)
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), nop())
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, nop())
 	defer wm.StopAll()
 	wm.GetOrCreate(1)
 
@@ -362,7 +362,7 @@ func TestHandleAttack_UnknownTargetType(t *testing.T) {
 
 func TestHandleAttack_MonsterNotFound(t *testing.T) {
 	db := testutil.SetupTestDB(t)
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), nop())
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, nop())
 	defer wm.StopAll()
 	wm.GetOrCreate(1)
 
@@ -392,7 +392,7 @@ func TestHandleAttack_MonsterNotFound(t *testing.T) {
 
 func TestHandlePickup_NotInMap(t *testing.T) {
 	db := testutil.SetupTestDB(t)
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), nop())
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, nop())
 	defer wm.StopAll()
 
 	r := NewRouter(nop())
@@ -416,7 +416,7 @@ func TestHandlePickup_NotInMap(t *testing.T) {
 
 func TestHandlePickup_DropNotFound(t *testing.T) {
 	db := testutil.SetupTestDB(t)
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), nop())
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, nop())
 	defer wm.StopAll()
 	wm.GetOrCreate(1)
 
@@ -442,7 +442,7 @@ func TestHandlePickup_DropNotFound(t *testing.T) {
 
 func TestHandlePickup_TooFar(t *testing.T) {
 	db := testutil.SetupTestDB(t)
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), nop())
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, nop())
 	defer wm.StopAll()
 	room := wm.GetOrCreate(1)
 	room.AddDrop(1, 1, 1, 10, 10) // drop at (10,10)
@@ -474,7 +474,7 @@ func TestHandleNPCInteract_InvalidEventID(t *testing.T) {
 	db := testutil.SetupTestDB(t)
 
 	r := NewRouter(nop())
-	wm2 := world.NewWorldManager(nil, world.NewGameState(nil), nop())
+	wm2 := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, nop())
 	npcH := NewNPCHandlers(db, nil, wm2, nop())
 	npcH.RegisterHandlers(r)
 
@@ -656,7 +656,7 @@ func newSkillItemHandlersForTest(t *testing.T) (*SkillItemHandlers, *world.World
 	t.Helper()
 	db := testutil.SetupTestDB(t)
 	c, _ := cache.NewCache(cache.CacheConfig{})
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), nop())
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, nop())
 	t.Cleanup(wm.StopAll)
 	skillSvc := gskill.NewSkillService(c, nil, wm, nop())
 	sh := NewSkillItemHandlers(db, nil, wm, skillSvc, nop())
@@ -791,7 +791,7 @@ func TestHandleUseItem_NotFound(t *testing.T) {
 
 func TestHandleUseSkill_Success(t *testing.T) {
 	c, _ := cache.NewCache(cache.CacheConfig{})
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), nop())
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, nop())
 	defer wm.StopAll()
 	wm.GetOrCreate(1)
 
@@ -821,7 +821,7 @@ func TestHandleUseSkill_Success(t *testing.T) {
 func TestHandleEquipItem_Success(t *testing.T) {
 	db := testutil.SetupTestDB(t)
 	c, _ := cache.NewCache(cache.CacheConfig{})
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), nop())
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, nop())
 	defer wm.StopAll()
 
 	skillSvc := gskill.NewSkillService(c, nil, wm, nop())
@@ -855,7 +855,7 @@ func TestHandleEquipItem_Success(t *testing.T) {
 func TestHandleUnequipItem_Success(t *testing.T) {
 	db := testutil.SetupTestDB(t)
 	c, _ := cache.NewCache(cache.CacheConfig{})
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), nop())
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, nop())
 	defer wm.StopAll()
 
 	skillSvc := gskill.NewSkillService(c, nil, wm, nop())
@@ -889,7 +889,7 @@ func TestHandleUnequipItem_Success(t *testing.T) {
 func TestHandleUseItem_Success(t *testing.T) {
 	db := testutil.SetupTestDB(t)
 	c, _ := cache.NewCache(cache.CacheConfig{})
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), nop())
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, nop())
 	defer wm.StopAll()
 
 	skillSvc := gskill.NewSkillService(c, nil, wm, nop())
@@ -927,7 +927,7 @@ func newSlimeTemplate(hp int) *resource.Enemy {
 
 func TestHandleAttack_WithSkillID(t *testing.T) {
 	db := testutil.SetupTestDB(t)
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), nop())
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, nop())
 	defer wm.StopAll()
 	room := wm.GetOrCreate(1)
 
@@ -965,7 +965,7 @@ func TestHandleAttack_WithSkillID(t *testing.T) {
 
 func TestHandleAttack_MonsterHit(t *testing.T) {
 	db := testutil.SetupTestDB(t)
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), nop())
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, nop())
 	defer wm.StopAll()
 	room := wm.GetOrCreate(1)
 
@@ -999,7 +999,7 @@ func TestHandleAttack_MonsterHit(t *testing.T) {
 
 func TestHandleAttack_MonsterDeath(t *testing.T) {
 	db := testutil.SetupTestDB(t)
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), nop())
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, nop())
 	defer wm.StopAll()
 	room := wm.GetOrCreate(1)
 
@@ -1040,7 +1040,7 @@ func TestHandleAttack_MonsterDeath(t *testing.T) {
 // ---- GameHandlers: HandleMove negative coordinates and passability ----
 
 func TestHandleMove_NegativeDxDy(t *testing.T) {
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), nop())
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, nop())
 	defer wm.StopAll()
 	wm.GetOrCreate(1)
 
@@ -1072,7 +1072,7 @@ func TestHandleMove_NegativeDxDy(t *testing.T) {
 }
 
 func TestHandleMove_ImpassableTile(t *testing.T) {
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), nop())
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, nop())
 	defer wm.StopAll()
 	wm.GetOrCreate(1)
 
@@ -1118,7 +1118,7 @@ func TestHandleNPCInteract_ValidEvent(t *testing.T) {
 	}
 
 	r := NewRouter(nop())
-	wm2 := world.NewWorldManager(res, world.NewGameState(nil), nop())
+	wm2 := world.NewWorldManager(res, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, nop())
 	npcH := NewNPCHandlers(db, res, wm2, nop())
 	npcH.RegisterHandlers(r)
 
@@ -1187,7 +1187,7 @@ func TestHandleTradeAccept_InitiatorOnline(t *testing.T) {
 
 func TestHandlePickup_Success(t *testing.T) {
 	db := testutil.SetupTestDB(t)
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), nop())
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, nop())
 	defer wm.StopAll()
 	room := wm.GetOrCreate(1)
 

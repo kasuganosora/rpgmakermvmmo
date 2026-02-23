@@ -159,7 +159,7 @@ func TestUseSkill_UnknownSkillID(t *testing.T) {
 	c := newTestCache(t)
 	logger := testLogger()
 	res := newTestResWithSkill(1, 5)
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), logger)
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, logger)
 	defer wm.StopAll()
 
 	svc := NewSkillService(c, res, wm, logger)
@@ -175,7 +175,7 @@ func TestUseSkill_OnCooldown(t *testing.T) {
 	c := newTestCache(t)
 	logger := testLogger()
 	res := newTestResWithSkill(1, 5)
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), logger)
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, logger)
 	defer wm.StopAll()
 
 	svc := NewSkillService(c, res, wm, logger)
@@ -195,7 +195,7 @@ func TestUseSkill_NotEnoughMP(t *testing.T) {
 	c := newTestCache(t)
 	logger := testLogger()
 	res := newTestResWithSkill(1, 50)
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), logger)
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, logger)
 	defer wm.StopAll()
 
 	svc := NewSkillService(c, res, wm, logger)
@@ -212,7 +212,7 @@ func TestUseSkill_NotInMap(t *testing.T) {
 	c := newTestCache(t)
 	logger := testLogger()
 	res := newTestResWithSkill(1, 5)
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), logger)
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, logger)
 	defer wm.StopAll()
 	// Do NOT create map 999
 
@@ -230,7 +230,7 @@ func TestUseSkill_Success_NoTargets(t *testing.T) {
 	c := newTestCache(t)
 	logger := testLogger()
 	res := newTestResWithSkill(1, 5)
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), logger)
+	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, logger)
 	defer wm.StopAll()
 	wm.GetOrCreate(1) // ensure the map room exists
 
