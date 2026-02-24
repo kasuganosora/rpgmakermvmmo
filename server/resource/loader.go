@@ -253,6 +253,7 @@ type MapData struct {
 	Bgm         *AudioFile  `json:"bgm"`
 	AutoplayBgs bool        `json:"autoplayBgs"`
 	Bgs         *AudioFile  `json:"bgs"`
+	Note        string      `json:"note"` // map note field for meta tags like <RandomPos>
 }
 
 // TransferTarget holds the destination of a map transfer event.

@@ -190,6 +190,10 @@ func main() {
 	partyH := apows.NewPartyHandlers(partyMgr, sm, logger)
 	partyH.RegisterHandlers(wsRouter)
 
+	// TemplateEvent.js hook handlers (for self-variables and RandomPos synchronization)
+	templateEventH := apows.NewTemplateEventHandlers(db, wm, sm, logger)
+	templateEventH.RegisterHandlers(wsRouter)
+
 	wsRouter.On("chat_send", chatH.HandleSend)
 
 	// ---- Gin HTTP Server ----

@@ -17,9 +17,11 @@ var allModels = []interface{}{
 	&GameSwitch{},
 	&GameVariable{},
 	&GameSelfSwitch{},
+	&GameSelfVariable{}, // TemplateEvent.js extension
 	&CharSwitch{},
 	&CharVariable{},
 	&CharSelfSwitch{},
+	&CharSelfVariable{}, // TemplateEvent.js extension per-player
 }
 
 // AutoMigrate creates or updates all tables in the given database.

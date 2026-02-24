@@ -54,24 +54,26 @@ func (w *GlobalWhitelist) IsVariableGlobal(id int) bool {
 // PlayerGameState — per-character in-memory state.
 // ---------------------------------------------------------------------------
 
-// PlayerGameState holds in-memory per-player switches, variables, and self-switches.
+// PlayerGameState holds in-memory per-player switches, variables, self-switches, and self-variables.
 type PlayerGameState struct {
-	mu           sync.RWMutex
-	charID       int64
-	switches     map[int]bool
-	variables    map[int]int
-	selfSwitches map[selfSwitchKey]bool
-	db           *gorm.DB // nil = no persistence (tests)
+	mu            sync.RWMutex
+	charID        int64
+	switches      map[int]bool
+	variables     map[int]int
+	selfSwitches  map[selfSwitchKey]bool
+	selfVariables map[selfVariableKey]int // TemplateEvent.js extension
+	db            *gorm.DB                // nil = no persistence (tests)
 }
 
 // NewPlayerGameState creates an empty PlayerGameState.
 func NewPlayerGameState(charID int64, db *gorm.DB) *PlayerGameState {
 	return &PlayerGameState{
-		charID:       charID,
-		switches:     make(map[int]bool),
-		variables:    make(map[int]int),
-		selfSwitches: make(map[selfSwitchKey]bool),
-		db:           db,
+		charID:        charID,
+		switches:      make(map[int]bool),
+		variables:     make(map[int]int),
+		selfSwitches:  make(map[selfSwitchKey]bool),
+		selfVariables: make(map[selfVariableKey]int),
+		db:            db,
 	}
 }
 
@@ -105,6 +107,14 @@ func (ps *PlayerGameState) LoadFromDB() error {
 	}
 	for _, ss := range selfSwitches {
 		ps.selfSwitches[selfSwitchKey{MapID: ss.MapID, EventID: ss.EventID, Ch: ss.Ch}] = ss.Value
+	}
+
+	var selfVariables []model.CharSelfVariable
+	if err := ps.db.Where("char_id = ?", ps.charID).Find(&selfVariables).Error; err != nil {
+		return err
+	}
+	for _, sv := range selfVariables {
+		ps.selfVariables[selfVariableKey{MapID: sv.MapID, EventID: sv.EventID, Index: sv.Index}] = sv.Value
 	}
 
 	return nil
@@ -170,6 +180,28 @@ func (ps *PlayerGameState) SetSelfSwitch(mapID, eventID int, ch string, val bool
 	}
 }
 
+// GetSelfVariable returns the value of a per-player self-variable.
+// TemplateEvent.js extension: index can be any integer (13-17 for RandomPos).
+func (ps *PlayerGameState) GetSelfVariable(mapID, eventID, index int) int {
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+	return ps.selfVariables[selfVariableKey{MapID: mapID, EventID: eventID, Index: index}]
+}
+
+// SetSelfVariable sets the value of a per-player self-variable and persists it.
+// TemplateEvent.js extension: index can be any integer (13-17 for RandomPos).
+func (ps *PlayerGameState) SetSelfVariable(mapID, eventID, index, val int) {
+	ps.mu.Lock()
+	ps.selfVariables[selfVariableKey{MapID: mapID, EventID: eventID, Index: index}] = val
+	ps.mu.Unlock()
+
+	if ps.db != nil {
+		ps.db.Clauses(clause.OnConflict{
+			DoUpdates: clause.AssignmentColumns([]string{"value"}),
+		}).Create(&model.CharSelfVariable{CharID: ps.charID, MapID: mapID, EventID: eventID, Index: index, Value: val})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // CompositeGameState — routes reads/writes to global or player based on whitelist.
 // Implements both GameStateReader and npc.GameStateAccessor.
@@ -228,6 +260,15 @@ func (c *CompositeGameState) GetSelfSwitch(mapID, eventID int, ch string) bool {
 
 func (c *CompositeGameState) SetSelfSwitch(mapID, eventID int, ch string, val bool) {
 	c.player.SetSelfSwitch(mapID, eventID, ch, val)
+}
+
+// Self-variables are always per-player (TemplateEvent.js extension).
+func (c *CompositeGameState) GetSelfVariable(mapID, eventID, index int) int {
+	return c.player.GetSelfVariable(mapID, eventID, index)
+}
+
+func (c *CompositeGameState) SetSelfVariable(mapID, eventID, index, val int) {
+	c.player.SetSelfVariable(mapID, eventID, index, val)
 }
 
 // ---------------------------------------------------------------------------

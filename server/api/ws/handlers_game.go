@@ -413,6 +413,9 @@ func (gh *GameHandlers) EnterMapRoom(s *player.PlayerSession, mapID, x, y, dir i
 	s.SetPosition(x, y, dir)
 	s.LastTransfer = time.Now()
 
+	// Clear NPC channels to prevent stale dialog acks from previous map.
+	s.ClearNPCChannels()
+
 	// Join the target MapRoom.
 	room := gh.wm.GetOrCreate(mapID)
 	room.AddPlayer(s)
@@ -538,7 +541,7 @@ func (gh *GameHandlers) EnterMapRoom(s *player.PlayerSession, mapID, x, y, dir i
 		"skills":      skillList,
 		"players":     room.PlayerSnapshot(),
 		"npcs":        gh.npcSnapshotForPlayer(s, room),
-		"monsters":    []interface{}{},
+		"monsters":    room.MonsterSnapshot(),
 		"drops":       []interface{}{},
 		"passability": room.PassabilitySnapshot(),
 		"audio":       mapAudio,

@@ -88,6 +88,43 @@
     console.log('[MMO] Remote load complete: ' + loaded + '/' + LOAD_ORDER.length +
                 (failed.length ? ' | FAILED: ' + failed.join(', ') : ''));
 
+    // ---- Auto-detect TemplateEvent.js and load hook ----
+    // Check if TemplateEvent.js is loaded by looking for its characteristic methods
+    var hasTemplateEvent = false;
+    try {
+        // Check for TemplateEvent.js indicators
+        if (typeof $gameSelfSwitches !== 'undefined' && 
+            typeof $gameSelfSwitches.getVariableValue === 'function') {
+            hasTemplateEvent = true;
+        }
+        // Also check if TemplateEvent is in plugin list
+        if ($plugins && $plugins.some(function(p) { 
+            return p && p.name && p.name.toLowerCase().indexOf('templateevent') >= 0; 
+        })) {
+            hasTemplateEvent = true;
+        }
+    } catch (e) {
+        // Ignore detection errors
+    }
+
+    if (hasTemplateEvent) {
+        console.log('[MMO] TemplateEvent.js detected, loading hook...');
+        try {
+            var hookUrl = httpBase + '/plugins/mmo-template-event-hook.js?_t=' + Date.now();
+            var hookXhr = new XMLHttpRequest();
+            hookXhr.open('GET', hookUrl, false); // synchronous
+            hookXhr.send();
+            if (hookXhr.status === 200) {
+                (0, eval)(hookXhr.responseText);
+                console.log('[MMO] TemplateEvent hook loaded successfully');
+            } else {
+                console.warn('[MMO] Failed to load TemplateEvent hook: HTTP ' + hookXhr.status);
+            }
+        } catch (e) {
+            console.error('[MMO] Error loading TemplateEvent hook:', e.message);
+        }
+    }
+
     // ---- Client error reporter ----
     function reportError(message, source, line, col, stack) {
         try {

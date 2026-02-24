@@ -247,3 +247,20 @@ func (s *PlayerSession) SetGlobalChatCooldown() {
 func (s *PlayerSession) GetContext() context.Context {
 	return context.Background()
 }
+
+// ClearNPCChannels drains and clears the NPC-related channels.
+// Should be called when player enters a new map to prevent stale signals.
+func (s *PlayerSession) ClearNPCChannels() {
+	select {
+	case <-s.DialogAckCh:
+	default:
+	}
+	select {
+	case <-s.ChoiceCh:
+	default:
+	}
+	select {
+	case <-s.SceneReadyCh:
+	default:
+	}
+}

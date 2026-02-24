@@ -59,6 +59,7 @@ const (
 )
 
 // GameStateAccessor provides read/write access to switches, variables, and self-switches.
+// TemplateEvent.js extension: also supports self-variables with numeric indices.
 type GameStateAccessor interface {
 	GetSwitch(id int) bool
 	SetSwitch(id int, val bool)
@@ -66,6 +67,9 @@ type GameStateAccessor interface {
 	SetVariable(id int, val int)
 	GetSelfSwitch(mapID, eventID int, ch string) bool
 	SetSelfSwitch(mapID, eventID int, ch string, val bool)
+	// Self-variable methods (TemplateEvent.js extension)
+	GetSelfVariable(mapID, eventID, index int) int
+	SetSelfVariable(mapID, eventID, index, val int)
 }
 
 // Executor runs RMMV event command lists for a player session.

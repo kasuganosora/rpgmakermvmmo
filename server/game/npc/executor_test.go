@@ -63,16 +63,18 @@ func drainPackets(t *testing.T, s *player.PlayerSession) []*player.Packet {
 
 // mockGameState implements GameStateAccessor for testing.
 type mockGameState struct {
-	switches     map[int]bool
-	variables    map[int]int
-	selfSwitches map[string]bool // key: "mapID_eventID_ch"
+	switches      map[int]bool
+	variables     map[int]int
+	selfSwitches  map[string]bool // key: "mapID_eventID_ch"
+	selfVariables map[string]int  // key: "mapID_eventID_index" for TemplateEvent.js
 }
 
 func newMockGameState() *mockGameState {
 	return &mockGameState{
-		switches:     make(map[int]bool),
-		variables:    make(map[int]int),
-		selfSwitches: make(map[string]bool),
+		switches:      make(map[int]bool),
+		variables:     make(map[int]int),
+		selfSwitches:  make(map[string]bool),
+		selfVariables: make(map[string]int),
 	}
 }
 
@@ -89,8 +91,22 @@ func (m *mockGameState) SetSelfSwitch(mapID, eventID int, ch string, val bool) {
 	m.selfSwitches[key] = val
 }
 
+func (m *mockGameState) GetSelfVariable(mapID, eventID, index int) int {
+	key := selfVariableKey(mapID, eventID, index)
+	return m.selfVariables[key]
+}
+
+func (m *mockGameState) SetSelfVariable(mapID, eventID, index, val int) {
+	key := selfVariableKey(mapID, eventID, index)
+	m.selfVariables[key] = val
+}
+
 func selfSwitchKey(mapID, eventID int, ch string) string {
 	return string(rune(mapID)) + "_" + string(rune(eventID)) + "_" + ch
+}
+
+func selfVariableKey(mapID, eventID, index int) string {
+	return string(rune(mapID)) + "_" + string(rune(eventID)) + "_" + string(rune(index))
 }
 
 // ========================================================================

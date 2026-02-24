@@ -107,6 +107,10 @@ func NewTestServer(t *testing.T) *TestServer {
 	partyH := apows.NewPartyHandlers(partyMgr, sm, logger)
 	partyH.RegisterHandlers(wsRouter)
 
+	// TemplateEvent.js hook handlers
+	templateEventH := apows.NewTemplateEventHandlers(db, wm, sm, logger)
+	templateEventH.RegisterHandlers(wsRouter)
+
 	wsRouter.On("chat_send", chatH.HandleSend)
 
 	// ---- Gin HTTP Server ----

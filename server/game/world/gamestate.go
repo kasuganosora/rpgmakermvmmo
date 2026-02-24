@@ -2,6 +2,7 @@ package world
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,6 +19,14 @@ type selfSwitchKey struct {
 	Ch      string // "A","B","C","D"
 }
 
+// selfVariableKey uniquely identifies a self-variable for one event on one map.
+// TemplateEvent.js extension: supports numeric indices (not just A/B/C/D).
+type selfVariableKey struct {
+	MapID   int
+	EventID int
+	Index   int // e.g., 13=X, 14=Y, 15=Dir, 16=Day, 17=Seed for RandomPos
+}
+
 // pendingChange represents a pending database write.
 type pendingChange struct {
 	typ string // "switch", "variable", "selfswitch"
@@ -25,36 +34,49 @@ type pendingChange struct {
 	val interface{}
 }
 
+// VariableChangeCallback is called when a global variable changes.
+type VariableChangeCallback func(variableID, value int)
+
+// SwitchChangeCallback is called when a global switch changes.
+type SwitchChangeCallback func(switchID int, value bool)
+
 // GameState holds server-authoritative game switches, variables, and self-switches.
 // Switches and variables are global (shared across all maps) per RMMV convention.
 // Self-switches are per (map, event, channel).
+// Self-variables are TemplateEvent.js extension supporting numeric indices.
 //
 // State is persisted to the database: loaded on startup, saved with batching.
 type GameState struct {
-	mu           sync.RWMutex
-	switches     map[int]bool
-	variables    map[int]int
-	selfSwitches map[selfSwitchKey]bool
-	db           *gorm.DB // nil = no persistence (tests)
-	logger       *zap.Logger
+	mu            sync.RWMutex
+	switches      map[int]bool
+	variables     map[int]int
+	selfSwitches  map[selfSwitchKey]bool
+	selfVariables map[selfVariableKey]int // TemplateEvent.js extension
+	db            *gorm.DB                // nil = no persistence (tests)
+	logger        *zap.Logger
 
 	// Batch persistence
 	pending     map[string]pendingChange
 	pendingMu   sync.Mutex
 	flushTicker *time.Ticker
 	stopCh      chan struct{}
+
+	// Change callbacks for broadcasting to clients (TemplateEvent.js hook)
+	onVariableChange VariableChangeCallback
+	onSwitchChange   SwitchChangeCallback
 }
 
 // NewGameState creates an empty GameState with optional DB persistence.
 func NewGameState(db *gorm.DB, logger *zap.Logger) *GameState {
 	gs := &GameState{
-		switches:     make(map[int]bool),
-		variables:    make(map[int]int),
-		selfSwitches: make(map[selfSwitchKey]bool),
-		db:           db,
-		logger:       logger,
-		pending:      make(map[string]pendingChange),
-		stopCh:       make(chan struct{}),
+		switches:      make(map[int]bool),
+		variables:     make(map[int]int),
+		selfSwitches:  make(map[selfSwitchKey]bool),
+		selfVariables: make(map[selfVariableKey]int),
+		db:            db,
+		logger:        logger,
+		pending:       make(map[string]pendingChange),
+		stopCh:        make(chan struct{}),
 	}
 
 	// Start background flusher if DB is available.
@@ -88,6 +110,7 @@ func (gs *GameState) batchFlusher() {
 }
 
 // Flush writes all pending changes to the database.
+// Retries on SQLite busy errors.
 func (gs *GameState) Flush() {
 	if gs.db == nil {
 		return
@@ -107,42 +130,73 @@ func (gs *GameState) Flush() {
 	gs.pending = make(map[string]pendingChange)
 	gs.pendingMu.Unlock()
 
-	// Batch write to database.
-	err := gs.db.Transaction(func(tx *gorm.DB) error {
-		for _, ch := range changes {
-			switch ch.typ {
-			case "switch":
-				id := ch.id.(int)
-				val := ch.val.(bool)
-				if err := tx.Clauses(clause.OnConflict{
-					DoUpdates: clause.AssignmentColumns([]string{"value"}),
-				}).Create(&model.GameSwitch{SwitchID: id, Value: val}).Error; err != nil {
-					return err
-				}
-			case "variable":
-				id := ch.id.(int)
-				val := ch.val.(int)
-				if err := tx.Clauses(clause.OnConflict{
-					DoUpdates: clause.AssignmentColumns([]string{"value"}),
-				}).Create(&model.GameVariable{VariableID: id, Value: val}).Error; err != nil {
-					return err
-				}
-			case "selfswitch":
-				key := ch.id.(selfSwitchKey)
-				val := ch.val.(bool)
-				if err := tx.Clauses(clause.OnConflict{
-					DoUpdates: clause.AssignmentColumns([]string{"value"}),
-				}).Create(&model.GameSelfSwitch{MapID: key.MapID, EventID: key.EventID, Ch: key.Ch, Value: val}).Error; err != nil {
-					return err
+	// Batch write to database with retry on busy error.
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		err = gs.db.Transaction(func(tx *gorm.DB) error {
+			for _, ch := range changes {
+				switch ch.typ {
+				case "switch":
+					id := ch.id.(int)
+					val := ch.val.(bool)
+					if err := tx.Clauses(clause.OnConflict{
+						DoUpdates: clause.AssignmentColumns([]string{"value"}),
+					}).Create(&model.GameSwitch{SwitchID: id, Value: val}).Error; err != nil {
+						return err
+					}
+				case "variable":
+					id := ch.id.(int)
+					val := ch.val.(int)
+					if err := tx.Clauses(clause.OnConflict{
+						DoUpdates: clause.AssignmentColumns([]string{"value"}),
+					}).Create(&model.GameVariable{VariableID: id, Value: val}).Error; err != nil {
+						return err
+					}
+				case "selfswitch":
+					key := ch.id.(selfSwitchKey)
+					val := ch.val.(bool)
+					if err := tx.Clauses(clause.OnConflict{
+						DoUpdates: clause.AssignmentColumns([]string{"value"}),
+					}).Create(&model.GameSelfSwitch{MapID: key.MapID, EventID: key.EventID, Ch: key.Ch, Value: val}).Error; err != nil {
+						return err
+					}
+				case "selfvariable":
+					key := ch.id.(selfVariableKey)
+					val := ch.val.(int)
+					if err := tx.Clauses(clause.OnConflict{
+						DoUpdates: clause.AssignmentColumns([]string{"value"}),
+					}).Create(&model.GameSelfVariable{MapID: key.MapID, EventID: key.EventID, Index: key.Index, Value: val}).Error; err != nil {
+						return err
+					}
 				}
 			}
+			return nil
+		})
+		if err == nil {
+			return // success
 		}
-		return nil
-	})
+		// Check if it's a busy error
+		if isSQLiteBusy(err) && attempt < 2 {
+			time.Sleep(time.Duration(attempt+1) * 50 * time.Millisecond)
+			continue
+		}
+		break // non-busy error or last attempt
+	}
 
 	if err != nil && gs.logger != nil {
 		gs.logger.Error("failed to flush game state", zap.Error(err))
 	}
+}
+
+// isSQLiteBusy checks if the error is a SQLite busy/database locked error.
+func isSQLiteBusy(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "database is locked") ||
+		strings.Contains(errStr, "busy") ||
+		strings.Contains(errStr, "SQLITE_BUSY")
 }
 
 // queueChange adds a change to the pending queue.
@@ -188,6 +242,15 @@ func (gs *GameState) LoadFromDB() error {
 		gs.selfSwitches[selfSwitchKey{MapID: ss.MapID, EventID: ss.EventID, Ch: ss.Ch}] = ss.Value
 	}
 
+	// Load self-variables (TemplateEvent.js extension).
+	var selfVariables []model.GameSelfVariable
+	if err := gs.db.Find(&selfVariables).Error; err != nil {
+		return err
+	}
+	for _, sv := range selfVariables {
+		gs.selfVariables[selfVariableKey{MapID: sv.MapID, EventID: sv.EventID, Index: sv.Index}] = sv.Value
+	}
+
 	return nil
 }
 
@@ -219,9 +282,11 @@ func (gs *GameState) GetVariable(id int) int {
 }
 
 // SetVariable sets the value of a global variable and queues it for persistence.
+// Triggers onVariableChange callback if set (for broadcasting to clients).
 func (gs *GameState) SetVariable(id int, val int) {
 	gs.mu.Lock()
 	gs.variables[id] = val
+	onChange := gs.onVariableChange
 	gs.mu.Unlock()
 
 	gs.queueChange(fmt.Sprintf("var:%d", id), pendingChange{
@@ -229,6 +294,11 @@ func (gs *GameState) SetVariable(id int, val int) {
 		id:  id,
 		val: val,
 	})
+
+	// Trigger callback outside of lock
+	if onChange != nil {
+		onChange(id, val)
+	}
 }
 
 // GetSelfSwitch returns the value of a self-switch for a specific event.
@@ -247,6 +317,43 @@ func (gs *GameState) SetSelfSwitch(mapID, eventID int, ch string, val bool) {
 
 	gs.queueChange(fmt.Sprintf("ss:%d:%d:%s", mapID, eventID, ch), pendingChange{
 		typ: "selfswitch",
+		id:  key,
+		val: val,
+	})
+}
+
+// SetOnVariableChange sets the callback for variable changes.
+func (gs *GameState) SetOnVariableChange(cb VariableChangeCallback) {
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+	gs.onVariableChange = cb
+}
+
+// SetOnSwitchChange sets the callback for switch changes.
+func (gs *GameState) SetOnSwitchChange(cb SwitchChangeCallback) {
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+	gs.onSwitchChange = cb
+}
+
+// GetSelfVariable returns the value of a self-variable for a specific event.
+// TemplateEvent.js extension: index can be any integer (13-17 for RandomPos).
+func (gs *GameState) GetSelfVariable(mapID, eventID, index int) int {
+	gs.mu.RLock()
+	defer gs.mu.RUnlock()
+	return gs.selfVariables[selfVariableKey{MapID: mapID, EventID: eventID, Index: index}]
+}
+
+// SetSelfVariable sets the value of a self-variable for a specific event and queues it for persistence.
+// TemplateEvent.js extension: index can be any integer (13-17 for RandomPos).
+func (gs *GameState) SetSelfVariable(mapID, eventID, index, val int) {
+	key := selfVariableKey{MapID: mapID, EventID: eventID, Index: index}
+	gs.mu.Lock()
+	gs.selfVariables[key] = val
+	gs.mu.Unlock()
+
+	gs.queueChange(fmt.Sprintf("sv:%d:%d:%d", mapID, eventID, index), pendingChange{
+		typ: "selfvariable",
 		id:  key,
 		val: val,
 	})

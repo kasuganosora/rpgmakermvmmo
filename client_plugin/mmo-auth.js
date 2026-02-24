@@ -105,19 +105,25 @@
             'color:#E8E8E8',
             'border:1px solid #2A2A44',
             'border-radius:3px',
-            'z-index:10',
+            'z-index:10000',
             '-webkit-user-select:text',
             'user-select:text',
             'outline:none',
             'padding:2px 8px',
             'box-sizing:border-box',
-            'transition:border-color 0.2s'
+            'transition:border-color 0.2s',
+            'pointer-events:auto'
         ].join(';');
         el.addEventListener('focus', function () { el.style.borderColor = '#BFA530'; });
         el.addEventListener('blur', function () { el.style.borderColor = '#2A2A44'; });
         // Prevent RMMV TouchInput from stealing focus/click
-        el.addEventListener('mousedown', function (e) { e.stopPropagation(); });
-        el.addEventListener('touchstart', function (e) { e.stopPropagation(); });
+        el.addEventListener('mousedown', function (e) { e.stopPropagation(); el.focus(); });
+        el.addEventListener('touchstart', function (e) { e.stopPropagation(); el.focus(); });
+        el.addEventListener('click', function (e) { e.stopPropagation(); el.focus(); });
+        // Prevent RPG Maker from stealing keyboard input
+        el.addEventListener('keydown', function (e) { e.stopPropagation(); });
+        el.addEventListener('keyup', function (e) { e.stopPropagation(); });
+        el.addEventListener('keypress', function (e) { e.stopPropagation(); });
         document.body.appendChild(el);
         _trackedInputs.push({ el: el, gx: gameX, gy: gameY, gw: w, gh: h });
         _repositionInputs();
@@ -304,12 +310,33 @@
         // ── Keyboard shortcuts ──
         var self = this;
         this._userInput.addEventListener('keydown', function (e) {
-            if (e.keyCode === 13) self._passInput.focus();
+            if (e.keyCode === 13) { e.stopPropagation(); self._passInput.focus(); }
         });
         this._passInput.addEventListener('keydown', function (e) {
-            if (e.keyCode === 13) self._doLogin();
+            if (e.keyCode === 13) { e.stopPropagation(); self._doLogin(); }
         });
-        this._focusTimer = setTimeout(function () { self._userInput.focus(); }, 100);
+    };
+
+    Scene_Login.prototype.start = function () {
+        Scene_Base.prototype.start.call(this);
+        // Ensure inputs are visible and focusable
+        this._inputs.forEach(function (el) {
+            el.style.display = 'block';
+            el.style.visibility = 'visible';
+            el.style.opacity = '1';
+        });
+        var self = this;
+        this._focusTimer = setTimeout(function () {
+            if (self._userInput) self._userInput.focus();
+        }, 200);
+    };
+
+    Scene_Login.prototype.stop = function () {
+        // Hide inputs when scene is stopped (but not terminated yet)
+        this._inputs.forEach(function (el) {
+            el.style.display = 'none';
+        });
+        Scene_Base.prototype.stop.call(this);
     };
 
     Scene_Login.prototype._doLogin = function () {
@@ -692,7 +719,24 @@
         var dx = dlg.x + (dlg.width - inputW) / 2;
         var dy = dlg.y + dlg._titleH + 8 + 2 * 20 + 8; // after title + 2 text lines + gap
         self._delPwInput = makeL2Input('password', 'Enter password', dx, dy, inputW, 28);
-        this._delFocusTimer = setTimeout(function () { self._delPwInput.focus(); }, 50);
+        self._delPwInput.addEventListener('keydown', function (e) {
+            if (e.keyCode === 13) { e.stopPropagation(); }
+        });
+        this._delFocusTimer = setTimeout(function () {
+            if (self._delPwInput) {
+                self._delPwInput.style.display = 'block';
+                self._delPwInput.style.visibility = 'visible';
+                self._delPwInput.focus();
+            }
+        }, 100);
+    };
+
+    Scene_CharacterSelect.prototype.stop = function () {
+        // Hide delete password input when scene is stopped
+        if (this._delPwInput) {
+            this._delPwInput.style.display = 'none';
+        }
+        Scene_Base.prototype.stop.call(this);
     };
 
     Scene_CharacterSelect.prototype.terminate = function () {
@@ -802,9 +846,30 @@
 
         // ── Keyboard ──
         this._nameInput.addEventListener('keydown', function (e) {
-            if (e.keyCode === 13) self._doCreate();
+            if (e.keyCode === 13) { e.stopPropagation(); self._doCreate(); }
         });
-        this._focusTimer = setTimeout(function () { self._nameInput.focus(); }, 100);
+    };
+
+    Scene_CharacterCreate.prototype.start = function () {
+        Scene_Base.prototype.start.call(this);
+        // Ensure inputs are visible and focusable
+        this._inputs.forEach(function (el) {
+            el.style.display = 'block';
+            el.style.visibility = 'visible';
+            el.style.opacity = '1';
+        });
+        var self = this;
+        this._focusTimer = setTimeout(function () {
+            if (self._nameInput) self._nameInput.focus();
+        }, 200);
+    };
+
+    Scene_CharacterCreate.prototype.stop = function () {
+        // Hide inputs when scene is stopped
+        this._inputs.forEach(function (el) {
+            el.style.display = 'none';
+        });
+        Scene_Base.prototype.stop.call(this);
     };
 
     Scene_CharacterCreate.prototype._createFaceButton = function (x, y, size, preset, index) {

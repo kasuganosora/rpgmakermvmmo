@@ -35,6 +35,13 @@
         var ch = new Game_Character();
         var walkName = data.walk_name || '';
         var walkIndex = data.walk_index || 0;
+        var tileId = data.tile_id || 0;
+        
+        // If tile_id is set, this is a tile graphic event (not supported yet, hide it)
+        if (tileId > 0) {
+            walkName = '';
+        }
+        
         ch.setImage(walkName, walkIndex);
         ch.setPosition(data.x || 0, data.y || 0);
         ch.setDirection(data.dir || 2);
@@ -48,6 +55,11 @@
         this._moveQueue = [];
         // Hide NPCs with no sprite image (invisible events like transfer triggers).
         if (!walkName) this.visible = false;
+        
+        // Debug log for events with unusual sprites
+        if (walkName && walkName.indexOf('item') >= 0 || walkName.indexOf('mark') >= 0 || walkName.indexOf('arrow') >= 0) {
+            console.log('[MMO-NPC] Event ' + data.event_id + ' (' + data.name + ') uses sprite: ' + walkName);
+        }
     };
 
     Sprite_ServerNPC.prototype.syncData = function (data) {
@@ -349,11 +361,44 @@
         var faceIndex = data.face_index || 0;
         var lines = data.lines || [];
 
+        // Ensure we're on Scene_Map before showing dialog
+        if (!(SceneManager._scene instanceof Scene_Map)) {
+            console.warn('[MMO-NPC] Received npc_dialog but not on Scene_Map, queueing');
+            // Queue the dialog for when we enter the map
+            $MMO._queuedDialog = data;
+            return;
+        }
+
         $gameMessage.setFaceImage(face, faceIndex);
         for (var i = 0; i < lines.length; i++) {
             $gameMessage.add(lines[i]);
         }
+        console.log('[MMO-NPC] Dialog displayed, _npcDialogPending = true');
     });
+
+    // Process any queued dialogs when entering Scene_Map
+    var _Scene_Map_start_npc = Scene_Map.prototype.start;
+    Scene_Map.prototype.start = function () {
+        _Scene_Map_start_npc.call(this);
+        // Send scene_ready so the server knows it can start autorun events.
+        if ($MMO && $MMO.send) {
+            $MMO.send('scene_ready', {});
+            console.log('[MMO-NPC] scene_ready sent');
+        }
+        // Process queued dialog if any
+        if ($MMO._queuedDialog) {
+            console.log('[MMO-NPC] Processing queued dialog');
+            var data = $MMO._queuedDialog;
+            $MMO._queuedDialog = null;
+            $MMO._npcDialogActive = true;
+            $MMO._npcDialogPending = true;
+            $gameMessage.setFaceImage(data.face || '', data.face_index || 0);
+            var lines = data.lines || [];
+            for (var i = 0; i < lines.length; i++) {
+                $gameMessage.add(lines[i]);
+            }
+        }
+    };
 
     $MMO.on('npc_choices', function (data) {
         if (!data || !data.choices) return;
@@ -386,17 +431,8 @@
         _Window_Message_terminateMessage.call(this);
         if ($MMO._npcDialogPending) {
             $MMO._npcDialogPending = false;
+            console.log('[MMO-NPC] Sending npc_dialog_ack');
             $MMO.send('npc_dialog_ack', {});
-        }
-    };
-
-    // Notify server that Scene_Map is fully loaded and ready for dialogs.
-    var _Scene_Map_start_npc = Scene_Map.prototype.start;
-    Scene_Map.prototype.start = function () {
-        _Scene_Map_start_npc.call(this);
-        // Send scene_ready so the server knows it can start autorun events.
-        if ($MMO && $MMO.send) {
-            $MMO.send('scene_ready', {});
         }
     };
 

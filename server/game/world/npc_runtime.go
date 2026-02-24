@@ -1,6 +1,11 @@
 package world
 
 import (
+	"math/rand"
+	"regexp"
+	"strconv"
+	"strings"
+
 	"github.com/kasuganosora/rpgmakermvmmo/server/resource"
 	"go.uber.org/zap"
 )
@@ -26,12 +31,12 @@ type NPCRuntime struct {
 // RMMV convention: pages are checked from last to first; the first match wins.
 // actorValid and itemValid are skipped (server doesn't track per-player actor/item conditions).
 func selectPage(ev *resource.MapEvent, mapID int, state GameStateReader) *resource.EventPage {
+	if len(ev.Pages) == 0 {
+		return nil
+	}
 	if state == nil {
 		// No game state — return first page as default.
-		if len(ev.Pages) > 0 {
-			return ev.Pages[0]
-		}
-		return nil
+		return ev.Pages[0]
 	}
 	for i := len(ev.Pages) - 1; i >= 0; i-- {
 		page := ev.Pages[i]
@@ -42,7 +47,8 @@ func selectPage(ev *resource.MapEvent, mapID int, state GameStateReader) *resour
 			return page
 		}
 	}
-	return nil
+	// No conditions met — return first page as default (RMMV behavior).
+	return ev.Pages[0]
 }
 
 // meetsConditions checks whether all enabled conditions on a page are satisfied.
@@ -64,6 +70,8 @@ func meetsConditions(cond *resource.EventPageConditions, mapID, eventID int, sta
 }
 
 // populateNPCs creates NPCRuntime entries for all events on this map.
+// Implements TemplateEvent.js RandomPos feature: events with <Random> meta tag
+// are randomly placed on passable tiles matching the RandomPos tile type.
 func (room *MapRoom) populateNPCs() {
 	if room.res == nil {
 		return
@@ -72,6 +80,11 @@ func (room *MapRoom) populateNPCs() {
 	if !ok {
 		return
 	}
+
+	// Check if map has RandomPos meta (TemplateEvent.js feature)
+	mapHasRandomPos := extractMetaInt(md.Note, "RandomPos") > 0
+	randomTileID := extractMetaInt(md.Note, "RandomPos")
+
 	for _, ev := range md.Events {
 		if ev == nil || len(ev.Pages) == 0 {
 			continue
@@ -81,22 +94,46 @@ func (room *MapRoom) populateNPCs() {
 		if activePage != nil && activePage.Image.Direction > 0 {
 			dir = activePage.Image.Direction
 		}
+
+		// Start with original position
+		x, y := ev.X, ev.Y
+
+		// TemplateEvent.js: Check for <Random> meta tag and RandomPos map setting
+		if mapHasRandomPos {
+			randomType := extractMetaFloat(ev.Note, "Random")
+			hasRandomMeta := randomType > 0 || strings.Contains(ev.Note, "<Random>")
+
+			if hasRandomMeta && room.passMap != nil {
+				// Try to find a random passable position (matching TemplateEvent.js logic)
+				newX, newY := room.findRandomPassablePosition(randomTileID, 100)
+				if newX >= 0 {
+					x, y = newX, newY
+					room.logger.Debug("NPC randomly positioned",
+						zap.Int("event_id", ev.ID),
+						zap.String("name", ev.Name),
+						zap.Int("from_x", ev.X), zap.Int("from_y", ev.Y),
+						zap.Int("to_x", x), zap.Int("to_y", y))
+				}
+			}
+		}
+
 		npc := &NPCRuntime{
 			EventID:    ev.ID,
 			Name:       ev.Name,
-			X:          ev.X,
-			Y:          ev.Y,
+			X:          x,
+			Y:          y,
 			Dir:        dir,
 			ActivePage: activePage,
 			MapEvent:   ev,
 		}
 		room.npcs = append(room.npcs, npc)
+
 		// Log template events with OriginalPages for debugging transfer detection.
 		if ev.OriginalPages != nil {
 			room.logger.Info("NPC with OriginalPages",
 				zap.Int("event_id", ev.ID),
 				zap.String("name", ev.Name),
-				zap.Int("x", ev.X), zap.Int("y", ev.Y),
+				zap.Int("x", x), zap.Int("y", y),
 				zap.Int("orig_pages", len(ev.OriginalPages)),
 				zap.Int("tmpl_pages", len(ev.Pages)),
 				zap.Bool("has_active", activePage != nil))
@@ -105,6 +142,70 @@ func (room *MapRoom) populateNPCs() {
 	room.logger.Info("populated NPCs",
 		zap.Int("map_id", room.MapID),
 		zap.Int("count", len(room.npcs)))
+}
+
+// findRandomPassablePosition finds a random passable tile on the map.
+// Returns (-1, -1) if no suitable position found after maxAttempts.
+func (room *MapRoom) findRandomPassablePosition(tileID int, maxAttempts int) (int, int) {
+	if room.passMap == nil {
+		return -1, -1
+	}
+
+	w, h := room.passMap.Width, room.passMap.Height
+	for i := 0; i < maxAttempts; i++ {
+		rx := rand.Intn(w)
+		ry := rand.Intn(h)
+
+		// Check if position is passable in at least one direction
+		canPass := room.passMap.CanPass(rx, ry, 2) ||
+			room.passMap.CanPass(rx, ry, 4) ||
+			room.passMap.CanPass(rx, ry, 6) ||
+			room.passMap.CanPass(rx, ry, 8)
+
+		if canPass {
+			// Check if no other NPC is already at this position
+			occupied := false
+			for _, npc := range room.npcs {
+				if npc.X == rx && npc.Y == ry {
+					occupied = true
+					break
+				}
+			}
+			if !occupied {
+				return rx, ry
+			}
+		}
+	}
+	return -1, -1
+}
+
+// extractMetaInt extracts an integer meta value from note text.
+// Example: <RandomPos: 5> or <Random: 1>
+func extractMetaInt(note, key string) int {
+	re := regexp.MustCompile(`<` + regexp.QuoteMeta(key) + `:\s*(\d+)>`)
+	matches := re.FindStringSubmatch(note)
+	if len(matches) >= 2 {
+		if v, err := strconv.Atoi(matches[1]); err == nil {
+			return v
+		}
+	}
+	return 0
+}
+
+// extractMetaFloat extracts a float meta value from note text.
+func extractMetaFloat(note, key string) float64 {
+	re := regexp.MustCompile(`<` + regexp.QuoteMeta(key) + `:\s*([\d.]+)>`)
+	matches := re.FindStringSubmatch(note)
+	if len(matches) >= 2 {
+		if v, err := strconv.ParseFloat(matches[1], 64); err == nil {
+			return v
+		}
+	}
+	// Also check for simple tag presence
+	if strings.Contains(note, "<"+key+">") {
+		return 1.0 // default value when tag exists without value
+	}
+	return 0
 }
 
 // AllNPCs returns a snapshot slice of all NPCRuntime entries in the room.
@@ -128,6 +229,23 @@ func (room *MapRoom) GetNPC(eventID int) *NPCRuntime {
 	return nil
 }
 
+// isFunctionalMarker checks if the given image name is a functional marker
+// (not a real NPC character). These should be hidden from players.
+func isFunctionalMarker(name string) bool {
+	// Common functional marker patterns
+	markers := []string{
+		"item", "arrow", "mark", "sign", "label", "tag",
+		"!", // RMMV default marker prefix for objects like "!Chest", "!Door"
+	}
+	lower := strings.ToLower(name)
+	for _, m := range markers {
+		if strings.Contains(lower, m) {
+			return true
+		}
+	}
+	return false
+}
+
 // NPCSnapshot returns a snapshot of all NPCs suitable for map_init.
 func (room *MapRoom) NPCSnapshot() []map[string]interface{} {
 	room.mu.RLock()
@@ -142,8 +260,18 @@ func (room *MapRoom) NPCSnapshot() []map[string]interface{} {
 			"dir":      n.Dir,
 		}
 		if n.ActivePage != nil {
-			snap["walk_name"] = n.ActivePage.Image.CharacterName
-			snap["walk_index"] = n.ActivePage.Image.CharacterIndex
+			img := n.ActivePage.Image
+			walkName := img.CharacterName
+			// If TileID > 0, this event uses a tile graphic (not a character sprite).
+			if img.TileID > 0 {
+				walkName = ""
+			}
+			// Hide functional markers (arrows, item labels, etc.)
+			if isFunctionalMarker(walkName) {
+				walkName = ""
+			}
+			snap["walk_name"] = walkName
+			snap["walk_index"] = img.CharacterIndex
 			snap["priority_type"] = n.ActivePage.PriorityType
 			snap["move_type"] = n.ActivePage.MoveType
 			snap["step_anime"] = n.ActivePage.StepAnime
@@ -391,8 +519,18 @@ func (room *MapRoom) NPCSnapshotForPlayer(state GameStateReader) []map[string]in
 			"dir":      n.Dir,
 		}
 		if activePage != nil {
-			snap["walk_name"] = activePage.Image.CharacterName
-			snap["walk_index"] = activePage.Image.CharacterIndex
+			img := activePage.Image
+			walkName := img.CharacterName
+			// If TileID > 0, this event uses a tile graphic (not a character sprite).
+			if img.TileID > 0 {
+				walkName = ""
+			}
+			// Hide functional markers (arrows, item labels, etc.)
+			if isFunctionalMarker(walkName) {
+				walkName = ""
+			}
+			snap["walk_name"] = walkName
+			snap["walk_index"] = img.CharacterIndex
 			snap["priority_type"] = activePage.PriorityType
 			snap["move_type"] = activePage.MoveType
 			snap["step_anime"] = activePage.StepAnime

@@ -17,8 +17,10 @@ type MonsterInstance struct {
 	ID       int64  `json:"id"`
 	EnemyID  int    `json:"enemy_id"`
 	Name     string `json:"name"`
-	X, Y     int    `json:"x"`
-	HP, MaxHP int   `json:"hp"`
+	X        int    `json:"x"`
+	Y        int    `json:"y"`
+	HP       int    `json:"hp"`
+	MaxHP    int    `json:"max_hp"`
 }
 
 // DropRuntimeEntry is a live drop on the map floor.
