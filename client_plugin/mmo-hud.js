@@ -93,10 +93,30 @@
         L2_Base.prototype.initialize.call(this, Graphics.boxWidth - MM_SIZE - 4, 4, MM_SIZE, MM_SIZE);
         this._playerDots = [];
         this._monsterDots = [];
+        this._npcDots = [];  // Array of {event_id, x, y}
         this._terrainCache = null;
         this._cachedMapId = -1;
-        this._serverPass = null; // server passability data from map_init
+        this._lastPx = -1;
+        this._lastPy = -1;
         $MMO.makeDraggable(this, 'minimap');
+    };
+
+    // Update NPC from server sync data
+    Minimap.prototype.updateNPC = function (eventId, x, y) {
+        // Find existing NPC
+        var found = false;
+        for (var i = 0; i < this._npcDots.length; i++) {
+            if (this._npcDots[i].event_id === eventId) {
+                this._npcDots[i].x = x;
+                this._npcDots[i].y = y;
+                found = true;
+                break;
+            }
+        }
+        // Add new NPC if not found
+        if (!found) {
+            this._npcDots.push({ event_id: eventId, x: x, y: y });
+        }
     };
 
     Minimap.prototype.update = function () {
@@ -107,96 +127,166 @@
     Minimap.prototype.standardPadding = function () { return 0; };
 
     Minimap.prototype.setPassability = function (data) {
-        this._serverPass = data;
-        // Force terrain rebuild on next refresh.
+        // Force rebuild on next refresh
         this._cachedMapId = -1;
     };
 
+    // Build terrain using BFS from player position
+    // Only reachable areas are drawn, walls and unreachable areas are transparent
     Minimap.prototype._buildTerrain = function () {
-        var mw, mh;
-        var passData = this._serverPass; // from map_init
-        if (passData && passData.width && passData.height) {
-            mw = passData.width;
-            mh = passData.height;
-        } else if ($gameMap && $gameMap.width()) {
-            mw = $gameMap.width();
-            mh = $gameMap.height();
-        } else {
-            return;
-        }
-
+        if (!$gameMap || !$gameMap.width()) return;
+        
+        var mw = $gameMap.width();
+        var mh = $gameMap.height();
         var cw = this.cw(), ch = this.ch();
-        var scaleX = cw / mw, scaleY = ch / mh;
-
+        
+        // Calculate scale to fit map within minimap
+        var scaleX = cw / mw;
+        var scaleY = ch / mh;
+        var scale = Math.min(scaleX, scaleY);
+        
+        // Calculate cell size
+        var cellSize = Math.max(1, Math.floor(scale));
+        
+        // Calculate map pixel dimensions and center offset
+        var mapW = mw * cellSize;
+        var mapH = mh * cellSize;
+        var offsetX = Math.floor((cw - mapW) / 2);
+        var offsetY = Math.floor((ch - mapH) / 2);
+        
+        // Create bitmap
         this._terrainCache = new Bitmap(cw, ch);
         var bmp = this._terrainCache;
-        bmp.fillRect(0, 0, cw, ch, '#0a0a1a');
+        bmp.clear(); // Transparent background
+        
+        // Store for marker positioning
+        this._cellSize = cellSize;
+        this._offsetX = offsetX;
+        this._offsetY = offsetY;
+        
+        // Build passability grid
+        var passable = new Array(mw * mh);
         for (var y = 0; y < mh; y++) {
             for (var x = 0; x < mw; x++) {
-                var passable;
-                if (passData && passData.tiles) {
-                    // Use server-authoritative passability data.
-                    passable = passData.tiles[y * mw + x] === 1;
-                } else {
-                    // Fallback to client-side check.
-                    passable = $gameMap.isPassable(x, y, 2) || $gameMap.isPassable(x, y, 4) ||
-                               $gameMap.isPassable(x, y, 6) || $gameMap.isPassable(x, y, 8);
-                }
-                if (passable) {
-                    var px = Math.floor(x * scaleX);
-                    var py = Math.floor(y * scaleY);
-                    var pw = Math.max(1, Math.ceil(scaleX));
-                    var ph = Math.max(1, Math.ceil(scaleY));
-                    bmp.fillRect(px, py, pw, ph, '#1a3a1a');
+                passable[y * mw + x] = $gameMap.isValid(x, y) && $gameMap.checkPassage(x, y, 0x0f);
+            }
+        }
+        
+        // BFS from player position to find reachable tiles
+        var reachable = new Array(mw * mh).fill(false);
+        var queue = [];
+        var startX = $gamePlayer.x;
+        var startY = $gamePlayer.y;
+        
+        if ($gameMap.isValid(startX, startY) && passable[startY * mw + startX]) {
+            queue.push(startX, startY);
+            reachable[startY * mw + startX] = true;
+            
+            var head = 0;
+            while (head < queue.length) {
+                var cx = queue[head++];
+                var cy = queue[head++];
+                var cidx = cy * mw + cx;
+                
+                // Four directions: up, right, down, left
+                var dirs = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+                for (var i = 0; i < 4; i++) {
+                    var nx = cx + dirs[i][0];
+                    var ny = cy + dirs[i][1];
+                    var nidx = ny * mw + nx;
+                    
+                    if (nx >= 0 && nx < mw && ny >= 0 && ny < mh && !reachable[nidx] && passable[nidx]) {
+                        reachable[nidx] = true;
+                        queue.push(nx, ny);
+                    }
                 }
             }
         }
-        this._cachedMapId = $gameMap ? $gameMap.mapId() : -1;
+        
+        // Draw only reachable areas (green), everything else stays transparent
+        for (var y = 0; y < mh; y++) {
+            for (var x = 0; x < mw; x++) {
+                if (!reachable[y * mw + x]) continue;
+                
+                var px = offsetX + x * cellSize;
+                var py = offsetY + y * cellSize;
+                
+                if (px < 0 || py < 0 || px >= cw || py >= ch) continue;
+                
+                // Single green color for all passable areas
+                bmp.fillRect(px, py, cellSize, cellSize, '#4a9a4a');
+            }
+        }
+        
+        this._cachedMapId = $gameMap.mapId();
     };
 
-    Minimap.prototype.setPlayers = function (p) { this._playerDots = p; this.refresh(); };
-    Minimap.prototype.setMonsters = function (m) { this._monsterDots = m; this.refresh(); };
+    Minimap.prototype.setPlayers = function (p) { this._playerDots = p; };
+    Minimap.prototype.setMonsters = function (m) { this._monsterDots = m; };
+    Minimap.prototype.setNPCs = function (n) { this._npcDots = n; };
 
     Minimap.prototype.refresh = function () {
-        var c = this.bmp();
-        c.clear();
         if (!$gameMap || !$gameMap.width()) return;
 
-        if (this._cachedMapId !== $gameMap.mapId()) this._buildTerrain();
-
-        var cw = this.cw(), ch = this.ch();
-        var mw = $gameMap.width(), mh = $gameMap.height();
-        var scaleX = cw / mw, scaleY = ch / mh;
-
-        // Terrain
-        if (this._terrainCache) {
-            c.blt(this._terrainCache, 0, 0, cw, ch, 0, 0);
-        } else {
-            c.fillRect(0, 0, cw, ch, '#222');
+        // Rebuild terrain on map change
+        if (this._cachedMapId !== $gameMap.mapId()) {
+            this._buildTerrain();
         }
 
-        // Border
-        L2_Theme.strokeRoundRect(c, 0, 0, cw, ch, L2_Theme.cornerRadius, L2_Theme.borderDark);
+        var cw = this.cw(), ch = this.ch();
+        var c = this.bmp();
+
+        // Clear to transparent first
+        c.clear();
+        
+        // Copy terrain (clamped to actual bitmap size)
+        if (this._terrainCache) {
+            var tw = Math.min(this._terrainCache.width, cw);
+            var th = Math.min(this._terrainCache.height, ch);
+            c.blt(this._terrainCache, 0, 0, tw, th, 0, 0);
+        }
 
         // North indicator
         c.fontSize = 11;
         c.textColor = L2_Theme.textWhite;
         c.drawText('N', 0, 2, cw, 12, 'center');
 
-        // Self (green)
-        var px = Math.round($gamePlayer.x * scaleX);
-        var py = Math.round($gamePlayer.y * scaleY);
-        c.fillRect(px - 2, py - 2, 5, 5, '#44FF44');
+        var cellSize = this._cellSize || Math.max(1, Math.floor(Math.min(cw / $gameMap.width(), ch / $gameMap.height())));
+        var offsetX = this._offsetX || Math.floor((cw - $gameMap.width() * cellSize) / 2);
+        var offsetY = this._offsetY || Math.floor((ch - $gameMap.height() * cellSize) / 2);
 
-        // Other players (blue)
-        this._playerDots.forEach(function (p) {
-            c.fillRect(Math.round(p.x * scaleX) - 1, Math.round(p.y * scaleY) - 1, 4, 4, '#4488FF');
-        });
+        // Self (bright green with crosshair) - use cell center
+        var px = offsetX + Math.round($gamePlayer.x * cellSize + cellSize / 2);
+        var py = offsetY + Math.round($gamePlayer.y * cellSize + cellSize / 2);
+        
+        c.fillRect(px - 6, py - 1, 13, 3, '#88FF88');
+        c.fillRect(px - 1, py - 6, 3, 13, '#88FF88');
+        c.fillRect(px - 2, py - 2, 5, 5, '#CCFFCC');
+        c.fillRect(px - 1, py - 1, 3, 3, '#FFFFFF');
 
-        // Monsters (red)
-        this._monsterDots.forEach(function (m) {
-            c.fillRect(Math.round(m.x * scaleX) - 1, Math.round(m.y * scaleY) - 1, 3, 3, '#FF4444');
-        });
+        // Other players (blue) - use cell center
+        for (var i = 0; i < this._playerDots.length; i++) {
+            var p = this._playerDots[i];
+            var px2 = offsetX + Math.round(p.x * cellSize + cellSize / 2);
+            var py2 = offsetY + Math.round(p.y * cellSize + cellSize / 2);
+            c.fillRect(px2 - 1, py2 - 1, 4, 4, '#4488FF');
+        }
+
+        // Monsters (red) - use cell center
+        for (var i = 0; i < this._monsterDots.length; i++) {
+            var m = this._monsterDots[i];
+            var mx = offsetX + Math.round(m.x * cellSize + cellSize / 2);
+            var my = offsetY + Math.round(m.y * cellSize + cellSize / 2);
+            c.fillRect(mx - 1, my - 1, 3, 3, '#FF4444');
+        }
+
+        // NPCs (yellow) - use cell center, 3px dot
+        for (var i = 0; i < this._npcDots.length; i++) {
+            var n = this._npcDots[i];
+            var nx = offsetX + Math.round(n.x * cellSize + cellSize / 2);
+            var ny = offsetY + Math.round(n.y * cellSize + cellSize / 2);
+            c.fillRect(nx - 1, ny - 1, 3, 3, '#FFDD00');
+        }
     };
 
     // =================================================================
@@ -262,16 +352,43 @@
     var _Scene_Map_update2 = Scene_Map.prototype.update;
     Scene_Map.prototype.update = function () {
         _Scene_Map_update2.call(this);
-        if (this._mmoMinimap && $gameMap && Graphics.frameCount % 30 === 0) {
-            var players = window.OtherPlayerManager ? Object.values(OtherPlayerManager._sprites).map(function (sp) {
-                return { x: sp._character.x, y: sp._character.y };
-            }) : [];
-            var monsters = window.MonsterManager ? Object.keys(MonsterManager._sprites).map(function (id) {
-                var sp = MonsterManager._sprites[id];
-                return { x: sp._tileX, y: sp._tileY };
-            }) : [];
-            this._mmoMinimap.setPlayers(players);
-            this._mmoMinimap.setMonsters(monsters);
+        
+        if (this._mmoMinimap && $gameMap) {
+            // Update player/monster/npc data every 15 frames
+            if (Graphics.frameCount % 15 === 0) {
+                var players = [];
+                var monsters = [];
+                var npcs = [];
+                
+                if (window.OtherPlayerManager && OtherPlayerManager._sprites) {
+                    var sprites = OtherPlayerManager._sprites;
+                    for (var id in sprites) {
+                        if (sprites.hasOwnProperty(id)) {
+                            var sp = sprites[id];
+                            if (sp._character) {
+                                players.push({ x: sp._character.x, y: sp._character.y });
+                            }
+                        }
+                    }
+                }
+                
+                if (window.MonsterManager && MonsterManager._sprites) {
+                    var mSprites = MonsterManager._sprites;
+                    for (var id in mSprites) {
+                        if (mSprites.hasOwnProperty(id)) {
+                            var sp = mSprites[id];
+                            monsters.push({ x: sp._tileX, y: sp._tileY });
+                        }
+                    }
+                }
+                
+                            this._mmoMinimap.setPlayers(players);
+                this._mmoMinimap.setMonsters(monsters);
+                // NPCs are updated via npc_sync event, not here
+            }
+            
+            // Refresh minimap every frame (internal throttling in refresh)
+            this._mmoMinimap.refresh();
         }
     };
 
@@ -291,6 +408,16 @@
         }
         if (data.passability && SceneManager._scene && SceneManager._scene._mmoMinimap) {
             SceneManager._scene._mmoMinimap.setPassability(data.passability);
+        }
+        // Clear NPC list on map change
+        if (SceneManager._scene && SceneManager._scene._mmoMinimap) {
+            SceneManager._scene._mmoMinimap._npcDots = [];
+        }
+    });
+
+    $MMO.on('npc_sync', function (data) {
+        if (data && SceneManager._scene && SceneManager._scene._mmoMinimap) {
+            SceneManager._scene._mmoMinimap.updateNPC(data.event_id, data.x, data.y);
         }
     });
 

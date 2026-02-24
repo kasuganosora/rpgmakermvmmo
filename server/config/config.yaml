@@ -41,7 +41,7 @@ game:
   global_chat_cooldown_s: 180
 
 security:
-  jwt_secret: "change-me-in-production"
+  jwt_secret: "change-me-in-production-32chars-long-key"
   jwt_ttl_h: "72h"
 
 plugins:
