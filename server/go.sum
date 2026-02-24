@@ -83,6 +83,8 @@ github.com/json-iterator/go v1.1.12 h1:PV8peI4a0ysnczrg+LtxykD8LfKY9ML6u2jnxaEnr
 github.com/json-iterator/go v1.1.12/go.mod h1:e30LSqwooZae/UwlEbR2852Gd8hjQvJoHmT4TnhNGBo=
 github.com/kasuganosora/sqlexec v0.4.3 h1:jRgBB+DVVxt2//FJuU5tmMTBplzgCYXzr67NxLA4znA=
 github.com/kasuganosora/sqlexec v0.4.3/go.mod h1:ry7wE3Hy7DtwkDtapsGOSJiOmps/Az+NWJ2OaanHmXE=
+github.com/kasuganosora/sqlexec v0.6.0 h1:p7fsj7BHjuBMTt+cSViBRMFgUW3+FP56D/J0uBbAsr4=
+github.com/kasuganosora/sqlexec v0.6.0/go.mod h1:byPIYfWE9N/oEDwvsvF3Y3L8nHgx3QyM4Lq+FMpIJ/Y=
 github.com/klauspost/cpuid/v2 v2.3.0 h1:S4CRMLnYUhGeDFDqkGriYKdfoFlDnMtqTiI/sFzhA9Y=
 github.com/klauspost/cpuid/v2 v2.3.0/go.mod h1:hqwkgyIinND0mEev00jJYCxPNVRVXFQeu1XKlok6oO0=
 github.com/kr/pretty v0.1.0/go.mod h1:dAy3ld7l9f0ibDNOQOHHMYYIIbhfbHSm3C4ZsoJORNo=

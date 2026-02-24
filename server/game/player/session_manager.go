@@ -94,10 +94,22 @@ func (sm *SessionManager) All() []*PlayerSession {
 }
 
 // BroadcastAll sends a raw pre-encoded packet to every connected session.
+// Uses non-blocking send to prevent slow connections from blocking the broadcast.
 func (sm *SessionManager) BroadcastAll(data []byte) {
 	sm.mu.RLock()
-	defer sm.mu.RUnlock()
+	sessions := make([]*PlayerSession, 0, len(sm.sessions))
 	for _, s := range sm.sessions {
-		s.SendRaw(data)
+		sessions = append(sessions, s)
+	}
+	sm.mu.RUnlock()
+
+	for _, s := range sessions {
+		select {
+		case s.SendChan <- data:
+		default:
+			// Channel full, drop packet for this session.
+			sm.logger.Warn("broadcast dropped packet for slow client",
+				zap.Int64("char_id", s.CharID))
+		}
 	}
 }

@@ -179,7 +179,7 @@ func (h *Handler) handleDisconnect(s *player.PlayerSession) {
 		zap.Int64("account_id", s.AccountID),
 		zap.Int64("char_id", s.CharID))
 
-	// Async: save last position to DB.
+	// Async: save last position to DB with timeout.
 	if s.CharID != 0 {
 		go func() {
 			defer func() {
@@ -190,8 +190,13 @@ func (h *Handler) handleDisconnect(s *player.PlayerSession) {
 						zap.String("stack", string(debug.Stack())))
 				}
 			}()
+
+			// Create a timeout context for the DB operation.
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
 			x, y, dir := s.Position()
-			h.db.Model(&model.Character{}).
+			err := h.db.WithContext(ctx).Model(&model.Character{}).
 				Where("id = ?", s.CharID).
 				Updates(map[string]interface{}{
 					"map_id":    s.MapID,
@@ -202,7 +207,12 @@ func (h *Handler) handleDisconnect(s *player.PlayerSession) {
 					"mp":        s.MP,
 					"level":     s.Level,
 					"exp":       s.Exp,
-				})
+				}).Error
+			if err != nil {
+				h.logger.Error("failed to save character state on disconnect",
+					zap.Int64("char_id", s.CharID),
+					zap.Error(err))
+			}
 		}()
 	}
 }

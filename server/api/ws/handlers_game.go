@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/battle"
@@ -157,18 +158,15 @@ func (gh *GameHandlers) HandleMove(_ context.Context, s *player.PlayerSession, r
 
 	if !inGrace {
 		// Distance check: allow at most 1 tile per tick with 1.3× tolerance.
-		dx := req.X - curX
-		dy := req.Y - curY
-		if dx < 0 {
-			dx = -dx
-		}
-		if dy < 0 {
-			dy = -dy
-		}
-		if float64(dx+dy) > maxMovePerTick {
+		// Use Euclidean distance to properly handle diagonal movement.
+		dx := float64(req.X - curX)
+		dy := float64(req.Y - curY)
+		dist := math.Sqrt(dx*dx + dy*dy)
+		if dist > maxMovePerTick {
 			gh.logger.Warn("speed hack detected",
 				zap.Int64("char_id", s.CharID),
-				zap.Int("dx", dx), zap.Int("dy", dy))
+				zap.Float64("dx", dx), zap.Float64("dy", dy),
+				zap.Float64("distance", dist))
 			sendMoveReject(s)
 			return nil
 		}

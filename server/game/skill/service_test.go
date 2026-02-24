@@ -42,7 +42,7 @@ func newTestSession(charID int64) *player.PlayerSession {
 
 func TestIsOnCooldown_NotSet(t *testing.T) {
 	c := newTestCache(t)
-	svc := NewSkillService(c, nil, nil, testLogger())
+	svc := NewSkillService(c, nil, nil, nil, testLogger())
 
 	onCD, err := svc.IsOnCooldown(context.Background(), 1, 1)
 	require.NoError(t, err)
@@ -51,7 +51,7 @@ func TestIsOnCooldown_NotSet(t *testing.T) {
 
 func TestIsOnCooldown_SetAndActive(t *testing.T) {
 	c := newTestCache(t)
-	svc := NewSkillService(c, nil, nil, testLogger())
+	svc := NewSkillService(c, nil, nil, nil, testLogger())
 
 	// Set a 10-second cooldown
 	require.NoError(t, svc.SetCooldown(context.Background(), 1, 1, 10000))
@@ -63,7 +63,7 @@ func TestIsOnCooldown_SetAndActive(t *testing.T) {
 
 func TestIsOnCooldown_Expired(t *testing.T) {
 	c := newTestCache(t)
-	svc := NewSkillService(c, nil, nil, testLogger())
+	svc := NewSkillService(c, nil, nil, nil, testLogger())
 
 	// Set a cooldown that already ended (negative ms → readyAt in the past)
 	require.NoError(t, svc.SetCooldown(context.Background(), 1, 1, -1000))
@@ -75,7 +75,7 @@ func TestIsOnCooldown_Expired(t *testing.T) {
 
 func TestIsOnCooldown_DifferentSkills(t *testing.T) {
 	c := newTestCache(t)
-	svc := NewSkillService(c, nil, nil, testLogger())
+	svc := NewSkillService(c, nil, nil, nil, testLogger())
 
 	// Set cooldown for skill 1 but not skill 2
 	require.NoError(t, svc.SetCooldown(context.Background(), 1, 1, 10000))
@@ -88,7 +88,7 @@ func TestIsOnCooldown_DifferentSkills(t *testing.T) {
 
 func TestIsOnCooldown_DifferentPlayers(t *testing.T) {
 	c := newTestCache(t)
-	svc := NewSkillService(c, nil, nil, testLogger())
+	svc := NewSkillService(c, nil, nil, nil, testLogger())
 
 	// Cooldown for player 1, not player 2
 	require.NoError(t, svc.SetCooldown(context.Background(), 1, 5, 10000))
@@ -103,7 +103,7 @@ func TestIsOnCooldown_DifferentPlayers(t *testing.T) {
 
 func TestSetCooldown_SetsValue(t *testing.T) {
 	c := newTestCache(t)
-	svc := NewSkillService(c, nil, nil, testLogger())
+	svc := NewSkillService(c, nil, nil, nil, testLogger())
 
 	err := svc.SetCooldown(context.Background(), 10, 3, 5000)
 	require.NoError(t, err)
@@ -116,7 +116,7 @@ func TestSetCooldown_SetsValue(t *testing.T) {
 
 func TestSetCooldown_UpdatesValue(t *testing.T) {
 	c := newTestCache(t)
-	svc := NewSkillService(c, nil, nil, testLogger())
+	svc := NewSkillService(c, nil, nil, nil, testLogger())
 
 	// First set
 	require.NoError(t, svc.SetCooldown(context.Background(), 1, 1, 1000))
@@ -137,7 +137,7 @@ func TestSetCooldown_UpdatesValue(t *testing.T) {
 
 func TestUseSkill_NilResources(t *testing.T) {
 	c := newTestCache(t)
-	svc := NewSkillService(c, nil, nil, testLogger())
+	svc := NewSkillService(c, nil, nil, nil, testLogger())
 
 	s := newTestSession(1)
 	err := svc.UseSkill(context.Background(), s, 1, 0, "monster")
@@ -159,10 +159,10 @@ func TestUseSkill_UnknownSkillID(t *testing.T) {
 	c := newTestCache(t)
 	logger := testLogger()
 	res := newTestResWithSkill(1, 5)
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, logger)
+	wm := world.NewWorldManager(nil, world.NewGameState(nil, nil), world.NewGlobalWhitelist(), nil, logger)
 	defer wm.StopAll()
 
-	svc := NewSkillService(c, res, wm, logger)
+	svc := NewSkillService(c, res, wm, nil, logger)
 	s := newTestSession(1)
 	s.MapID = 1
 
@@ -175,10 +175,10 @@ func TestUseSkill_OnCooldown(t *testing.T) {
 	c := newTestCache(t)
 	logger := testLogger()
 	res := newTestResWithSkill(1, 5)
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, logger)
+	wm := world.NewWorldManager(nil, world.NewGameState(nil, nil), world.NewGlobalWhitelist(), nil, logger)
 	defer wm.StopAll()
 
-	svc := NewSkillService(c, res, wm, logger)
+	svc := NewSkillService(c, res, wm, nil, logger)
 	s := newTestSession(1)
 	s.MapID = 1
 	s.MP = 50
@@ -195,10 +195,10 @@ func TestUseSkill_NotEnoughMP(t *testing.T) {
 	c := newTestCache(t)
 	logger := testLogger()
 	res := newTestResWithSkill(1, 50)
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, logger)
+	wm := world.NewWorldManager(nil, world.NewGameState(nil, nil), world.NewGlobalWhitelist(), nil, logger)
 	defer wm.StopAll()
 
-	svc := NewSkillService(c, res, wm, logger)
+	svc := NewSkillService(c, res, wm, nil, logger)
 	s := newTestSession(1)
 	s.MapID = 1
 	s.MP = 10 // less than MPCost=50
@@ -212,11 +212,11 @@ func TestUseSkill_NotInMap(t *testing.T) {
 	c := newTestCache(t)
 	logger := testLogger()
 	res := newTestResWithSkill(1, 5)
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, logger)
+	wm := world.NewWorldManager(nil, world.NewGameState(nil, nil), world.NewGlobalWhitelist(), nil, logger)
 	defer wm.StopAll()
 	// Do NOT create map 999
 
-	svc := NewSkillService(c, res, wm, logger)
+	svc := NewSkillService(c, res, wm, nil, logger)
 	s := newTestSession(1)
 	s.MapID = 999 // non-existent map
 	s.MP = 50
@@ -230,11 +230,11 @@ func TestUseSkill_Success_NoTargets(t *testing.T) {
 	c := newTestCache(t)
 	logger := testLogger()
 	res := newTestResWithSkill(1, 5)
-	wm := world.NewWorldManager(nil, world.NewGameState(nil), world.NewGlobalWhitelist(), nil, logger)
+	wm := world.NewWorldManager(nil, world.NewGameState(nil, nil), world.NewGlobalWhitelist(), nil, logger)
 	defer wm.StopAll()
 	wm.GetOrCreate(1) // ensure the map room exists
 
-	svc := NewSkillService(c, res, wm, logger)
+	svc := NewSkillService(c, res, wm, nil, logger)
 	s := newTestSession(1)
 	s.MapID = 1
 	s.MP = 50

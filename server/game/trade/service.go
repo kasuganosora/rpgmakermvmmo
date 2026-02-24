@@ -14,6 +14,7 @@ import (
 	"github.com/kasuganosora/rpgmakermvmmo/server/model"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 var sessionIDCounter int64
@@ -184,10 +185,27 @@ func (svc *Service) Commit(ctx context.Context, sess *TradeSession) error {
 	defer svc.cache.Del(ctx, lockKey)
 
 	err = svc.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// Re-validate both sides' items from DB.
+		// Pre-lock both characters to prevent race conditions on gold and items.
+		var charA, charB model.Character
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", sess.OfferA.CharID).First(&charA).Error; err != nil {
+			return fmt.Errorf("trader A not found: %w", err)
+		}
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", sess.OfferB.CharID).First(&charB).Error; err != nil {
+			return fmt.Errorf("trader B not found: %w", err)
+		}
+
+		// Validate gold amounts.
+		if sess.OfferA.Gold > 0 && charA.Gold < sess.OfferA.Gold {
+			return fmt.Errorf("trader A insufficient gold: have %d, need %d", charA.Gold, sess.OfferA.Gold)
+		}
+		if sess.OfferB.Gold > 0 && charB.Gold < sess.OfferB.Gold {
+			return fmt.Errorf("trader B insufficient gold: have %d, need %d", charB.Gold, sess.OfferB.Gold)
+		}
+
+		// Re-validate both sides' items from DB with row locking.
 		for _, invID := range sess.OfferA.ItemIDs {
 			var inv model.Inventory
-			if err := tx.Where("id = ? AND char_id = ?", invID, sess.OfferA.CharID).
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND char_id = ?", invID, sess.OfferA.CharID).
 				First(&inv).Error; err != nil {
 				return fmt.Errorf("item %d no longer available for trader A", invID)
 			}
@@ -198,7 +216,7 @@ func (svc *Service) Commit(ctx context.Context, sess *TradeSession) error {
 		}
 		for _, invID := range sess.OfferB.ItemIDs {
 			var inv model.Inventory
-			if err := tx.Where("id = ? AND char_id = ?", invID, sess.OfferB.CharID).
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND char_id = ?", invID, sess.OfferB.CharID).
 				First(&inv).Error; err != nil {
 				return fmt.Errorf("item %d no longer available for trader B", invID)
 			}
@@ -206,22 +224,26 @@ func (svc *Service) Commit(ctx context.Context, sess *TradeSession) error {
 				return err
 			}
 		}
-		// Transfer gold.
+		// Transfer gold with proper error handling.
 		if sess.OfferA.Gold > 0 {
-			if err := tx.Model(&model.Character{}).Where("id = ?", sess.OfferA.CharID).
+			if err := tx.Model(&model.Character{}).Where("id = ? AND gold >= ?", sess.OfferA.CharID, sess.OfferA.Gold).
 				Update("gold", gorm.Expr("gold - ?", sess.OfferA.Gold)).Error; err != nil {
 				return err
 			}
-			tx.Model(&model.Character{}).Where("id = ?", sess.OfferB.CharID).
-				Update("gold", gorm.Expr("gold + ?", sess.OfferA.Gold))
+			if err := tx.Model(&model.Character{}).Where("id = ?", sess.OfferB.CharID).
+				Update("gold", gorm.Expr("gold + ?", sess.OfferA.Gold)).Error; err != nil {
+				return err
+			}
 		}
 		if sess.OfferB.Gold > 0 {
-			if err := tx.Model(&model.Character{}).Where("id = ?", sess.OfferB.CharID).
+			if err := tx.Model(&model.Character{}).Where("id = ? AND gold >= ?", sess.OfferB.CharID, sess.OfferB.Gold).
 				Update("gold", gorm.Expr("gold - ?", sess.OfferB.Gold)).Error; err != nil {
 				return err
 			}
-			tx.Model(&model.Character{}).Where("id = ?", sess.OfferA.CharID).
-				Update("gold", gorm.Expr("gold + ?", sess.OfferB.Gold))
+			if err := tx.Model(&model.Character{}).Where("id = ?", sess.OfferA.CharID).
+				Update("gold", gorm.Expr("gold + ?", sess.OfferB.Gold)).Error; err != nil {
+				return err
+			}
 		}
 		return nil
 	})

@@ -105,7 +105,7 @@ func main() {
 
 	// ---- Game Systems ----
 	sm := player.NewSessionManager(logger)
-	gameState := world.NewGameState(db)
+	gameState := world.NewGameState(db, logger)
 	if err := gameState.LoadFromDB(); err != nil {
 		logger.Warn("failed to load game state from DB", zap.Error(err))
 	} else {
@@ -144,10 +144,11 @@ func main() {
 	}
 	wm := world.NewWorldManager(res, gameState, whitelist, db, logger)
 	defer wm.StopAll()
+	defer gameState.Stop()
 	partyMgr := party.NewManager(logger)
 
 	// ---- Services ----
-	skillSvc := gskill.NewSkillService(c, res, wm, logger)
+	skillSvc := gskill.NewSkillService(c, res, wm, db, logger)
 	chatH := chat.NewHandler(c, pubsub, sm, wm, cfg.Game, logger)
 	tradeSvc := trade.NewService(db, c, sm, logger)
 	questSvc := quest.NewService(db, nil, logger)

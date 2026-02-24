@@ -24,7 +24,7 @@ func newTestRoom(t *testing.T, mapID, width, height int) *MapRoom {
 			mapID: pm,
 		},
 	}
-	state := NewGameState(nil)
+	state := NewGameState(nil, nil)
 	return &MapRoom{
 		MapID:           mapID,
 		mapWidth:        width,
@@ -495,7 +495,7 @@ func TestSelectPage_NoState_ReturnsFirstPage(t *testing.T) {
 }
 
 func TestSelectPage_WithState_HighestMatchingPage(t *testing.T) {
-	state := NewGameState(nil)
+	state := NewGameState(nil, nil)
 	state.SetSwitch(306, true)
 
 	page0 := &resource.EventPage{Trigger: 0} // no conditions
@@ -518,7 +518,7 @@ func TestSelectPage_WithState_HighestMatchingPage(t *testing.T) {
 }
 
 func TestSelectPage_ConditionsNotMet_FallsBack(t *testing.T) {
-	state := NewGameState(nil)
+	state := NewGameState(nil, nil)
 	// Switch 306 is OFF
 
 	page0 := &resource.EventPage{Trigger: 0} // no conditions
@@ -540,7 +540,7 @@ func TestSelectPage_ConditionsNotMet_FallsBack(t *testing.T) {
 }
 
 func TestSelectPage_SelfSwitch_Works(t *testing.T) {
-	state := NewGameState(nil)
+	state := NewGameState(nil, nil)
 	state.SetSelfSwitch(5, 20, "A", true)
 
 	page0 := &resource.EventPage{Trigger: 0}
@@ -562,7 +562,7 @@ func TestSelectPage_SelfSwitch_Works(t *testing.T) {
 }
 
 func TestSelectPage_Variable_Condition(t *testing.T) {
-	state := NewGameState(nil)
+	state := NewGameState(nil, nil)
 	state.SetVariable(206, 6)
 
 	page0 := &resource.EventPage{Trigger: 0}
@@ -591,7 +591,7 @@ func TestSelectPage_Variable_Condition(t *testing.T) {
 }
 
 func TestSelectPage_MultipleConditions(t *testing.T) {
-	state := NewGameState(nil)
+	state := NewGameState(nil, nil)
 
 	page0 := &resource.EventPage{Trigger: 0}
 	page1 := &resource.EventPage{
@@ -648,7 +648,7 @@ func TestPopulateNPCs_CreatesRuntimeForAllEvents(t *testing.T) {
 		},
 		Passability: make(map[int]*resource.PassabilityMap),
 	}
-	state := NewGameState(nil)
+	state := NewGameState(nil, nil)
 
 	room := &MapRoom{
 		MapID:           5,
@@ -694,7 +694,7 @@ func TestPopulateNPCs_SkipsNilAndEmptyEvents(t *testing.T) {
 		},
 		Passability: make(map[int]*resource.PassabilityMap),
 	}
-	state := NewGameState(nil)
+	state := NewGameState(nil, nil)
 
 	room := &MapRoom{
 		MapID:           1,
@@ -774,7 +774,7 @@ func TestNPCSnapshot_NilActivePage_InvisibleDefaults(t *testing.T) {
 // ========================================================================
 
 func TestRefreshNPCPages_DetectsPageChange(t *testing.T) {
-	state := NewGameState(nil)
+	state := NewGameState(nil, nil)
 
 	page0 := &resource.EventPage{Trigger: 0}
 	page1 := &resource.EventPage{

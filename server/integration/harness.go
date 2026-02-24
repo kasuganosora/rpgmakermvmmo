@@ -71,11 +71,11 @@ func NewTestServer(t *testing.T) *TestServer {
 
 	// Empty resource loader (no RMMV data files needed for integration tests).
 	res := resource.NewLoader("", "")
-	gameState := world.NewGameState(nil)
+	gameState := world.NewGameState(nil, logger)
 	wm := world.NewWorldManager(res, gameState, world.NewGlobalWhitelist(), nil, logger)
 
 	// ---- Services ----
-	skillSvc := gskill.NewSkillService(c, res, wm, logger)
+	skillSvc := gskill.NewSkillService(c, res, wm, db, logger)
 	chatH := chat.NewHandler(c, pubsub, sm, wm, config.GameConfig{
 		ChatNearbyRange:     10,
 		GlobalChatCooldownS: 180,

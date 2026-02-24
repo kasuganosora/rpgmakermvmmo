@@ -4,6 +4,7 @@ package npc
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -198,10 +199,16 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 			e.applySelfSwitch(cmd.Parameters, opts)
 
 		case CmdChangeGold:
-			e.applyGold(ctx, s, cmd.Parameters)
+			if err := e.applyGold(ctx, s, cmd.Parameters); err != nil {
+				e.logger.Warn("ChangeGold failed", zap.Int64("char_id", s.CharID), zap.Error(err))
+				// Continue execution - don't stop the event for gold errors.
+			}
 
 		case CmdChangeItems:
-			e.applyItems(ctx, s, cmd.Parameters)
+			if err := e.applyItems(ctx, s, cmd.Parameters); err != nil {
+				e.logger.Warn("ChangeItems failed", zap.Int64("char_id", s.CharID), zap.Error(err))
+				// Continue execution - don't stop the event for item errors.
+			}
 
 		case CmdTransfer:
 			e.transferPlayer(s, cmd.Parameters, opts)
@@ -563,50 +570,99 @@ func (e *Executor) applySelfSwitch(params []interface{}, opts *ExecuteOpts) {
 
 // applyGold changes the player's gold based on RMMV ChangeGold command parameters.
 // Parameters: [0]=operation(0=+,1=-), [1]=operandType(0=const,1=var), [2]=operand
-func (e *Executor) applyGold(ctx context.Context, s *player.PlayerSession, params []interface{}) {
+func (e *Executor) applyGold(ctx context.Context, s *player.PlayerSession, params []interface{}) error {
 	op := paramInt(params, 0)
 	amount := int64(paramInt(params, 2))
 	if op == 1 {
 		amount = -amount
 	}
-	e.db.WithContext(ctx).Model(&model.Character{}).Where("id = ?", s.CharID).
-		Update("gold", gorm.Expr("gold + ?", amount))
+
+	// Check for sufficient gold when deducting.
+	if amount < 0 {
+		var char model.Character
+		if err := e.db.WithContext(ctx).Select("gold").First(&char, s.CharID).Error; err != nil {
+			e.logger.Warn("applyGold: failed to get character gold", zap.Int64("char_id", s.CharID), zap.Error(err))
+			return err
+		}
+		if char.Gold < -amount {
+			e.logger.Warn("applyGold: insufficient gold", zap.Int64("char_id", s.CharID), zap.Int64("have", char.Gold), zap.Int64("need", -amount))
+			return fmt.Errorf("insufficient gold: have %d, need %d", char.Gold, -amount)
+		}
+	}
+
+	if err := e.db.WithContext(ctx).Model(&model.Character{}).Where("id = ?", s.CharID).
+		Update("gold", gorm.Expr("gold + ?", amount)).Error; err != nil {
+		e.logger.Warn("applyGold: failed to update gold", zap.Int64("char_id", s.CharID), zap.Error(err))
+		return err
+	}
+	return nil
 }
 
 // applyItems changes the player's inventory based on RMMV ChangeItems parameters.
 // Parameters: [0]=itemID, [1]=operation(0=+,1=-), [2]=operandType, [3]=operand
-func (e *Executor) applyItems(ctx context.Context, s *player.PlayerSession, params []interface{}) {
+func (e *Executor) applyItems(ctx context.Context, s *player.PlayerSession, params []interface{}) error {
 	itemID := paramInt(params, 0)
 	op := paramInt(params, 1)
 	qty := paramInt(params, 3)
 	if itemID <= 0 {
-		return
+		return fmt.Errorf("invalid item_id: %d", itemID)
 	}
+	if qty <= 0 {
+		return fmt.Errorf("invalid quantity: %d", qty)
+	}
+
+	const maxStackQty = 9999
+
 	if op == 1 {
+		// Remove items.
 		var inv model.Inventory
 		if err := e.db.WithContext(ctx).
 			Where("char_id = ? AND item_id = ? AND kind = 1", s.CharID, itemID).
 			First(&inv).Error; err != nil {
-			return
+			e.logger.Warn("applyItems: item not found for removal", zap.Int64("char_id", s.CharID), zap.Int("item_id", itemID))
+			return fmt.Errorf("item %d not found in inventory", itemID)
+		}
+		if inv.Qty < qty {
+			e.logger.Warn("applyItems: insufficient quantity", zap.Int64("char_id", s.CharID), zap.Int("item_id", itemID), zap.Int("have", inv.Qty), zap.Int("need", qty))
+			return fmt.Errorf("insufficient quantity: have %d, need %d", inv.Qty, qty)
 		}
 		newQty := inv.Qty - qty
 		if newQty <= 0 {
-			e.db.WithContext(ctx).Delete(&inv)
+			if err := e.db.WithContext(ctx).Delete(&inv).Error; err != nil {
+				e.logger.Warn("applyItems: failed to delete inventory", zap.Int64("char_id", s.CharID), zap.Error(err))
+				return err
+			}
 		} else {
-			e.db.WithContext(ctx).Model(&inv).Update("qty", newQty)
+			if err := e.db.WithContext(ctx).Model(&inv).Update("qty", newQty).Error; err != nil {
+				e.logger.Warn("applyItems: failed to update quantity", zap.Int64("char_id", s.CharID), zap.Error(err))
+				return err
+			}
 		}
 	} else {
+		// Add items with stack limit check.
 		var inv model.Inventory
 		err := e.db.WithContext(ctx).
 			Where("char_id = ? AND item_id = ? AND kind = 1", s.CharID, itemID).
 			First(&inv).Error
 		if err != nil {
 			inv = model.Inventory{CharID: s.CharID, ItemID: itemID, Kind: model.ItemKindItem, Qty: qty}
-			e.db.WithContext(ctx).Create(&inv)
+			if err := e.db.WithContext(ctx).Create(&inv).Error; err != nil {
+				e.logger.Warn("applyItems: failed to create inventory", zap.Int64("char_id", s.CharID), zap.Error(err))
+				return err
+			}
 		} else {
-			e.db.WithContext(ctx).Model(&inv).Update("qty", inv.Qty+qty)
+			newQty := inv.Qty + qty
+			if newQty > maxStackQty {
+				e.logger.Warn("applyItems: exceeds max stack", zap.Int64("char_id", s.CharID), zap.Int("item_id", itemID), zap.Int("new_qty", newQty))
+				return fmt.Errorf("exceeds maximum stack size: %d", maxStackQty)
+			}
+			if err := e.db.WithContext(ctx).Model(&inv).Update("qty", newQty).Error; err != nil {
+				e.logger.Warn("applyItems: failed to add quantity", zap.Int64("char_id", s.CharID), zap.Error(err))
+				return err
+			}
 		}
 	}
+	return nil
 }
 
 // ---- transfer ----

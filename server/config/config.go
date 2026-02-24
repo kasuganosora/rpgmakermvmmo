@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/spf13/viper"
@@ -124,5 +125,65 @@ func Load(path string) (*Config, error) {
 	if err := v.Unmarshal(cfg); err != nil {
 		return nil, err
 	}
+
+	// Validate configuration.
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+
 	return cfg, nil
+}
+
+// Validate checks the configuration for errors.
+func (c *Config) Validate() error {
+	// Validate security settings.
+	if c.Security.JWTSecret == "" {
+		return &ValidationError{Field: "security.jwt_secret", Message: "JWT secret is required"}
+	}
+	if len(c.Security.JWTSecret) < 32 {
+		return &ValidationError{Field: "security.jwt_secret", Message: "JWT secret must be at least 32 characters for security"}
+	}
+	if c.Security.JWTTTLH <= 0 {
+		return &ValidationError{Field: "security.jwt_ttl_h", Message: "JWT TTL must be positive"}
+	}
+	if c.Security.RateLimitRPS <= 0 {
+		return &ValidationError{Field: "security.rate_limit_rps", Message: "rate limit RPS must be positive"}
+	}
+	if c.Security.RateLimitBurst <= 0 {
+		return &ValidationError{Field: "security.rate_limit_burst", Message: "rate limit burst must be positive"}
+	}
+
+	// Validate database settings.
+	validDBModes := map[string]bool{"embedded_xml": true, "embedded_memory": true, "sqlite": true, "mysql": true}
+	if !validDBModes[c.Database.Mode] {
+		return &ValidationError{Field: "database.mode", Message: "invalid database mode, must be one of: embedded_xml, embedded_memory, sqlite, mysql"}
+	}
+	if c.Database.Mode == "mysql" && c.Database.MySQLDSN == "" {
+		return &ValidationError{Field: "database.mysql_dsn", Message: "MySQL DSN is required when using mysql mode"}
+	}
+
+	// Validate game settings.
+	if c.Game.MapTickMs <= 0 {
+		return &ValidationError{Field: "game.map_tick_ms", Message: "map tick ms must be positive"}
+	}
+	if c.Game.MaxPartySize <= 0 {
+		return &ValidationError{Field: "game.max_party_size", Message: "max party size must be positive"}
+	}
+
+	// Validate server settings.
+	if c.Server.Port <= 0 || c.Server.Port > 65535 {
+		return &ValidationError{Field: "server.port", Message: "port must be between 1 and 65535"}
+	}
+
+	return nil
+}
+
+// ValidationError represents a configuration validation error.
+type ValidationError struct {
+	Field   string
+	Message string
+}
+
+func (e *ValidationError) Error() string {
+	return fmt.Sprintf("config validation error for %s: %s", e.Field, e.Message)
 }

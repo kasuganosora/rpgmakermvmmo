@@ -36,7 +36,7 @@ func loadRealResources(t *testing.T) *resource.ResourceLoader {
 
 func TestRealData_Map5_NPCPopulation(t *testing.T) {
 	rl := loadRealResources(t)
-	state := NewGameState(nil)
+	state := NewGameState(nil, nil)
 
 	md, ok := rl.Maps[5]
 	require.True(t, ok, "Map 5 should exist")
@@ -130,7 +130,7 @@ func TestRealData_Map5_DoorPassability(t *testing.T) {
 
 func TestRealData_Map5_DoorTransfer(t *testing.T) {
 	rl := loadRealResources(t)
-	state := NewGameState(nil)
+	state := NewGameState(nil, nil)
 	room := newMapRoom(5, rl, state, zap.NewNop())
 
 	// Find Event 20's position
@@ -181,7 +181,7 @@ func TestRealData_Map5_DoorTransfer(t *testing.T) {
 
 func TestRealData_Map5_EV10_BathroomDoor(t *testing.T) {
 	rl := loadRealResources(t)
-	state := NewGameState(nil)
+	state := NewGameState(nil, nil)
 	room := newMapRoom(5, rl, state, zap.NewNop())
 
 	// Find NPC for Event 10 (bathroom door at 19,13).
@@ -242,7 +242,7 @@ func TestRealData_Map5_EV10_BathroomDoor(t *testing.T) {
 
 func TestRealData_Map5_NPCMovement(t *testing.T) {
 	rl := loadRealResources(t)
-	state := NewGameState(nil)
+	state := NewGameState(nil, nil)
 	room := newMapRoom(5, rl, state, zap.NewNop())
 
 	// Find all NPCs with MoveType != 0 (moving NPCs)
@@ -402,7 +402,7 @@ func TestRealData_Map5_RegionRestrictions(t *testing.T) {
 
 func TestRealData_Map5_NoNPCWalksThroughWalls(t *testing.T) {
 	rl := loadRealResources(t)
-	state := NewGameState(nil)
+	state := NewGameState(nil, nil)
 	room := newMapRoom(5, rl, state, zap.NewNop())
 
 	violations := 0
@@ -482,7 +482,7 @@ func TestRealData_Map5_NoNPCWalksThroughWalls(t *testing.T) {
 
 func TestRealData_Map5_NPCSnapshot(t *testing.T) {
 	rl := loadRealResources(t)
-	state := NewGameState(nil)
+	state := NewGameState(nil, nil)
 	room := newMapRoom(5, rl, state, zap.NewNop())
 
 	snap := room.NPCSnapshot()
