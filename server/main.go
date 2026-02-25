@@ -390,8 +390,8 @@ func main() {
 		logger.Error("Server forced to shutdown", zap.Error(err))
 	}
 
-	// Save game state (Stop already calls Flush)
-	gameState.Stop()
+	// Save game state - Stop is already called by defer, just need to flush
+	gameState.Flush()
 
 	logger.Info("Server gracefully stopped")
 }
