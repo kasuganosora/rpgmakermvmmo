@@ -1,8 +1,10 @@
 package player
 
 import (
+	"encoding/json"
 	"strings"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 )
@@ -111,5 +113,58 @@ func (sm *SessionManager) BroadcastAll(data []byte) {
 			sm.logger.Warn("broadcast dropped packet for slow client",
 				zap.Int64("char_id", s.CharID))
 		}
+	}
+}
+
+// BroadcastToAll sends a packet to every connected session (typed version).
+func (sm *SessionManager) BroadcastToAll(pkt *Packet) {
+	data, err := json.Marshal(pkt)
+	if err != nil {
+		sm.logger.Error("failed to marshal broadcast packet", zap.Error(err))
+		return
+	}
+	sm.BroadcastAll(data)
+}
+
+// BroadcastSystemMessage sends a system message to all online players.
+func (sm *SessionManager) BroadcastSystemMessage(message string) {
+	type chatPayload struct {
+		Channel string `json:"channel"`
+		From    string `json:"from"`
+		Message string `json:"message"`
+	}
+	payload, _ := json.Marshal(chatPayload{
+		Channel: "system",
+		From:    "系统",
+		Message: message,
+	})
+	sm.BroadcastToAll(&Packet{Type: "chat_message", Payload: payload})
+}
+
+// CloseAllSessions gracefully closes all connected sessions.
+func (sm *SessionManager) CloseAllSessions() {
+	sm.mu.Lock()
+	sessions := make([]*PlayerSession, 0, len(sm.sessions))
+	for _, s := range sm.sessions {
+		sessions = append(sessions, s)
+	}
+	sm.mu.Unlock()
+
+	sm.logger.Info("closing all sessions", zap.Int("count", len(sessions)))
+	for _, s := range sessions {
+		s.Close()
+	}
+
+	// Wait for all sessions to close (with timeout)
+	maxWait := 10 * time.Second
+	start := time.Now()
+	for time.Since(start) < maxWait {
+		sm.mu.RLock()
+		count := len(sm.sessions)
+		sm.mu.RUnlock()
+		if count == 0 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }

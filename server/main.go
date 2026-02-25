@@ -1,9 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -345,7 +349,49 @@ func main() {
 
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
 	logger.Info("Server listening", zap.String("addr", addr))
-	if err := r.Run(addr); err != nil {
-		log.Fatalf("server: %v", err)
+
+	// ---- Graceful Shutdown ----
+	// Create HTTP server
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: r,
 	}
+
+	// Start server in a goroutine
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("server: %v", err)
+		}
+	}()
+
+	// Wait for interrupt signal
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
+	<-quit
+
+	logger.Info("Shutting down server...")
+
+	// Create shutdown context with timeout
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Notify all players
+	sm.BroadcastSystemMessage("服务器即将重启，请稍后重新登录。")
+	sm.BroadcastToAll(&player.Packet{Type: "server_shutdown"})
+
+	// Give clients time to receive the message
+	time.Sleep(2 * time.Second)
+
+	// Close all player sessions gracefully
+	sm.CloseAllSessions()
+
+	// Shutdown HTTP server (stops accepting new connections)
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		logger.Error("Server forced to shutdown", zap.Error(err))
+	}
+
+	// Save game state (Stop already calls Flush)
+	gameState.Stop()
+
+	logger.Info("Server gracefully stopped")
 }
