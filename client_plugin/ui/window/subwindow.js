@@ -23,15 +23,18 @@
         this._draggable = opts.draggable !== false;
         this._onClose = opts.onClose || null;
         this._dragging = false;
+        this._dragStartX = 0;
+        this._dragStartY = 0;
         this._dragOffX = 0;
         this._dragOffY = 0;
         this._closeHover = false;
+        this._dragThreshold = L2_Theme.dragThreshold;
         this.refresh();
     };
 
     L2_SubWindow.prototype.setTitle = function (t) {
         this._title = t;
-        this.refresh();
+        this.markDirty();
     };
 
     L2_SubWindow.prototype.onClose = function (fn) { this._onClose = fn; };
@@ -87,9 +90,22 @@
                 var barH = this._title ? L2_Theme.titleBarH : 0;
                 if (barH > 0 && this.isInside(tx, ty) &&
                     ty <= this.y + this.padding + barH) {
-                    this._dragging = true;
+                    // 记录拖拽起始位置，但暂不开始拖拽
+                    this._dragStartX = tx;
+                    this._dragStartY = ty;
                     this._dragOffX = tx - this.x;
                     this._dragOffY = ty - this.y;
+                    this._dragging = false;
+                    this._dragPending = true;
+                }
+            }
+            if (this._dragPending) {
+                // 检查是否超过拖拽阈值
+                var dx = Math.abs(tx - this._dragStartX);
+                var dy = Math.abs(ty - this._dragStartY);
+                if (dx > this._dragThreshold || dy > this._dragThreshold) {
+                    this._dragging = true;
+                    this._dragPending = false;
                 }
             }
             if (this._dragging) {
@@ -98,6 +114,7 @@
             }
         } else {
             this._dragging = false;
+            this._dragPending = false;
         }
     };
 
@@ -111,7 +128,7 @@
         var wasHover = this._closeHover;
         this._closeHover = mx >= btnX && mx <= btnX + btnSize &&
                            my >= btnY && my <= btnY + btnSize;
-        if (this._closeHover !== wasHover) this.refresh();
+        if (this._closeHover !== wasHover) this.markDirty();
         if (this._closeHover && TouchInput.isTriggered()) {
             this.visible = false;
             if (this._onClose) this._onClose();

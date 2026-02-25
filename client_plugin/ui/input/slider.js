@@ -36,7 +36,7 @@
         if (v !== this._value) {
             this._value = v;
             if (this._onChange) this._onChange(v);
-            this.refresh();
+            this.markDirty();
         }
     };
 

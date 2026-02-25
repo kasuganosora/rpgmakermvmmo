@@ -69,7 +69,7 @@
         if (!this.visible) return;
         this._angle += 0.08;
         if (this._angle > Math.PI * 2) this._angle -= Math.PI * 2;
-        this.refresh();
+        this.markDirty();
     };
 
     window.L2_Loading = L2_Loading;

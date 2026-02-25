@@ -28,9 +28,10 @@
 
     L2_Switch.prototype.isOn = function () { return this._on; };
     L2_Switch.prototype.setOn = function (b) {
+        if (this._on === b) return;
         this._on = b;
         if (this._onChange) this._onChange(b);
-        this.refresh();
+        this.markDirty();
     };
 
     L2_Switch.prototype.refresh = function () {
@@ -63,7 +64,7 @@
         if (!this.visible) return;
         var wasHover = this._hover;
         this._hover = this.isInside(TouchInput.x, TouchInput.y);
-        if (this._hover !== wasHover) this.refresh();
+        if (this._hover !== wasHover) this.markDirty();
         if (this._hover && TouchInput.isTriggered()) {
             this.setOn(!this._on);
         }

@@ -20,7 +20,7 @@
         L2_Base.prototype.initialize.call(this, x, y, w, h);
         opts = opts || {};
         this._direction = opts.direction || 'horizontal';
-        this._gap = opts.gap !== undefined ? opts.gap : 4;
+        this._gap = opts.gap !== undefined ? opts.gap : L2_Theme.defaultGap;
         this._align = opts.align || 'start';
         this._managed = [];
     };

@@ -25,7 +25,7 @@
         this._title = title || this._title;
         this._body = body || this._body;
         this._footer = footer || this._footer;
-        this.refresh();
+        this.markDirty();
     };
 
     L2_Card.prototype.refresh = function () {
@@ -67,7 +67,7 @@
         if (!this.visible) return;
         var wasHover = this._hover;
         this._hover = this.isInside(TouchInput.x, TouchInput.y);
-        if (this._hover !== wasHover) this.refresh();
+        if (this._hover !== wasHover) this.markDirty();
         if (this._hover && TouchInput.isTriggered() && this._onClick) this._onClick();
     };
 

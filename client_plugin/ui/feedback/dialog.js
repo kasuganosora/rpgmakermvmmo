@@ -22,7 +22,7 @@
         this._hoverBtn = -1;
 
         var dw = opts.width || 360;
-        this._contentLines = this._wrapText(this._content, dw - 40);
+        this._contentLines = L2_Theme.wrapText(this._content, dw - 40, 7);
         var titleH = this._title ? 36 : 0;
         var contentH = Math.max(this._contentLines.length * 20 + 16, 40);
         var btnH = this._buttons.length > 0 ? 44 : 0;
@@ -43,20 +43,7 @@
     L2_Dialog.prototype.standardPadding = function () { return 0; };
 
     L2_Dialog.prototype._wrapText = function (text, maxW) {
-        if (!text) return [];
-        var charW = 7;
-        var charsPerLine = Math.max(Math.floor(maxW / charW), 1);
-        var result = [];
-        var paragraphs = text.split('\n');
-        for (var i = 0; i < paragraphs.length; i++) {
-            var line = paragraphs[i];
-            while (line.length > charsPerLine) {
-                result.push(line.substring(0, charsPerLine));
-                line = line.substring(charsPerLine);
-            }
-            result.push(line);
-        }
-        return result;
+        return L2_Theme.wrapText(text, maxW, 7);
     };
 
     L2_Dialog.prototype.refresh = function () {
@@ -159,9 +146,17 @@
     };
 
     L2_Dialog.prototype.close = function () {
+        if (this._closed) return;
+        this._closed = true;
         this.visible = false;
-        if (this.parent) this.parent.removeChild(this);
-        if (this._onClose) this._onClose();
+        if (this.parent && this.parent.removeChild) {
+            this.parent.removeChild(this);
+        }
+        var onClose = this._onClose;
+        // 清理引用
+        this._onClose = null;
+        this._buttons = null;
+        if (onClose) onClose();
     };
 
     // Static convenience methods

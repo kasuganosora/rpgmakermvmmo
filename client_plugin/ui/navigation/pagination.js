@@ -33,13 +33,13 @@
     L2_Pagination.prototype.setPage = function (p) {
         this._currentPage = Math.max(1, Math.min(p, this._totalPages));
         if (this._onChange) this._onChange(this._currentPage);
-        this.refresh();
+        this.markDirty();
     };
 
     L2_Pagination.prototype.setTotalPages = function (n) {
         this._totalPages = Math.max(1, n);
         if (this._currentPage > this._totalPages) this._currentPage = this._totalPages;
-        this.refresh();
+        this.markDirty();
     };
 
     L2_Pagination.prototype.refresh = function () {
@@ -114,7 +114,7 @@
             this._hoverBtn = -3;
         }
 
-        if (this._hoverBtn !== oldHover) this.refresh();
+        if (this._hoverBtn !== oldHover) this.markDirty();
 
         if (TouchInput.isTriggered()) {
             if (this._hoverBtn === -2 && this._currentPage > 1) {

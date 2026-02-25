@@ -18,7 +18,7 @@
         opts = opts || {};
         L2_Base.prototype.initialize.call(this, x, y, w, 28 + 4);
         this._options = opts.options || [];
-        this._selectedIndex = opts.selected !== undefined ? opts.selected : (opts.selectedIndex !== undefined ? opts.selectedIndex : -1);
+        this._selectedIndex = opts.value !== undefined ? opts.value : (opts.selectedIndex !== undefined ? opts.selectedIndex : -1);
         this._placeholder = opts.placeholder || '\u8BF7\u9009\u62E9...';
         this._onChange = opts.onChange || null;
         this._open = false;
@@ -30,7 +30,10 @@
     L2_Select.prototype.standardPadding = function () { return 2; };
 
     L2_Select.prototype.getSelected = function () {
-        return this._selectedIndex >= 0 ? this._options[this._selectedIndex] : null;
+        if (!this._options || this._selectedIndex < 0 || this._selectedIndex >= this._options.length) {
+            return null;
+        }
+        return this._options[this._selectedIndex];
     };
 
     L2_Select.prototype.getValue = function () {
@@ -39,9 +42,15 @@
     };
 
     L2_Select.prototype.setSelectedIndex = function (idx) {
+        if (idx === this._selectedIndex) return;
         this._selectedIndex = idx;
         if (this._onChange) this._onChange(this.getSelected(), idx);
-        this.refresh();
+        this.markDirty();
+    };
+
+    /** @deprecated Use setSelectedIndex instead */
+    L2_Select.prototype.setValue = function (idx) {
+        this.setSelectedIndex(idx);
     };
 
     L2_Select.prototype.refresh = function () {
@@ -68,7 +77,7 @@
 
             var ih = this._itemHeight;
             var self = this;
-            this._options.forEach(function (opt, i) {
+            (this._options || []).forEach(function (opt, i) {
                 var iy = listY + 2 + i * ih;
                 if (i === self._selectedIndex) {
                     c.fillRect(2, iy, cw - 4, ih, L2_Theme.selection);
@@ -99,20 +108,20 @@
             } else {
                 this._hoverOption = -1;
             }
-            if (this._hoverOption !== oldHover) this.refresh();
+            if (this._hoverOption !== oldHover) this.markDirty();
         }
 
         if (TouchInput.isTriggered()) {
             var insideTrigger = loc.x >= 0 && loc.x < cw && loc.y >= 0 && loc.y < 28;
             if (insideTrigger) {
                 this._open = !this._open;
-                var totalH = this._open ? 32 + this._options.length * ih + 8 : 32;
+                var totalH = this._open ? 32 + (this._options ? this._options.length : 0) * ih + 8 : 32;
                 this.move(this.x, this.y, this.width, totalH);
                 this.createContents();
-                this.refresh();
+                this.markDirty();
                 return;
             }
-            if (this._open && this._hoverOption >= 0) {
+            if (this._open && this._hoverOption >= 0 && this._options && this._hoverOption < this._options.length) {
                 this.setSelectedIndex(this._hoverOption);
                 this._open = false;
                 this.move(this.x, this.y, this.width, 32);

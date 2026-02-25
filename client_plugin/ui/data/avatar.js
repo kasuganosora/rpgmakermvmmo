@@ -15,7 +15,7 @@
      */
     L2_Avatar.prototype.initialize = function (x, y, opts) {
         opts = opts || {};
-        this._size = opts.size || 40;
+        this._size = opts.size || L2_Theme.iconSize;
         this._shape = opts.shape || 'circle'; // 'circle' | 'square'
         this._avatarText = opts.text || '';
         this._iconIndex = opts.iconIndex != null ? opts.iconIndex : -1;

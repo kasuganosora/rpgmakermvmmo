@@ -68,7 +68,7 @@
         var mx = TouchInput.x, my = TouchInput.y;
         var wasHover = this._closeHover;
         this._closeHover = mx >= bx && mx <= bx + 14 && my >= by && my <= by + this.ch();
-        if (this._closeHover !== wasHover) this.refresh();
+        if (this._closeHover !== wasHover) this.markDirty();
         if (this._closeHover && TouchInput.isTriggered() && this._onClose) this._onClose();
     };
 

@@ -30,7 +30,7 @@
     L2_Checkbox.prototype.setChecked = function (b) {
         this._checked = b;
         if (this._onChange) this._onChange(b);
-        this.refresh();
+        this.markDirty();
     };
 
     L2_Checkbox.prototype.refresh = function () {
@@ -62,7 +62,7 @@
         if (!this.visible) return;
         var wasHover = this._hover;
         this._hover = this.isInside(TouchInput.x, TouchInput.y);
-        if (this._hover !== wasHover) this.refresh();
+        if (this._hover !== wasHover) this.markDirty();
         if (this._hover && TouchInput.isTriggered()) {
             this.setChecked(!this._checked);
         }

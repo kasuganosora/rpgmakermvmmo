@@ -24,7 +24,7 @@
     L2_Textarea.prototype.standardPadding = function () { return 4; };
 
     L2_Textarea.prototype.getText = function () { return this._text; };
-    L2_Textarea.prototype.setText = function (t) { this._text = t; this._scrollY = 0; this.refresh(); };
+    L2_Textarea.prototype.setText = function (t) { this._text = t; this._scrollY = 0; this.markDirty(); };
 
     L2_Textarea.prototype.refresh = function () {
         var c = this.bmp();
@@ -69,7 +69,7 @@
         if (TouchInput.isTriggered()) {
             this._focused = inside && this._editable;
             this._cursorBlink = 0;
-            this.refresh();
+            this.markDirty();
         }
 
         // Scroll
@@ -79,17 +79,20 @@
             var totalH = lines.length * lh;
             this._scrollY += TouchInput.wheelY > 0 ? lh * 2 : -lh * 2;
             this._scrollY = Math.max(0, Math.min(this._scrollY, Math.max(0, totalH - this.ch())));
-            this.refresh();
+            this.markDirty();
         }
 
         // Keyboard input (when editable and focused)
         if (this._focused && this._editable) {
             this._cursorBlink = (this._cursorBlink + 1) % 60;
             var changed = false;
-            var chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-            for (var ci = 0; ci < chars.length; ci++) {
-                if (Input.isTriggered(chars[ci])) {
-                    this._text += chars[ci];
+            // 使用查找对象代替循环，性能更好
+            var keyMap = Input._keys || {};
+            var validChars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:\'",.<>?/~`\\ ';
+            for (var key in keyMap) {
+                if (keyMap[key] && validChars.indexOf(key) >= 0) {
+                    this._text += key;
+                    keyMap[key] = false;
                     changed = true;
                 }
             }
@@ -98,10 +101,10 @@
                 this._text = this._text.slice(0, -1);
                 changed = true;
             }
-            if (Input.isTriggered('escape')) { this._focused = false; this.refresh(); }
+            if (Input.isTriggered('escape')) { this._focused = false; this.markDirty(); }
             if (changed) {
                 if (this._onChange) this._onChange(this._text);
-                this.refresh();
+                this.markDirty();
             }
         }
     };

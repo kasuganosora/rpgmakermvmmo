@@ -72,7 +72,7 @@
             var wasHover = this._closeHover;
             this._closeHover = mx >= btnX && mx <= btnX + btnSize &&
                                my >= btnY && my <= btnY + btnSize;
-            if (this._closeHover !== wasHover) this.refresh();
+            if (this._closeHover !== wasHover) this.markDirty();
             if (this._closeHover && TouchInput.isTriggered()) {
                 this.visible = false;
                 if (this._onClose) this._onClose();

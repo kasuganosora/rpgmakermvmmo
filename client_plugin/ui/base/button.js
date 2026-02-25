@@ -37,8 +37,8 @@
 
     L2_Button.prototype.standardPadding = function () { return 2; };
 
-    L2_Button.prototype.setLabel = function (t) { this._label = t; this.refresh(); };
-    L2_Button.prototype.setEnabled = function (b) { this._enabled = b; this.refresh(); };
+    L2_Button.prototype.setLabel = function (t) { this._label = t; this.markDirty(); };
+    L2_Button.prototype.setEnabled = function (b) { this._enabled = b; this.markDirty(); };
     L2_Button.prototype.setOnClick = function (fn) { this._onClick = fn; };
 
     L2_Button.prototype._getColors = function () {
@@ -80,39 +80,60 @@
 
     L2_Button.prototype.refresh = function () {
         var c = this.bmp();
-        c.clear();
         var cw = this.cw(), ch = this.ch();
         var colors = this._getColors();
 
-        if (this._type !== 'text') {
-            L2_Theme.fillRoundRect(c, 0, 0, cw, ch, L2_Theme.cornerRadius, colors.bg);
-            L2_Theme.strokeRoundRect(c, 0, 0, cw, ch, L2_Theme.cornerRadius, colors.border);
-        }
-
-        var textX = 0, textW = cw;
-        // Draw icon if present
-        if (this._iconIndex >= 0) {
-            var iconSize = 20;
-            var iconX = 6;
-            var iconY = (ch - iconSize) / 2;
-            // Draw from IconSet
-            if (ImageManager && ImageManager.loadSystem) {
-                var iconSet = ImageManager.loadSystem('IconSet');
-                if (iconSet && iconSet.isReady()) {
-                    var pw = Window_Base._iconWidth || 32;
-                    var ph = Window_Base._iconHeight || 32;
-                    var sx = (this._iconIndex % 16) * pw;
-                    var sy = Math.floor(this._iconIndex / 16) * ph;
-                    c.blt(iconSet, sx, sy, pw, ph, iconX, iconY, iconSize, iconSize);
-                }
+        // 只有背景层脏时才重绘背景
+        if (this.isLayerDirty('bg')) {
+            c.clear();
+            if (this._type !== 'text') {
+                L2_Theme.fillRoundRect(c, 0, 0, cw, ch, L2_Theme.cornerRadius, colors.bg);
+                L2_Theme.strokeRoundRect(c, 0, 0, cw, ch, L2_Theme.cornerRadius, colors.border);
             }
-            textX = iconX + iconSize + 4;
-            textW = cw - textX - 4;
+            this.markLayerClean('bg');
         }
 
-        c.fontSize = L2_Theme.fontNormal;
-        c.textColor = colors.text;
-        c.drawText(this._label, textX, 0, textW, ch, this._iconIndex >= 0 ? 'left' : 'center');
+        // 内容层总是重绘（因为文字可能变化）
+        if (this.isLayerDirty('content')) {
+            // 如果背景不是透明的，需要清除内容区域
+            if (this._type === 'text') {
+                c.clear();
+            }
+            
+            var textX = 0, textW = cw;
+            // Draw icon if present
+            if (this._iconIndex >= 0) {
+                var iconSize = 20;
+                var iconX = 6;
+                var iconY = (ch - iconSize) / 2;
+                // Draw from IconSet
+                if (ImageManager && ImageManager.loadSystem) {
+                    var iconSet = ImageManager.loadSystem('IconSet');
+                    if (iconSet && iconSet.isReady()) {
+                        var pw = Window_Base._iconWidth || 32;
+                        var ph = Window_Base._iconHeight || 32;
+                        var sx = (this._iconIndex % 16) * pw;
+                        var sy = Math.floor(this._iconIndex / 16) * ph;
+                        c.blt(iconSet, sx, sy, pw, ph, iconX, iconY, iconSize, iconSize);
+                    }
+                }
+                textX = iconX + iconSize + 4;
+                textW = cw - textX - 4;
+            }
+
+            // 使用锐化文字渲染
+            var ctx = c._context;
+            if (ctx) {
+                L2_Theme.configureTextContext(ctx, L2_Theme.fontNormal, colors.text);
+                var align = this._iconIndex >= 0 ? 'left' : 'center';
+                L2_Theme.drawTextSharp(c, this._label, textX, 0, textW, ch, align);
+            } else {
+                c.fontSize = L2_Theme.fontNormal;
+                c.textColor = colors.text;
+                c.drawText(this._label, textX, 0, textW, ch, this._iconIndex >= 0 ? 'left' : 'center');
+            }
+            this.markLayerClean('content');
+        }
     };
 
     L2_Button.prototype.update = function () {
@@ -122,6 +143,7 @@
         var mx = TouchInput.x, my = TouchInput.y;
         var inside = this.isInside(mx, my);
         var wasHover = this._hover;
+        var wasPressed = this._pressed;
         this._hover = inside && this._enabled;
 
         if (this._enabled && inside && TouchInput.isTriggered()) {
@@ -133,7 +155,35 @@
         }
         if (!TouchInput.isPressed()) this._pressed = false;
 
-        if (this._hover !== wasHover || this._pressed) this.refresh();
+        // 只有当状态真正改变时才标记为脏
+        if (wasHover !== this._hover || wasPressed !== this._pressed) {
+            this.markDirty('bg');
+            this.markDirty('content');
+        }
+    };
+
+    /**
+     * Optimized hover state update for batch processing.
+     * @private
+     */
+    L2_Button.prototype._updateHoverState = function (inside, triggered, pressed) {
+        var wasHover = this._hover;
+        var wasPressed = this._pressed;
+        this._hover = inside && this._enabled;
+        
+        if (this._enabled && inside && triggered) {
+            this._pressed = true;
+        }
+        if (this._pressed && !pressed) {
+            this._pressed = false;
+            if (inside && this._onClick) this._onClick();
+        }
+        if (!pressed) this._pressed = false;
+        
+        if (wasHover !== this._hover || wasPressed !== this._pressed) {
+            this.markDirty('bg');
+            this.markDirty('content');
+        }
     };
 
     window.L2_Button = L2_Button;

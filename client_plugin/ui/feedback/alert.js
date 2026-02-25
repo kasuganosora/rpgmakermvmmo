@@ -90,7 +90,7 @@
         var lx = mx - this.x, ly = my - this.y;
         var wasHover = this._closeHover;
         this._closeHover = lx >= this.width - 26 && lx <= this.width - 4 && ly >= 2 && ly <= this.height - 2;
-        if (this._closeHover !== wasHover) this.refresh();
+        if (this._closeHover !== wasHover) this.markDirty();
         if (this._closeHover && TouchInput.isTriggered()) {
             this.visible = false;
             if (this.parent) this.parent.removeChild(this);

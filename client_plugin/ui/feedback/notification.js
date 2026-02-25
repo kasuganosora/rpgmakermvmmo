@@ -5,6 +5,9 @@
     'use strict';
 
     var _activeNotifs = [];
+    var _notifIdCounter = 0;
+    var _maxVisible = 5;
+    var _poolName = 'L2_Notification';
 
     function L2_Notification() { this.initialize.apply(this, arguments); }
     L2_Notification.prototype = Object.create(L2_Base.prototype);
@@ -15,6 +18,7 @@
      */
     L2_Notification.prototype.initialize = function (opts) {
         opts = opts || {};
+        this._notifId = ++_notifIdCounter;
         this._nTitle = opts.title || '';
         this._nContent = opts.content || '';
         this._nType = opts.type || 'info';
@@ -25,6 +29,8 @@
         this._timer = this._duration;
         this._fadeOut = false;
         this._closeHover = false;
+        this._pooled = false;
+        this._disposed = false;
 
         var nw = 280;
         var contentLines = this._wrapText(this._nContent, nw - 30);
@@ -41,20 +47,7 @@
     L2_Notification.prototype.standardPadding = function () { return 0; };
 
     L2_Notification.prototype._wrapText = function (text, maxW) {
-        if (!text) return [];
-        var charW = 7;
-        var cpl = Math.max(Math.floor(maxW / charW), 1);
-        var result = [];
-        var paragraphs = text.split('\n');
-        for (var i = 0; i < paragraphs.length; i++) {
-            var line = paragraphs[i];
-            while (line.length > cpl) {
-                result.push(line.substring(0, cpl));
-                line = line.substring(cpl);
-            }
-            result.push(line);
-        }
-        return result;
+        return L2_Theme.wrapText(text, maxW, 7);
     };
 
     L2_Notification.prototype._typeColor = function () {
@@ -135,15 +128,50 @@
     };
 
     L2_Notification.prototype._dismiss = function () {
+        if (this._disposed) return;
+        this._disposed = true;
         this.visible = false;
         if (this.parent) this.parent.removeChild(this);
         var idx = _activeNotifs.indexOf(this);
         if (idx >= 0) _activeNotifs.splice(idx, 1);
         _repositionNotifs();
         if (this._onClose) this._onClose();
+        // 清理引用
+        this._nTitle = null;
+        this._nContent = null;
+        this._onClose = null;
+        this._contentLines = null;
+        
+        // 返回对象池
+        if (!this._pooled) {
+            L2_Theme.release(_poolName, this, L2_Notification._reset);
+        }
+    };
+
+    /** Reset object for pool reuse */
+    L2_Notification._reset = function (notif) {
+        notif._pooled = true;
+        notif._nTitle = '';
+        notif._nContent = '';
+        notif._nType = 'info';
+        notif._duration = 180;
+        notif._placement = 'topRight';
+        notif._closable = true;
+        notif._onClose = null;
+        notif._timer = 0;
+        notif._fadeOut = false;
+        notif._closeHover = false;
+        notif._disposed = false;
+        notif._contentLines = null;
+        notif.visible = false;
+        notif.opacity = 255;
+        notif.parent = null;
+        notif._dirty = true;
     };
 
     function _repositionNotifs() {
+        // 清理已处置的通知
+        _activeNotifs = _activeNotifs.filter(function (n) { return !n._disposed; });
         var yy = 12;
         for (var i = 0; i < _activeNotifs.length; i++) {
             _activeNotifs[i]._targetY = yy;
@@ -155,10 +183,57 @@
 
     // Static API
     L2_Notification.show = function (opts) {
-        var n = new L2_Notification(opts);
+        opts = opts || {};
+        // 限制最大数量
+        while (_activeNotifs.length >= _maxVisible) {
+            var oldest = _activeNotifs[0];
+            if (oldest && oldest._dismiss) oldest._dismiss();
+            else _activeNotifs.shift();
+        }
+        
+        // 从对象池获取或创建新实例
+        var n = L2_Theme.acquire(_poolName, function () {
+            return new L2_Notification(opts);
+        });
+        
+        // 如果是池中的对象，需要重新初始化
+        if (n._pooled) {
+            n._pooled = false;
+            n._nTitle = opts.title || '';
+            n._nContent = opts.content || '';
+            n._nType = opts.type || 'info';
+            n._duration = opts.duration || 180;
+            n._placement = opts.placement || 'topRight';
+            n._closable = opts.closable !== false;
+            n._onClose = opts.onClose || null;
+            n._timer = n._duration;
+            n._fadeOut = false;
+            n._closeHover = false;
+            n._disposed = false;
+            n._notifId = ++_notifIdCounter;
+            
+            var nw = 280;
+            var contentLines = n._wrapText(n._nContent, nw - 30);
+            n._contentLines = contentLines;
+            var nh = 24 + contentLines.length * 18 + 16;
+            
+            var gw = Graphics.boxWidth || 816;
+            var startX = n._placement.indexOf('Right') >= 0 ? gw : -nw;
+            n.x = startX;
+            n.y = 0;
+            n.width = nw;
+            n.height = nh;
+            n._targetX = n._placement.indexOf('Right') >= 0 ? gw - nw - 12 : 12;
+            n.visible = true;
+            n.opacity = 255;
+            n._dirty = true;
+        }
+        
         _activeNotifs.push(n);
         _repositionNotifs();
-        if (SceneManager._scene) SceneManager._scene.addChild(n);
+        if (SceneManager._scene && SceneManager._scene.addChild) {
+            SceneManager._scene.addChild(n);
+        }
         n.visible = true;
         n.opacity = 255;
         return n;

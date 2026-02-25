@@ -28,7 +28,7 @@
     L2_Steps.prototype.setCurrent = function (idx) {
         this._current = Math.max(0, Math.min(idx, this._steps.length - 1));
         if (this._onChange) this._onChange(this._current);
-        this.refresh();
+        this.markDirty();
     };
 
     L2_Steps.prototype.refresh = function () {

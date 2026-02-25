@@ -20,8 +20,8 @@
         L2_Base.prototype.initialize.call(this, x, y, w, h);
         opts = opts || {};
         this._cols = opts.cols || 1;
-        this._rowGap = opts.rowGap !== undefined ? opts.rowGap : 4;
-        this._colGap = opts.colGap !== undefined ? opts.colGap : 4;
+        this._rowGap = opts.rowGap !== undefined ? opts.rowGap : L2_Theme.defaultGap;
+        this._colGap = opts.colGap !== undefined ? opts.colGap : L2_Theme.defaultGap;
         this._managed = [];
     };
 
@@ -45,7 +45,7 @@
 
     /** Recalculate positions of all managed children. */
     L2_Grid.prototype.layoutItems = function () {
-        var cols = this._cols;
+        var cols = Math.max(1, this._cols || 1);
         var cw = this.cw();
         var cellW = (cw - (cols - 1) * this._colGap) / cols;
 

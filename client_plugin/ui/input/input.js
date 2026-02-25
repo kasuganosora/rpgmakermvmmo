@@ -31,8 +31,8 @@
     L2_Input.prototype.standardPadding = function () { return 2; };
 
     L2_Input.prototype.getText = function () { return this._text; };
-    L2_Input.prototype.setText = function (t) { this._text = String(t); this.refresh(); };
-    L2_Input.prototype.setFocused = function (b) { this._focused = b; this._cursorBlink = 0; this.refresh(); };
+    L2_Input.prototype.setText = function (t) { this._text = String(t); this.markDirty(); };
+    L2_Input.prototype.setFocused = function (b) { this._focused = b; this._cursorBlink = 0; this.markDirty(); };
     L2_Input.prototype.isFocused = function () { return this._focused; };
 
     L2_Input.prototype.refresh = function () {
@@ -69,18 +69,21 @@
         if (!this._focused) return;
 
         this._cursorBlink = (this._cursorBlink + 1) % 60;
-        if (this._cursorBlink === 0 || this._cursorBlink === 30) this.refresh();
+        if (this._cursorBlink === 0 || this._cursorBlink === 30) this.markDirty();
 
         var changed = false;
-        var chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-        for (var ci = 0; ci < chars.length; ci++) {
-            var ch = chars[ci];
-            if (Input.isTriggered(ch) && this._text.length < this._maxLength) {
-                this._text += ch;
+        // 使用查找对象代替循环，性能更好
+        var keyMap = Input._keys || {};
+        // 支持的字符集
+        var validChars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:\'",.<>?/~`\\ ';
+        for (var key in keyMap) {
+            if (keyMap[key] && validChars.indexOf(key) >= 0 && this._text.length < this._maxLength) {
+                this._text += key;
+                keyMap[key] = false;
                 changed = true;
             }
         }
-        // Space
+        // Space (映射为空格字符)
         if (Input.isTriggered('space') && this._text.length < this._maxLength) {
             this._text += ' ';
             changed = true;
@@ -100,7 +103,7 @@
         }
         if (changed) {
             if (this._onChange) this._onChange(this._text);
-            this.refresh();
+            this.markDirty();
         }
     };
 

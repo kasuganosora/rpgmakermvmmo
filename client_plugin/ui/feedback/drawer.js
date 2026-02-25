@@ -76,8 +76,24 @@
     };
 
     L2_Drawer.prototype.addContent = function (child) {
+        if (!child) return;
         this._children.push(child);
         this.addChild(child);
+        // 调整子元素位置以适应抽屉内容区域
+        if (child.y < this.contentY()) {
+            child.y = this.contentY();
+        }
+    };
+
+    L2_Drawer.prototype.removeContent = function (child) {
+        if (!child) return;
+        var idx = this._children.indexOf(child);
+        if (idx >= 0) {
+            this._children.splice(idx, 1);
+            if (child.parent === this) {
+                this.removeChild(child);
+            }
+        }
     };
 
     L2_Drawer.prototype.update = function () {
@@ -106,7 +122,7 @@
         if (this._closable && this._title) {
             var wasHover = this._closeHover;
             this._closeHover = lx >= this.width - 32 && lx <= this.width && ly >= 4 && ly <= 32;
-            if (this._closeHover !== wasHover) this.refresh();
+            if (this._closeHover !== wasHover) this.markDirty();
             if (this._closeHover && TouchInput.isTriggered()) {
                 this.close();
                 return;

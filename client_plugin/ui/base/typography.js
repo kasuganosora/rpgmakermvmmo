@@ -39,7 +39,7 @@
 
     L2_Typography.prototype.setText = function (t) {
         this._text = t;
-        this.refresh();
+        this.markDirty();
     };
 
     L2_Typography.prototype.refresh = function () {
@@ -47,29 +47,40 @@
         c.clear();
         var cw = this.cw(), ch = this.ch();
 
+        var fontSize, color;
         switch (this._level) {
             case 'h1':
-                c.fontSize = L2_Theme.fontH1;
-                c.textColor = this._textColor || L2_Theme.textWhite;
+                fontSize = L2_Theme.fontH1;
+                color = this._textColor || L2_Theme.textWhite;
                 break;
             case 'h2':
-                c.fontSize = L2_Theme.fontH2;
-                c.textColor = this._textColor || L2_Theme.textWhite;
+                fontSize = L2_Theme.fontH2;
+                color = this._textColor || L2_Theme.textWhite;
                 break;
             case 'h3':
-                c.fontSize = L2_Theme.fontH3;
-                c.textColor = this._textColor || L2_Theme.textTitle;
+                fontSize = L2_Theme.fontH3;
+                color = this._textColor || L2_Theme.textTitle;
                 break;
             case 'caption':
-                c.fontSize = L2_Theme.fontTiny;
-                c.textColor = this._textColor || L2_Theme.textDim;
+                fontSize = L2_Theme.fontTiny;
+                color = this._textColor || L2_Theme.textDim;
                 break;
             default:
-                c.fontSize = L2_Theme.fontNormal;
-                c.textColor = this._textColor || L2_Theme.textGray;
+                fontSize = L2_Theme.fontNormal;
+                color = this._textColor || L2_Theme.textGray;
         }
 
-        c.drawText(this._text, 0, 0, cw, ch, this._align);
+        // 使用锐化文字渲染
+        var ctx = c._context;
+        if (ctx) {
+            L2_Theme.configureTextContext(ctx, fontSize, color);
+            L2_Theme.drawTextSharp(c, this._text, 0, 0, cw, ch, this._align);
+        } else {
+            // 降级到默认渲染
+            c.fontSize = fontSize;
+            c.textColor = color;
+            c.drawText(this._text, 0, 0, cw, ch, this._align);
+        }
     };
 
     window.L2_Typography = L2_Typography;

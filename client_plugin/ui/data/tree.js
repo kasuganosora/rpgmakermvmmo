@@ -20,7 +20,7 @@
         L2_Base.prototype.initialize.call(this, x, y, w, h);
         this._data = opts.data || [];
         this._onSelect = opts.onSelect || null;
-        this._nodeH = 24;
+        this._nodeH = L2_Theme.defaultItemHeight;
         this._indent = 18;
         this._scrollY = 0;
         this._hoverNode = null;
@@ -91,9 +91,10 @@
         // Scrollbar
         var totalH = this._flatNodes.length * this._nodeH;
         if (totalH > ch) {
+            var sbW = L2_Theme.scrollbarWidth;
             var barH = Math.max(ch * ch / totalH, 20);
             var barY = (this._scrollY / (totalH - ch)) * (ch - barH);
-            c.fillRect(cw - 4, barY, 4, barH, L2_Theme.textGray + '66');
+            c.fillRect(cw - sbW, barY, sbW, barH, L2_Theme.textGray + '66');
         }
     };
 
@@ -141,7 +142,7 @@
             }
             this._selectedNode = node;
             if (this._onSelect) this._onSelect(node);
-            this.refresh();
+            this.markDirty();
         }
     };
 

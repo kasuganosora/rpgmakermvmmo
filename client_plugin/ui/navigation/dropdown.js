@@ -16,12 +16,12 @@
      * @param {Array} options - [{label, action, color}]
      */
     L2_Dropdown.prototype.initialize = function (x, y, w, label, options) {
-        L2_Base.prototype.initialize.call(this, x, y, w, 28 + 4);
+        L2_Base.prototype.initialize.call(this, x, y, w, L2_Theme.defaultBtnHeight + 4);
         this._label = label || '';
         this._options = options || [];
         this._open = false;
         this._hoverOption = -1;
-        this._itemHeight = 26;
+        this._itemHeight = L2_Theme.defaultItemHeight;
         this.refresh();
     };
 
@@ -77,8 +77,8 @@
                             loc.y >= listY && loc.y < listY + this._options.length * ih + 4;
             var oldHover = this._hoverOption;
             this._hoverOption = insideList ? Math.floor((loc.y - listY - 2) / ih) : -1;
-            if (this._hoverOption >= this._options.length) this._hoverOption = -1;
-            if (this._hoverOption !== oldHover) this.refresh();
+            if (this._options && this._hoverOption >= this._options.length) this._hoverOption = -1;
+            if (this._hoverOption !== oldHover) this.markDirty();
         }
 
         if (TouchInput.isTriggered()) {

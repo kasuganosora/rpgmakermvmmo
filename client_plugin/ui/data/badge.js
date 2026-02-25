@@ -28,7 +28,7 @@
     L2_Badge.prototype.standardPadding = function () { return 2; };
 
     L2_Badge.prototype.setCount = function (n) {
-        if (this._count !== n) { this._count = n; this.refresh(); }
+        if (this._count !== n) { this._count = n; this.markDirty(); }
     };
 
     L2_Badge.prototype.refresh = function () {

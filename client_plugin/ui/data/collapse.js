@@ -20,8 +20,8 @@
             return { title: it.title || '', content: it.content || '', expanded: !!it.expanded };
         });
         this._accordion = opts.accordion || false;
-        this._headerH = 28;
-        this._lineH = 18;
+        this._headerH = L2_Theme.titleBarH;
+        this._lineH = L2_Theme.fontNormal + 4;
         this._hoverIdx = -1;
         var h = this._calcHeight();
         L2_Base.prototype.initialize.call(this, x, y, w, h + 4);
@@ -43,21 +43,8 @@
     };
 
     L2_Collapse.prototype._wrapText = function (text) {
-        if (!text) return [''];
         var maxW = this.cw() - 20;
-        var charW = 7;
-        var charsPerLine = Math.max(Math.floor(maxW / charW), 1);
-        var result = [];
-        var lines = text.split('\n');
-        for (var i = 0; i < lines.length; i++) {
-            var line = lines[i];
-            while (line.length > charsPerLine) {
-                result.push(line.substring(0, charsPerLine));
-                line = line.substring(charsPerLine);
-            }
-            result.push(line);
-        }
-        return result;
+        return L2_Theme.wrapText(text, maxW, 7);
     };
 
     L2_Collapse.prototype.refresh = function () {
@@ -119,7 +106,7 @@
                 yy += lines.length * this._lineH + 8;
             }
         }
-        if (this._hoverIdx !== oldHover) this.refresh();
+        if (this._hoverIdx !== oldHover) this.markDirty();
 
         if (TouchInput.isTriggered() && this._hoverIdx >= 0) {
             this._toggle(this._hoverIdx);
@@ -133,7 +120,7 @@
             }
         }
         this._items[idx].expanded = !this._items[idx].expanded;
-        this.refresh();
+        this.markDirty();
     };
 
     window.L2_Collapse = L2_Collapse;

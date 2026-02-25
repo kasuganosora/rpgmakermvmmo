@@ -5,8 +5,17 @@
 <title>L2 UI Component Test Page</title>
 <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #0D0D1A; overflow: hidden; }
-    canvas { display: block; }
+    body { 
+        background: #0D0D1A; 
+        overflow: hidden;
+        font-family: "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "WenQuanYi Micro Hei", sans-serif;
+    }
+    canvas { 
+        display: block;
+        image-rendering: pixelated;
+        image-rendering: -moz-crisp-edges;
+        image-rendering: crisp-edges;
+    }
 </style>
 </head>
 <body>
@@ -46,7 +55,17 @@
         this.outlineColor = 'rgba(0,0,0,0.5)';
         this.outlineWidth = 0;
         this._loadListeners = [];
+        this._destroyed = false;
     }
+    Bitmap.prototype.destroy = function () {
+        if (this._destroyed) return;
+        this._destroyed = true;
+        this._context = null;
+        this._canvas.width = 1;
+        this._canvas.height = 1;
+        this._canvas = null;
+        this._loadListeners = null;
+    };
     Bitmap.prototype.clear = function () {
         this._context.clearRect(0, 0, this._canvas.width, this._canvas.height);
         this._dirty = true;
@@ -75,14 +94,24 @@
     Bitmap.prototype.drawText = function (text, x, y, maxW, lineH, align) {
         var ctx = this._context;
         ctx.save();
-        ctx.font = this.fontSize + 'px sans-serif';
+        // 使用支持中文的字体栈
+        ctx.font = this.fontSize + 'px "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", sans-serif';
         ctx.fillStyle = this.textColor;
-        ctx.textBaseline = 'middle';
-        var tx = x;
-        if (align === 'center') tx = x + (maxW || 0) / 2;
-        else if (align === 'right') tx = x + (maxW || 0);
+        ctx.textBaseline = 'alphabetic';
+        ctx.imageSmoothingEnabled = false;
+        
+        // 像素对齐
+        var px = Math.round(x);
+        var py = Math.round(y);
+        var h = Math.round(lineH || this.fontSize);
+        var baseline = Math.round(py + h * 0.75);
+        
+        var tx = px;
+        if (align === 'center') tx = px + Math.floor((maxW || 0) / 2);
+        else if (align === 'right') tx = px + Math.round(maxW || 0);
+        
         ctx.textAlign = align || 'left';
-        ctx.fillText(String(text), tx, y + (lineH || this.fontSize) / 2, maxW || undefined);
+        ctx.fillText(String(text), tx, baseline, maxW || undefined);
         ctx.restore();
         this._dirty = true;
     };
@@ -132,7 +161,24 @@
         this.parent = null;
         this.children = [];
         this.padding = this.standardPadding();
+        this._destroyed = false;
         this.createContents();
+    };
+    Window_Base.prototype.destroy = function () {
+        if (this._destroyed) return;
+        this._destroyed = true;
+        // 销毁所有子元素
+        for (var i = this.children.length - 1; i >= 0; i--) {
+            if (this.children[i] && this.children[i].destroy) {
+                this.children[i].destroy();
+            }
+        }
+        this.children = [];
+        if (this.contents) {
+            this.contents.destroy();
+            this.contents = null;
+        }
+        this.parent = null;
     };
     Window_Base.prototype.standardPadding = function () { return 18; };
     Window_Base.prototype.createContents = function () {
@@ -200,20 +246,34 @@
         },
     };
 
-    canvas.addEventListener('mousemove', function (e) {
+    // 事件监听管理
+    var _eventListeners = [];
+    function _addEventListener(target, type, handler, options) {
+        target.addEventListener(type, handler, options);
+        _eventListeners.push({ target: target, type: type, handler: handler });
+    }
+    function _removeAllListeners() {
+        for (var i = 0; i < _eventListeners.length; i++) {
+            var el = _eventListeners[i];
+            el.target.removeEventListener(el.type, el.handler);
+        }
+        _eventListeners = [];
+    }
+
+    _addEventListener(canvas, 'mousemove', function (e) {
         TouchInput.x = e.offsetX;
         TouchInput.y = e.offsetY;
     });
-    canvas.addEventListener('mousedown', function (e) {
+    _addEventListener(canvas, 'mousedown', function (e) {
         if (e.button === 0) { TouchInput._triggered = true; TouchInput._pressing = true; }
         if (e.button === 2) TouchInput._rightTriggered = true;
     });
-    canvas.addEventListener('mouseup', function () { TouchInput._pressing = false; });
-    canvas.addEventListener('wheel', function (e) {
+    _addEventListener(canvas, 'mouseup', function () { TouchInput._pressing = false; });
+    _addEventListener(canvas, 'wheel', function (e) {
         TouchInput.wheelY = e.deltaY > 0 ? 1 : e.deltaY < 0 ? -1 : 0;
     });
-    canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); });
-    document.addEventListener('keydown', function (e) {
+    _addEventListener(canvas, 'contextmenu', function (e) { e.preventDefault(); });
+    _addEventListener(document, 'keydown', function (e) {
         if (e.key === 'Escape') Input._keys['cancel'] = true;
         if (e.key === 'Enter') Input._keys['ok'] = true;
         // Forward to any focused L2_Input
@@ -221,6 +281,24 @@
             window._l2FocusedInput._handleKeyDown(e);
         }
     });
+
+    // 全局清理函数（需要在第二个 script 中注册组件列表）
+    window._allL2Components = null;
+    window._cleanupTestPage = function () {
+        _removeAllListeners();
+        // 销毁所有组件
+        if (window._allL2Components) {
+            for (var i = window._allL2Components.length - 1; i >= 0; i--) {
+                var comp = window._allL2Components[i];
+                if (comp && comp.destroy) {
+                    comp.destroy();
+                } else if (comp && comp.parent) {
+                    comp.parent.removeChild(comp);
+                }
+            }
+            window._allL2Components = [];
+        }
+    };
 
     // ── SceneManager ──
     window.SceneManager = {
@@ -254,15 +332,15 @@
     SceneManager._scene = scene;
 
     var scrollX = 0, scrollY = 0;
-    var allComponents = [];
+    window._allL2Components = [];
 
     function add(comp) {
         scene.addChild(comp);
-        allComponents.push(comp);
+        window._allL2Components.push(comp);
         return comp;
     }
 
-    // ═══ COLUMN 1: Layout + Base + Navigation ═══
+    // ═══ COLUMN 1: 布局 + 基础组件 + 导航 ═══
     var col1X = 20, yy = 20;
 
     // Section label helper
@@ -272,10 +350,10 @@
     }
 
     // ── Layout ──
-    sectionLabel('Layout', col1X, yy);
+    sectionLabel('布局组件', col1X, yy);
     yy += 30;
 
-    add(new L2_Divider(col1X, yy, 220, { text: 'Divider' }));
+    add(new L2_Divider(col1X, yy, 220, { text: '分隔线 Divider' }));
     yy += 24;
 
     add(new L2_Space(8, 8));
@@ -285,7 +363,7 @@
     yy += 58;
 
     // ── Base ──
-    sectionLabel('Base', col1X, yy);
+    sectionLabel('基础组件', col1X, yy);
     yy += 30;
 
     add(new L2_Button(col1X, yy, '默认按钮', {}));
@@ -293,7 +371,7 @@
     yy += 36;
     add(new L2_Button(col1X, yy, '成功', { type: 'success' }));
     add(new L2_Button(col1X + 65, yy, '危险', { type: 'danger' }));
-    add(new L2_Button(col1X + 130, yy, '文本', { type: 'text' }));
+    add(new L2_Button(col1X + 130, yy, '文本按钮', { type: 'text' }));
     yy += 36;
 
     add(new L2_Icon(col1X, yy, 64));
@@ -302,15 +380,15 @@
     add(new L2_Link(col1X + 120, yy + 8, '点击链接', { onClick: function () { L2_Message.info('链接被点击'); } }));
     yy += 40;
 
-    add(new L2_Typography(col1X, yy, 220, { text: 'H1 标题', level: 'h1' }));
+    add(new L2_Typography(col1X, yy, 220, { text: 'H1 大标题 微软雅黑', level: 'h1' }));
     yy += 26;
-    add(new L2_Typography(col1X, yy, 220, { text: 'H3 标题', level: 'h3' }));
+    add(new L2_Typography(col1X, yy, 220, { text: 'H3 小标题 清晰锐利', level: 'h3' }));
     yy += 22;
-    add(new L2_Typography(col1X, yy, 220, { text: 'Body 正文 / Caption', level: 'body' }));
+    add(new L2_Typography(col1X, yy, 220, { text: '正文：中文渲染优化测试', level: 'body' }));
     yy += 24;
 
     // ── Navigation ──
-    sectionLabel('Navigation', col1X, yy);
+    sectionLabel('导航组件', col1X, yy);
     yy += 30;
 
     add(new L2_Tabs(col1X, yy, 220, { tabs: ['物品', '装备', '技能'], activeIndex: 0 }));
@@ -588,13 +666,13 @@
         Graphics.frameCount++;
 
         // Update all components
-        for (var i = 0; i < allComponents.length; i++) {
-            if (allComponents[i].update) allComponents[i].update();
+        for (var i = 0; i < window._allL2Components.length; i++) {
+            if (window._allL2Components[i].update) window._allL2Components[i].update();
         }
 
         // Handle tooltip for hover buttons
-        for (var j = 0; j < allComponents.length; j++) {
-            var c = allComponents[j];
+        for (var j = 0; j < window._allL2Components.length; j++) {
+            var c = window._allL2Components[j];
             if (c._tooltipRef && c.isInside && c.isInside(TouchInput.x, TouchInput.y)) {
                 c._tooltipRef.show('这是一个提示信息\nTooltip Content');
             }
@@ -614,8 +692,8 @@
             mainCtx.beginPath(); mainCtx.moveTo(0, gy); mainCtx.lineTo(SCREEN_W, gy); mainCtx.stroke();
         }
 
-        for (var k = 0; k < allComponents.length; k++) {
-            renderComponent(allComponents[k]);
+        for (var k = 0; k < window._allL2Components.length; k++) {
+            renderComponent(window._allL2Components[k]);
         }
 
         // Reset per-frame input

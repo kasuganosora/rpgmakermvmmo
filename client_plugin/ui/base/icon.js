@@ -28,7 +28,7 @@
 
     L2_Icon.prototype.setIcon = function (index) {
         this._iconIndex = index;
-        this.refresh();
+        this.markDirty();
     };
 
     L2_Icon.prototype.refresh = function () {

@@ -19,7 +19,7 @@
         L2_Base.prototype.initialize.call(this, x, y, w, h);
         opts = opts || {};
         this._items = [];
-        this._itemHeight = opts.itemHeight || 24;
+        this._itemHeight = opts.itemHeight || L2_Theme.defaultItemHeight;
         this._scrollY = 0;
         this._selectedIndex = -1;
         this._hoverIndex = -1;
@@ -34,7 +34,7 @@
         this._items = items || [];
         this._scrollY = 0;
         this._selectedIndex = -1;
-        this.refresh();
+        this.markDirty();
     };
 
     L2_List.prototype.getSelected = function () {
@@ -52,7 +52,7 @@
         L2_Theme.strokeRoundRect(c, 0, 0, cw, ch, 2, L2_Theme.borderDark);
 
         var ih = this._itemHeight;
-        var sbW = 6;
+        var sbW = L2_Theme.scrollbarWidth;
         var startIdx = Math.floor(this._scrollY / ih);
         var visCount = Math.ceil(ch / ih) + 1;
 

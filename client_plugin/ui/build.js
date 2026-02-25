@@ -16,6 +16,7 @@ const OUT  = path.join(ROOT, 'mmo-ui.js');
 const FILES = [
     // Core (must be first — everything depends on L2_Theme and L2_Base)
     'ui/core/theme.js',
+    'ui/core/input-blocker.js', // Must load before base.js
     'ui/core/base.js',
 
     // Layout

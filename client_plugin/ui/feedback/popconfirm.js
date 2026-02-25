@@ -107,7 +107,7 @@
             this._hoverBtn = 1;
         }
 
-        if (this._hoverBtn !== oldHover) this.refresh();
+        if (this._hoverBtn !== oldHover) this.markDirty();
 
         if (TouchInput.isTriggered()) {
             if (this._hoverBtn === 0) {
@@ -131,8 +131,13 @@
     };
 
     L2_Popconfirm.prototype._dismiss = function () {
+        if (this._disposed) return;
+        this._disposed = true;
         this.visible = false;
         if (this.parent) this.parent.removeChild(this);
+        // 清理引用
+        this._onOk = null;
+        this._onCancel = null;
     };
 
     window.L2_Popconfirm = L2_Popconfirm;

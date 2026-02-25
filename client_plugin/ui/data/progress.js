@@ -33,7 +33,7 @@
     L2_Progress.prototype.setValue = function (val, max) {
         this._value = val;
         if (max !== undefined) this._maxValue = max;
-        this.refresh();
+        this.markDirty();
     };
 
     L2_Progress.prototype.refresh = function () {

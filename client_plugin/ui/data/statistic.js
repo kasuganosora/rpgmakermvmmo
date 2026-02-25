@@ -29,7 +29,7 @@
     L2_Statistic.prototype.standardPadding = function () { return 4; };
 
     L2_Statistic.prototype.setValue = function (v) {
-        if (this._value !== v) { this._value = v; this.refresh(); }
+        if (this._value !== v) { this._value = v; this.markDirty(); }
     };
 
     L2_Statistic.prototype.refresh = function () {

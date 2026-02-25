@@ -47,7 +47,7 @@
         if (!this.visible) return;
         var wasHover = this._hover;
         this._hover = this.isInside(TouchInput.x, TouchInput.y);
-        if (this._hover !== wasHover) this.refresh();
+        if (this._hover !== wasHover) this.markDirty();
         if (this._hover && TouchInput.isTriggered() && this._onClick) {
             this._onClick();
         }

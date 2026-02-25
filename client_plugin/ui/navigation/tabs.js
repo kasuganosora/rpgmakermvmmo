@@ -30,10 +30,10 @@
     L2_Tabs.prototype.getActiveLabel = function () { return this._tabs[this._activeTab]; };
 
     L2_Tabs.prototype.setActiveTab = function (idx) {
-        if (idx === this._activeTab || idx < 0 || idx >= this._tabs.length) return;
+        if (idx === this._activeTab || idx < 0 || idx >= this._tabs.length || !this._tabs.length) return;
         this._activeTab = idx;
         if (this._onChange) this._onChange(idx, this._tabs[idx]);
-        this.refresh();
+        this.markDirty();
     };
 
     L2_Tabs.prototype.refresh = function () {
@@ -74,10 +74,15 @@
         var tw = Math.floor(this.cw() / Math.max(this._tabs.length, 1));
         var inside = mx >= 0 && mx < this.width && my >= 0 && my < this.height;
         var oldHover = this._hoverTab;
-        this._hoverTab = inside ? Math.min(Math.floor(mx / tw), this._tabs.length - 1) : -1;
-        if (this._hoverTab !== oldHover) this.refresh();
-        if (inside && TouchInput.isTriggered()) {
-            this.setActiveTab(Math.min(Math.floor(mx / tw), this._tabs.length - 1));
+        var tabIdx = -1;
+        if (inside && this._tabs.length > 0) {
+            tabIdx = Math.floor(mx / tw);
+            tabIdx = Math.max(0, Math.min(tabIdx, this._tabs.length - 1));
+        }
+        this._hoverTab = tabIdx;
+        if (this._hoverTab !== oldHover) this.markDirty();
+        if (inside && TouchInput.isTriggered() && tabIdx >= 0) {
+            this.setActiveTab(tabIdx);
         }
     };
 

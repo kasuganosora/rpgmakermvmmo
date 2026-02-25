@@ -31,7 +31,7 @@
 
     L2_Breadcrumb.prototype.setItems = function (items) {
         this._items = items || [];
-        this.refresh();
+        this.markDirty();
     };
 
     L2_Breadcrumb.prototype.refresh = function () {
@@ -82,7 +82,7 @@
                 }
             }
         }
-        if (this._hoverIndex !== oldHover) this.refresh();
+        if (this._hoverIndex !== oldHover) this.markDirty();
         if (TouchInput.isTriggered() && this._hoverIndex >= 0) {
             var clicked = this._items[this._hoverIndex];
             if (clicked && clicked.action) clicked.action();

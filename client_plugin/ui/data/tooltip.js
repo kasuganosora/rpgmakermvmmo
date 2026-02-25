@@ -40,19 +40,7 @@
     };
 
     L2_Tooltip.prototype._wrapText = function (text) {
-        if (!text) return [];
-        var maxChars = 30;
-        var result = [];
-        var paragraphs = text.split('\n');
-        for (var i = 0; i < paragraphs.length; i++) {
-            var line = paragraphs[i];
-            while (line.length > maxChars) {
-                result.push(line.substring(0, maxChars));
-                line = line.substring(maxChars);
-            }
-            result.push(line);
-        }
-        return result;
+        return L2_Theme.wrapTextByChars(text, 30);
     };
 
     L2_Tooltip.prototype._resize = function () {

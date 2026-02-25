@@ -33,10 +33,12 @@
 
     L2_InputNumber.prototype.getValue = function () { return this._value; };
     L2_InputNumber.prototype.setValue = function (v) {
-        this._value = Math.max(this._min, Math.min(v, this._max));
+        var newVal = Math.max(this._min, Math.min(v, this._max));
+        if (newVal === this._value) return;
+        this._value = newVal;
         this._text = String(this._value);
         if (this._onChange) this._onChange(this._value);
-        this.refresh();
+        this.markDirty();
     };
 
     L2_InputNumber.prototype.refresh = function () {
@@ -89,7 +91,7 @@
             if (loc.x >= 0 && loc.x < btnW) this._hoverBtn = -1;
             else if (loc.x >= cw - btnW) this._hoverBtn = 1;
         }
-        if (this._hoverBtn !== oldHover) this.refresh();
+        if (this._hoverBtn !== oldHover) this.markDirty();
 
         if (TouchInput.isTriggered()) {
             if (this._hoverBtn === -1) {
@@ -104,13 +106,13 @@
             this._focused = insideField;
             if (this._focused) this._text = String(this._value);
             this._cursorBlink = 0;
-            this.refresh();
+            this.markDirty();
         }
 
         if (!this._focused) return;
 
         this._cursorBlink = (this._cursorBlink + 1) % 60;
-        if (this._cursorBlink === 0 || this._cursorBlink === 30) this.refresh();
+        if (this._cursorBlink === 0 || this._cursorBlink === 30) this.markDirty();
 
         var changed = false;
         for (var k = 0; k <= 9; k++) {
@@ -129,9 +131,9 @@
             this._value = Math.max(this._min, Math.min(parseInt(this._text, 10) || 0, this._max));
             this._text = String(this._value);
             if (this._onChange) this._onChange(this._value);
-            this.refresh();
+            this.markDirty();
         }
-        if (changed) this.refresh();
+        if (changed) this.markDirty();
     };
 
     window.L2_InputNumber = L2_InputNumber;

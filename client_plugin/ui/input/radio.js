@@ -23,7 +23,7 @@
             ? this._radioOptions.length * itemH + 8
             : itemH + 8;
         L2_Base.prototype.initialize.call(this, x, y, w, h);
-        this._selectedIndex = opts.selected !== undefined ? opts.selected : (opts.selectedIndex !== undefined ? opts.selectedIndex : 0);
+        this._selectedIndex = opts.value !== undefined ? opts.value : (opts.selectedIndex !== undefined ? opts.selectedIndex : 0);
         this._onChange = opts.onChange || null;
         this._hoverIndex = -1;
         this.refresh();
@@ -35,9 +35,15 @@
     L2_Radio.prototype.getSelectedLabel = function () { return this._radioOptions[this._selectedIndex]; };
 
     L2_Radio.prototype.setSelectedIndex = function (idx) {
+        if (idx === this._selectedIndex) return;
         this._selectedIndex = idx;
         if (this._onChange) this._onChange(idx, this._radioOptions[idx]);
-        this.refresh();
+        this.markDirty();
+    };
+
+    /** @deprecated Use setSelectedIndex instead */
+    L2_Radio.prototype.setValue = function (idx) {
+        this.setSelectedIndex(idx);
     };
 
     L2_Radio.prototype.refresh = function () {
@@ -92,7 +98,7 @@
                 this._hoverIndex = Math.min(Math.floor(loc.y / itemH), this._radioOptions.length - 1);
             }
         }
-        if (this._hoverIndex !== oldHover) this.refresh();
+        if (this._hoverIndex !== oldHover) this.markDirty();
         if (TouchInput.isTriggered() && this._hoverIndex >= 0) {
             this.setSelectedIndex(this._hoverIndex);
         }
