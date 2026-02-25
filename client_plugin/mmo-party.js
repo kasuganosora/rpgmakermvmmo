@@ -95,7 +95,7 @@
     };
 
     // -----------------------------------------------------------------
-    // Invite dialog — single L2_Dialog with countdown
+    // Invite dialog — single L2_Dialog with countdown (auto-centered)
     // -----------------------------------------------------------------
     var _inviteDialog = null;
     var _inviteTimer = null;

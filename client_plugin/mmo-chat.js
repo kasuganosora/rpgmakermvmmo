@@ -133,6 +133,14 @@
         }
     };
 
+    // Handle resize - reposition input
+    ChatBox.prototype.onResize = function (oldWidth, oldHeight, newWidth, newHeight) {
+        // Keep chat at bottom-left corner
+        this.x = 4;
+        this.y = newHeight - CHAT_H - 4;
+        this._positionInput();
+    };
+
     ChatBox.prototype.refresh = function () {
         var c = this.bmp();
         c.clear();
@@ -150,27 +158,35 @@
     };
 
     ChatBox.prototype._drawTabs = function (c, w) {
-        var tabW = Math.floor(w / CHANNELS.length);
+        // Use new tab width calculation (no pixel loss)
+        var baseTabW = Math.floor(w / CHANNELS.length);
+        var remainder = w - baseTabW * CHANNELS.length;
+        
         var self = this;
+        var currentX = 0;
+        
         CHANNELS.forEach(function (ch, i) {
-            var tx = i * tabW;
+            // First 'remainder' tabs get 1 extra pixel
+            var tabW = baseTabW + (i < remainder ? 1 : 0);
             var active = ch === $MMO._chatChannel;
             var hover = i === self._hoverTab;
 
             if (active) {
-                c.fillRect(tx, 0, tabW, TAB_H, '#1E1E38');
-                c.fillRect(tx, TAB_H - 2, tabW, 2, L2_Theme.textGold);
+                c.fillRect(currentX, 0, tabW, TAB_H, '#1E1E38');
+                c.fillRect(currentX, TAB_H - 2, tabW, 2, L2_Theme.textGold);
             } else if (hover) {
-                c.fillRect(tx, 0, tabW, TAB_H, L2_Theme.highlight);
+                c.fillRect(currentX, 0, tabW, TAB_H, L2_Theme.highlight);
             }
 
             c.fontSize = 10;
             c.textColor = active ? L2_Theme.textGold : L2_Theme.textGray;
             var label = CHANNEL_LABELS[ch] || ch;
             if ($MMO._chatUnread[ch] > 0 && !active) label += ' ●';
-            c.drawText(label, tx, 1, tabW, TAB_H - 2, 'center');
+            c.drawText(label, currentX, 1, tabW, TAB_H - 2, 'center');
 
-            if (i > 0) c.fillRect(tx, 3, 1, TAB_H - 6, L2_Theme.borderDark);
+            if (i > 0) c.fillRect(currentX, 3, 1, TAB_H - 6, L2_Theme.borderDark);
+            
+            currentX += tabW;
         });
         // Tab bottom border
         c.fillRect(0, TAB_H, w, 1, L2_Theme.borderDark);
@@ -248,20 +264,31 @@
         var my = TouchInput.y - this.y;
         var inside = mx >= 0 && mx < CHAT_W && my >= 0 && my < CHAT_H;
 
-        // Tab hover
-        var tabW = Math.floor(CHAT_W / CHANNELS.length);
+        // Tab hover - use new calculation
+        var baseTabW = Math.floor(CHAT_W / CHANNELS.length);
+        var remainder = CHAT_W - baseTabW * CHANNELS.length;
         var oldHover = this._hoverTab;
+        
         if (inside && my >= 0 && my < TAB_H) {
-            this._hoverTab = Math.min(Math.floor(mx / tabW), CHANNELS.length - 1);
+            // Find which tab is hovered
+            var currentX = 0;
+            this._hoverTab = -1;
+            for (var i = 0; i < CHANNELS.length; i++) {
+                var tabW = baseTabW + (i < remainder ? 1 : 0);
+                if (mx >= currentX && mx < currentX + tabW) {
+                    this._hoverTab = i;
+                    break;
+                }
+                currentX += tabW;
+            }
         } else {
             this._hoverTab = -1;
         }
         if (this._hoverTab !== oldHover) this.refresh();
 
         // Tab click
-        if (inside && my < TAB_H && TouchInput.isTriggered()) {
-            var tabIdx = Math.min(Math.floor(mx / tabW), CHANNELS.length - 1);
-            this.switchChannel(CHANNELS[tabIdx]);
+        if (inside && my < TAB_H && TouchInput.isTriggered() && this._hoverTab >= 0) {
+            this.switchChannel(CHANNELS[this._hoverTab]);
         }
 
         // Scroll on mouse wheel in log area

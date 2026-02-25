@@ -12,7 +12,7 @@
     var TRADE_W = 500, TRADE_H = 360, PAD = 10;
 
     // -----------------------------------------------------------------
-    // TradeWindow — L2_Base panel
+    // TradeWindow — L2_Base panel with screen centering
     // -----------------------------------------------------------------
     function TradeWindow() { this.initialize.apply(this, arguments); }
     TradeWindow.prototype = Object.create(L2_Base.prototype);
@@ -34,6 +34,9 @@
         this._goldEditing = false;
         this._goldText = '0';
         this._hoverBtn = null; // 'confirm' | 'cancel' | null
+        
+        // Enable auto-centering on resize
+        this._isCentered = true;
     };
 
     TradeWindow.prototype.standardPadding = function () { return 0; };
@@ -225,7 +228,7 @@
     };
 
     // -----------------------------------------------------------------
-    // Trade request dialog — L2_Dialog
+    // Trade request dialog — L2_Dialog (auto-centered)
     // -----------------------------------------------------------------
     var _tradeRequestDialog = null;
     var _tradeRequestTimer = null;

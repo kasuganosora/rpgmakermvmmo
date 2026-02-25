@@ -1,5 +1,6 @@
 /**
  * L2_Table - Data table with columns and rows.
+ * Fixed column width calculation with caching.
  */
 (function () {
     'use strict';
@@ -18,7 +19,8 @@
     L2_Table.prototype.initialize = function (x, y, w, h, opts) {
         L2_Base.prototype.initialize.call(this, x, y, w, h);
         opts = opts || {};
-        this._columns = opts.columns || [];
+        this._columns = [];
+        this._columnWidths = [];
         this._rows = [];
         this._rowHeight = opts.rowHeight || L2_Theme.defaultItemHeight;
         this._headerHeight = 26;
@@ -26,16 +28,71 @@
         this._selectedRow = -1;
         this._hoverRow = -1;
         this._onRowClick = opts.onRowClick || null;
+        
+        // 设置列（会触发列宽计算）
+        this.setColumns(opts.columns || []);
         this.refresh();
     };
 
     L2_Table.prototype.standardPadding = function () { return 4; };
 
+    /** Calculate and cache column widths */
+    L2_Table.prototype._calculateColumnWidths = function () {
+        var cw = this.cw();
+        var cols = this._columns;
+        var widths = [];
+        var remainingWidth = cw;
+        var unspecifiedCount = 0;
+        
+        // 第一遍：处理指定宽度的列
+        for (var i = 0; i < cols.length; i++) {
+            if (cols[i].width) {
+                widths[i] = cols[i].width;
+                remainingWidth -= cols[i].width;
+            } else {
+                widths[i] = 0; // 占位
+                unspecifiedCount++;
+            }
+        }
+        
+        // 第二遍：均分剩余宽度给未指定宽度的列
+        if (unspecifiedCount > 0) {
+            var avgWidth = Math.floor(remainingWidth / unspecifiedCount);
+            var remainder = remainingWidth - avgWidth * unspecifiedCount;
+            
+            for (var j = 0; j < cols.length; j++) {
+                if (!cols[j].width) {
+                    // 前 remainder 个未指定列多 1px
+                    widths[j] = avgWidth + (remainder > 0 ? 1 : 0);
+                    if (remainder > 0) remainder--;
+                }
+            }
+        }
+        
+        this._columnWidths = widths;
+    };
+
+    /** Get column X position */
+    L2_Table.prototype._getColumnX = function (colIndex) {
+        var x = 0;
+        for (var i = 0; i < colIndex; i++) {
+            x += this._columnWidths[i];
+        }
+        return x;
+    };
+
+    L2_Table.prototype.setColumns = function (columns) {
+        this._columns = columns || [];
+        this._calculateColumnWidths();
+        this.markDirty('bg');
+        this.markDirty('content');
+    };
+
     L2_Table.prototype.setRows = function (rows) {
         this._rows = rows || [];
         this._scrollY = 0;
         this._selectedRow = -1;
-        this.markDirty();
+        this.markDirty('content');
     };
 
     L2_Table.prototype.refresh = function () {
@@ -43,6 +100,7 @@
         var cw = this.cw(), ch = this.ch();
         var hh = this._headerHeight;
         var rh = this._rowHeight;
+        var self = this;
 
         // 只有背景层脏时才重绘背景和表头
         if (this.isLayerDirty('bg')) {
@@ -55,9 +113,8 @@
             c.fillRect(0, hh - 1, cw, 1, L2_Theme.borderDark);
 
             var colX = 0;
-            var self = this;
-            this._columns.forEach(function (col) {
-                var colW = col.width || Math.floor(cw / self._columns.length);
+            this._columns.forEach(function (col, idx) {
+                var colW = self._columnWidths[idx];
                 c.fontSize = L2_Theme.fontSmall;
                 c.textColor = L2_Theme.textGold;
                 c.drawText(col.label || col.key, colX + 4, 4, colW - 8, hh - 8, 'left');
@@ -93,8 +150,8 @@
 
                 var colX = 0;
                 var row = this._rows[i];
-                this._columns.forEach(function (col) {
-                    var colW = col.width || Math.floor(cw / self._columns.length);
+                this._columns.forEach(function (col, idx) {
+                    var colW = self._columnWidths[idx];
                     c.fontSize = L2_Theme.fontNormal;
                     c.textColor = L2_Theme.textWhite;
                     var val = row[col.key] !== undefined ? String(row[col.key]) : '';

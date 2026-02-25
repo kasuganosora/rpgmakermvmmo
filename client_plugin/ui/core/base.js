@@ -6,6 +6,7 @@
  * - Layered rendering (static/dynamic layers)
  * - Dirty region tracking
  * - Cached property access
+ * - Auto-resize support
  */
 (function () {
     'use strict';
@@ -14,6 +15,11 @@
     var _colorCache = {};
     var _textWidthCache = {};
     var _cacheLimit = 1000;
+    
+    // Track all L2 components for resize events
+    var _allComponents = [];
+    var _lastGraphicsWidth = 0;
+    var _lastGraphicsHeight = 0;
 
     function L2_Base() { this.initialize.apply(this, arguments); }
     L2_Base.prototype = Object.create(Window_Base.prototype);
@@ -30,9 +36,18 @@
         this._lastFrameUpdated = 0; // 帧率控制
         this._lastVisibleState = false; // 用于输入拦截器状态跟踪
         
+        // Resize handling
+        this._resizeHandler = null;  // 可选的 resize 回调
+        this._isCentered = false;    // 标记是否居中对齐
+        this._centerOffsetX = 0;     // 相对中心的偏移
+        this._centerOffsetY = 0;
+        
         // Auto-register with input blocker if initially visible
         this._updateInputBlocker();
         this._updateInterval = 1;   // 默认每帧更新
+        
+        // Register for global resize
+        _allComponents.push(this);
     };
 
     /** Mark component as needing redraw. */
@@ -72,6 +87,51 @@
         this._updateInterval = Math.max(1, frames);
     };
 
+    /**
+     * Set component to be centered on screen with optional offset.
+     * @param {number} [offsetX=0] - Offset from center X
+     * @param {number} [offsetY=0] - Offset from center Y
+     */
+    L2_Base.prototype.setCentered = function (offsetX, offsetY) {
+        this._isCentered = true;
+        this._centerOffsetX = offsetX || 0;
+        this._centerOffsetY = offsetY || 0;
+        this._applyCentering();
+    };
+
+    /** Apply centering based on current screen size */
+    L2_Base.prototype._applyCentering = function () {
+        if (!this._isCentered) return;
+        var gw = Graphics.boxWidth || 816;
+        var gh = Graphics.boxHeight || 624;
+        this.x = Math.floor((gw - this.width) / 2) + this._centerOffsetX;
+        this.y = Math.floor((gh - this.height) / 2) + this._centerOffsetY;
+    };
+
+    /**
+     * Called when screen is resized.
+     * Override in subclasses for custom resize behavior.
+     * @param {number} oldWidth - Previous screen width
+     * @param {number} oldHeight - Previous screen height
+     * @param {number} newWidth - New screen width
+     * @param {number} newHeight - New screen height
+     */
+    L2_Base.prototype.onResize = function (oldWidth, oldHeight, newWidth, newHeight) {
+        // 默认行为：如果设置了居中，则重新居中
+        if (this._isCentered) {
+            this._applyCentering();
+        }
+        // 如果有自定义 resize 处理器
+        if (this._resizeHandler) {
+            this._resizeHandler(oldWidth, oldHeight, newWidth, newHeight);
+        }
+    };
+
+    /** Set a custom resize handler */
+    L2_Base.prototype.setResizeHandler = function (handler) {
+        this._resizeHandler = handler;
+    };
+
     /** Override update to support dirty checking and frame skipping. */
     var _baseUpdate = L2_Base.prototype.update;
     L2_Base.prototype.update = function () {
@@ -79,6 +139,9 @@
         
         // 更新输入拦截器状态
         this._updateInputBlocker();
+        
+        // 检查全局 resize
+        this._checkGlobalResize();
         
         // 帧跳过优化
         this._lastFrameUpdated++;
@@ -92,6 +155,32 @@
             this._dirtyLayers.bg = false;
             this._dirtyLayers.content = false;
             this._dirty = false;
+        }
+    };
+
+    /** Check if screen size has changed and notify all components */
+    L2_Base.prototype._checkGlobalResize = function () {
+        var currentW = Graphics.boxWidth || 816;
+        var currentH = Graphics.boxHeight || 624;
+        
+        if (currentW !== _lastGraphicsWidth || currentH !== _lastGraphicsHeight) {
+            var oldW = _lastGraphicsWidth || currentW;
+            var oldH = _lastGraphicsHeight || currentH;
+            _lastGraphicsWidth = currentW;
+            _lastGraphicsHeight = currentH;
+            
+            // 通知所有组件
+            L2_Base._notifyResize(oldW, oldH, currentW, currentH);
+        }
+    };
+
+    /** Static: Notify all components of resize */
+    L2_Base._notifyResize = function (oldW, oldH, newW, newH) {
+        for (var i = 0; i < _allComponents.length; i++) {
+            var comp = _allComponents[i];
+            if (comp && !comp._destroyed && comp.onResize) {
+                comp.onResize(oldW, oldH, newW, newH);
+            }
         }
     };
 
@@ -148,6 +237,12 @@
             L2_InputBlocker.unregister(this);
         }
         
+        // Remove from global component list
+        var idx = _allComponents.indexOf(this);
+        if (idx >= 0) {
+            _allComponents.splice(idx, 1);
+        }
+        
         // Remove from parent
         if (this.parent) {
             this.parent.removeChild(this);
@@ -175,6 +270,7 @@
         this._onSelect = null;
         this._onClose = null;
         this._onSubmit = null;
+        this._resizeHandler = null;
     };
 
     L2_Base.prototype.standardPadding = function () { return L2_Theme.padding; };

@@ -430,9 +430,7 @@
             ctx.font = fontSize + 'px ' + L2_Theme.fontFamily;
             ctx.fillStyle = color;
             ctx.textBaseline = 'alphabetic';
-            // 禁用图像平滑以获得更清晰的文字
-            ctx.imageSmoothingEnabled = false;
-            ctx.imageSmoothingQuality = 'low';
+            // 保持默认平滑设置，让字体渲染更柔和自然
         },
 
         /**
@@ -551,17 +549,16 @@
         }
     }
 
-    // Apply settings when library loads
-    if (typeof document !== 'undefined') {
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', _applyPixelSettings);
-        } else {
-            _applyPixelSettings();
-        }
-    }
-
-    // Also try to apply immediately (for RM MV environment)
-    _applyPixelSettings();
+    // 注意：禁用了全局像素化渲染设置，以保持字体抗锯齿效果
+    // 如果需要像素化效果，可以手动调用 _applyPixelSettings()
+    // if (typeof document !== 'undefined') {
+    //     if (document.readyState === 'loading') {
+    //         document.addEventListener('DOMContentLoaded', _applyPixelSettings);
+    //     } else {
+    //         _applyPixelSettings();
+    //     }
+    // }
+    // _applyPixelSettings();
 })();
 
 // ═══ ui/core/input-blocker.js ═══
@@ -715,6 +712,7 @@
  * - Layered rendering (static/dynamic layers)
  * - Dirty region tracking
  * - Cached property access
+ * - Auto-resize support
  */
 (function () {
     'use strict';
@@ -723,6 +721,11 @@
     var _colorCache = {};
     var _textWidthCache = {};
     var _cacheLimit = 1000;
+    
+    // Track all L2 components for resize events
+    var _allComponents = [];
+    var _lastGraphicsWidth = 0;
+    var _lastGraphicsHeight = 0;
 
     function L2_Base() { this.initialize.apply(this, arguments); }
     L2_Base.prototype = Object.create(Window_Base.prototype);
@@ -739,9 +742,18 @@
         this._lastFrameUpdated = 0; // 帧率控制
         this._lastVisibleState = false; // 用于输入拦截器状态跟踪
         
+        // Resize handling
+        this._resizeHandler = null;  // 可选的 resize 回调
+        this._isCentered = false;    // 标记是否居中对齐
+        this._centerOffsetX = 0;     // 相对中心的偏移
+        this._centerOffsetY = 0;
+        
         // Auto-register with input blocker if initially visible
         this._updateInputBlocker();
         this._updateInterval = 1;   // 默认每帧更新
+        
+        // Register for global resize
+        _allComponents.push(this);
     };
 
     /** Mark component as needing redraw. */
@@ -781,6 +793,51 @@
         this._updateInterval = Math.max(1, frames);
     };
 
+    /**
+     * Set component to be centered on screen with optional offset.
+     * @param {number} [offsetX=0] - Offset from center X
+     * @param {number} [offsetY=0] - Offset from center Y
+     */
+    L2_Base.prototype.setCentered = function (offsetX, offsetY) {
+        this._isCentered = true;
+        this._centerOffsetX = offsetX || 0;
+        this._centerOffsetY = offsetY || 0;
+        this._applyCentering();
+    };
+
+    /** Apply centering based on current screen size */
+    L2_Base.prototype._applyCentering = function () {
+        if (!this._isCentered) return;
+        var gw = Graphics.boxWidth || 816;
+        var gh = Graphics.boxHeight || 624;
+        this.x = Math.floor((gw - this.width) / 2) + this._centerOffsetX;
+        this.y = Math.floor((gh - this.height) / 2) + this._centerOffsetY;
+    };
+
+    /**
+     * Called when screen is resized.
+     * Override in subclasses for custom resize behavior.
+     * @param {number} oldWidth - Previous screen width
+     * @param {number} oldHeight - Previous screen height
+     * @param {number} newWidth - New screen width
+     * @param {number} newHeight - New screen height
+     */
+    L2_Base.prototype.onResize = function (oldWidth, oldHeight, newWidth, newHeight) {
+        // 默认行为：如果设置了居中，则重新居中
+        if (this._isCentered) {
+            this._applyCentering();
+        }
+        // 如果有自定义 resize 处理器
+        if (this._resizeHandler) {
+            this._resizeHandler(oldWidth, oldHeight, newWidth, newHeight);
+        }
+    };
+
+    /** Set a custom resize handler */
+    L2_Base.prototype.setResizeHandler = function (handler) {
+        this._resizeHandler = handler;
+    };
+
     /** Override update to support dirty checking and frame skipping. */
     var _baseUpdate = L2_Base.prototype.update;
     L2_Base.prototype.update = function () {
@@ -788,6 +845,9 @@
         
         // 更新输入拦截器状态
         this._updateInputBlocker();
+        
+        // 检查全局 resize
+        this._checkGlobalResize();
         
         // 帧跳过优化
         this._lastFrameUpdated++;
@@ -801,6 +861,32 @@
             this._dirtyLayers.bg = false;
             this._dirtyLayers.content = false;
             this._dirty = false;
+        }
+    };
+
+    /** Check if screen size has changed and notify all components */
+    L2_Base.prototype._checkGlobalResize = function () {
+        var currentW = Graphics.boxWidth || 816;
+        var currentH = Graphics.boxHeight || 624;
+        
+        if (currentW !== _lastGraphicsWidth || currentH !== _lastGraphicsHeight) {
+            var oldW = _lastGraphicsWidth || currentW;
+            var oldH = _lastGraphicsHeight || currentH;
+            _lastGraphicsWidth = currentW;
+            _lastGraphicsHeight = currentH;
+            
+            // 通知所有组件
+            L2_Base._notifyResize(oldW, oldH, currentW, currentH);
+        }
+    };
+
+    /** Static: Notify all components of resize */
+    L2_Base._notifyResize = function (oldW, oldH, newW, newH) {
+        for (var i = 0; i < _allComponents.length; i++) {
+            var comp = _allComponents[i];
+            if (comp && !comp._destroyed && comp.onResize) {
+                comp.onResize(oldW, oldH, newW, newH);
+            }
         }
     };
 
@@ -857,6 +943,12 @@
             L2_InputBlocker.unregister(this);
         }
         
+        // Remove from global component list
+        var idx = _allComponents.indexOf(this);
+        if (idx >= 0) {
+            _allComponents.splice(idx, 1);
+        }
+        
         // Remove from parent
         if (this.parent) {
             this.parent.removeChild(this);
@@ -884,6 +976,7 @@
         this._onSelect = null;
         this._onClose = null;
         this._onSubmit = null;
+        this._resizeHandler = null;
     };
 
     L2_Base.prototype.standardPadding = function () { return L2_Theme.padding; };
@@ -1012,7 +1105,7 @@
 // ═══ ui/layout/grid.js ═══
 /**
  * L2_Grid - Grid layout container for arranging children in rows/columns.
- * Does not render itself - positions children on refresh.
+ * Auto-sizes columns and handles responsive layout.
  */
 (function () {
     'use strict';
@@ -1029,15 +1122,32 @@
      * @param {object} [opts] - { cols, rowGap, colGap }
      */
     L2_Grid.prototype.initialize = function (x, y, w, h, opts) {
-        L2_Base.prototype.initialize.call(this, x, y, w, h);
         opts = opts || {};
-        this._cols = opts.cols || 1;
+        L2_Base.prototype.initialize.call(this, x, y, w, h);
+        this._cols = Math.max(1, opts.cols || 1);
         this._rowGap = opts.rowGap !== undefined ? opts.rowGap : L2_Theme.defaultGap;
         this._colGap = opts.colGap !== undefined ? opts.colGap : L2_Theme.defaultGap;
         this._managed = [];
+        this._cellWidth = 0;
+        this._lastCellWidth = 0;
+        this._calculateCellWidth();
     };
 
     L2_Grid.prototype.standardPadding = function () { return 0; };
+
+    /** Recalculate cell width when container size changes */
+    L2_Grid.prototype._calculateCellWidth = function () {
+        var cw = this.cw();
+        var cols = this._cols;
+        // 均分计算，最后一个 cell 吃掉剩余像素避免空白
+        this._cellWidth = Math.floor((cw - (cols - 1) * this._colGap) / cols);
+        this._lastCellWidth = cw - (cols - 1) * (this._cellWidth + this._colGap);
+    };
+
+    /** Get cell width for a specific column (last column may be wider) */
+    L2_Grid.prototype._getCellWidth = function (colIndex) {
+        return colIndex === this._cols - 1 ? this._lastCellWidth : this._cellWidth;
+    };
 
     /** Add a component to the grid. */
     L2_Grid.prototype.addItem = function (component) {
@@ -1055,20 +1165,42 @@
         this._managed = [];
     };
 
+    /** Update column count and recalculate layout. */
+    L2_Grid.prototype.setColumns = function (cols) {
+        this._cols = Math.max(1, cols || 1);
+        this._calculateCellWidth();
+        this.layoutItems();
+    };
+
     /** Recalculate positions of all managed children. */
     L2_Grid.prototype.layoutItems = function () {
-        var cols = Math.max(1, this._cols || 1);
-        var cw = this.cw();
-        var cellW = (cw - (cols - 1) * this._colGap) / cols;
+        this._calculateCellWidth();
+        var cols = this._cols;
 
         for (var i = 0; i < this._managed.length; i++) {
             var col = i % cols;
             var row = Math.floor(i / cols);
-            var cx = col * (cellW + this._colGap);
+            var cellW = this._getCellWidth(col);
+            var cx = col * (this._cellWidth + this._colGap);
             var cy = row * (this._managed[i].height + this._rowGap);
+            
             this._managed[i].x = cx;
             this._managed[i].y = cy;
+            
+            // 自动调整子元素宽度以适应 cell
+            if (this._managed[i].width !== cellW) {
+                this._managed[i].width = cellW;
+                if (this._managed[i].refresh) {
+                    this._managed[i].refresh();
+                }
+            }
         }
+    };
+
+    /** Handle resize - recalculate and relayout */
+    L2_Grid.prototype.onResize = function () {
+        this._calculateCellWidth();
+        this.layoutItems();
     };
 
     /** Get all managed items. */
@@ -1084,7 +1216,7 @@
 // ═══ ui/layout/layout.js ═══
 /**
  * L2_Layout - Flex-like layout container (horizontal/vertical).
- * Positions children sequentially with gap spacing.
+ * Positions children sequentially with gap spacing and automatic wrapping.
  */
 (function () {
     'use strict';
@@ -1098,7 +1230,11 @@
      * @param {number} y
      * @param {number} w
      * @param {number} h
-     * @param {object} [opts] - { direction:'horizontal'|'vertical', gap, align:'start'|'center'|'end' }
+     * @param {object} [opts] - { 
+     *     direction:'horizontal'|'vertical', 
+     *     gap, 
+     *     align:'start'|'center'|'end'
+     * }
      */
     L2_Layout.prototype.initialize = function (x, y, w, h, opts) {
         L2_Base.prototype.initialize.call(this, x, y, w, h);
@@ -1126,29 +1262,83 @@
     };
 
     L2_Layout.prototype.layoutItems = function () {
-        var pos = 0;
         var isH = this._direction === 'horizontal';
-        var containerSize = isH ? this.ch() : this.cw();
-
+        var containerMain = isH ? this.cw() : this.ch();  // 主轴容器大小
+        var containerCross = isH ? this.ch() : this.cw(); // 交叉轴容器大小
+        
+        var pos = 0;
+        var crossPos = 0;
+        var lineStartIdx = 0;
+        var lineSize = 0;  // 当前行/列在交叉轴上的大小
+        
+        // 第一遍：计算位置，处理换行
         for (var i = 0; i < this._managed.length; i++) {
             var item = this._managed[i];
-            var itemSize = isH ? item.height : item.width;
-            var crossPos = 0;
-
+            var itemMain = isH ? item.width : item.height;
+            var itemCross = isH ? item.height : item.width;
+            
+            // 检查是否需要换行（自动换行）
+            if (i > lineStartIdx && pos + itemMain > containerMain) {
+                // 完成上一行的布局（应用对齐）
+                this._layoutLine(lineStartIdx, i - 1, crossPos, lineSize, containerCross);
+                // 开始新行
+                crossPos += lineSize + this._gap;
+                pos = 0;
+                lineStartIdx = i;
+                lineSize = 0;
+            }
+            
+            // 计算交叉轴位置
+            var itemCrossPos = crossPos;
+            // 应用对齐
             if (this._align === 'center') {
-                crossPos = (containerSize - itemSize) / 2;
+                itemCrossPos = crossPos + Math.floor((lineSize - itemCross) / 2);
             } else if (this._align === 'end') {
-                crossPos = containerSize - itemSize;
+                itemCrossPos = crossPos + lineSize - itemCross;
             }
+            
+            // 临时存储位置（最终位置可能在换行处理后才确定）
+            item._tempMain = pos;
+            item._tempCross = itemCrossPos;
+            
+            pos += itemMain + this._gap;
+            lineSize = Math.max(lineSize, itemCross);
+        }
+        
+        // 布局最后一行
+        if (lineStartIdx < this._managed.length) {
+            this._layoutLine(lineStartIdx, this._managed.length - 1, crossPos, lineSize, containerCross);
+        }
+    };
 
-            if (isH) {
-                item.x = pos;
-                item.y = crossPos;
-            } else {
-                item.x = crossPos;
-                item.y = pos;
+    /** Layout a line of items with alignment */
+    L2_Layout.prototype._layoutLine = function (startIdx, endIdx, crossPos, lineSize, containerCross) {
+        var isH = this._direction === 'horizontal';
+        
+        for (var i = startIdx; i <= endIdx; i++) {
+            var item = this._managed[i];
+            var itemCross = isH ? item.height : item.width;
+            
+            // 计算交叉轴对齐位置
+            var finalCross = crossPos;
+            // 在 wrap 模式下也应用对齐
+            if (this._align === 'center') {
+                finalCross = crossPos + Math.floor((lineSize - itemCross) / 2);
+            } else if (this._align === 'end') {
+                finalCross = crossPos + lineSize - itemCross;
             }
-            pos += (isH ? item.width : item.height) + this._gap;
+            
+            if (isH) {
+                item.x = item._tempMain;
+                item.y = finalCross;
+            } else {
+                item.x = finalCross;
+                item.y = item._tempMain;
+            }
+            
+            // 清理临时属性
+            delete item._tempMain;
+            delete item._tempCross;
         }
     };
 
@@ -1541,40 +1731,29 @@
         c.clear();
         var cw = this.cw(), ch = this.ch();
 
-        var fontSize, color;
         switch (this._level) {
             case 'h1':
-                fontSize = L2_Theme.fontH1;
-                color = this._textColor || L2_Theme.textWhite;
+                c.fontSize = L2_Theme.fontH1;
+                c.textColor = this._textColor || L2_Theme.textWhite;
                 break;
             case 'h2':
-                fontSize = L2_Theme.fontH2;
-                color = this._textColor || L2_Theme.textWhite;
+                c.fontSize = L2_Theme.fontH2;
+                c.textColor = this._textColor || L2_Theme.textWhite;
                 break;
             case 'h3':
-                fontSize = L2_Theme.fontH3;
-                color = this._textColor || L2_Theme.textTitle;
+                c.fontSize = L2_Theme.fontH3;
+                c.textColor = this._textColor || L2_Theme.textTitle;
                 break;
             case 'caption':
-                fontSize = L2_Theme.fontTiny;
-                color = this._textColor || L2_Theme.textDim;
+                c.fontSize = L2_Theme.fontTiny;
+                c.textColor = this._textColor || L2_Theme.textDim;
                 break;
             default:
-                fontSize = L2_Theme.fontNormal;
-                color = this._textColor || L2_Theme.textGray;
+                c.fontSize = L2_Theme.fontNormal;
+                c.textColor = this._textColor || L2_Theme.textGray;
         }
 
-        // 使用锐化文字渲染
-        var ctx = c._context;
-        if (ctx) {
-            L2_Theme.configureTextContext(ctx, fontSize, color);
-            L2_Theme.drawTextSharp(c, this._text, 0, 0, cw, ch, this._align);
-        } else {
-            // 降级到默认渲染
-            c.fontSize = fontSize;
-            c.textColor = color;
-            c.drawText(this._text, 0, 0, cw, ch, this._align);
-        }
+        c.drawText(this._text, 0, 0, cw, ch, this._align);
     };
 
     window.L2_Typography = L2_Typography;
@@ -1583,6 +1762,7 @@
 // ═══ ui/navigation/tabs.js ═══
 /**
  * L2_Tabs - Tab bar for switching content panels.
+ * Fixed pixel-perfect tab width calculation.
  */
 (function () {
     'use strict';
@@ -1604,10 +1784,52 @@
         this._activeTab = opts.activeIndex || 0;
         this._hoverTab = -1;
         this._onChange = opts.onChange || null;
+        this._tabWidths = [];
+        this._calculateTabWidths();
         this.refresh();
     };
 
     L2_Tabs.prototype.standardPadding = function () { return 0; };
+
+    /** Calculate tab widths without pixel loss */
+    L2_Tabs.prototype._calculateTabWidths = function () {
+        var cw = this.cw();
+        var count = Math.max(this._tabs.length, 1);
+        this._tabWidths = [];
+        
+        if (count === 0) return;
+        
+        // 基础宽度（向下取整）
+        var baseWidth = Math.floor(cw / count);
+        // 剩余像素分配到前面的 tab
+        var remainder = cw - baseWidth * count;
+        
+        for (var i = 0; i < count; i++) {
+            // 前 remainder 个 tab 多 1px
+            this._tabWidths[i] = baseWidth + (i < remainder ? 1 : 0);
+        }
+    };
+
+    /** Get the X position of a tab */
+    L2_Tabs.prototype._getTabX = function (index) {
+        var x = 0;
+        for (var i = 0; i < index; i++) {
+            x += this._tabWidths[i];
+        }
+        return x;
+    };
+
+    /** Get tab index from mouse X position */
+    L2_Tabs.prototype._getTabFromX = function (mx) {
+        var x = 0;
+        for (var i = 0; i < this._tabWidths.length; i++) {
+            if (mx >= x && mx < x + this._tabWidths[i]) {
+                return i;
+            }
+            x += this._tabWidths[i];
+        }
+        return -1;
+    };
 
     L2_Tabs.prototype.getActiveTab = function () { return this._activeTab; };
     L2_Tabs.prototype.getActiveLabel = function () { return this._tabs[this._activeTab]; };
@@ -1620,16 +1842,19 @@
     };
 
     L2_Tabs.prototype.refresh = function () {
+        // 如果大小改变，重新计算 tab 宽度
+        this._calculateTabWidths();
+        
         var c = this.bmp();
         c.clear();
         var cw = this.cw(), ch = this.ch();
-        var tw = Math.floor(cw / Math.max(this._tabs.length, 1));
         var self = this;
 
         c.fillRect(0, 0, cw, ch, L2_Theme.bgPanel);
 
         this._tabs.forEach(function (label, i) {
-            var tx = i * tw;
+            var tx = self._getTabX(i);
+            var tw = self._tabWidths[i];
             var active = i === self._activeTab;
             var hover = i === self._hoverTab;
 
@@ -1654,14 +1879,14 @@
 
         var mx = TouchInput.x - this.x;
         var my = TouchInput.y - this.y;
-        var tw = Math.floor(this.cw() / Math.max(this._tabs.length, 1));
         var inside = mx >= 0 && mx < this.width && my >= 0 && my < this.height;
         var oldHover = this._hoverTab;
+        
         var tabIdx = -1;
         if (inside && this._tabs.length > 0) {
-            tabIdx = Math.floor(mx / tw);
-            tabIdx = Math.max(0, Math.min(tabIdx, this._tabs.length - 1));
+            tabIdx = this._getTabFromX(mx);
         }
+        
         this._hoverTab = tabIdx;
         if (this._hoverTab !== oldHover) this.markDirty();
         if (inside && TouchInput.isTriggered() && tabIdx >= 0) {
@@ -1675,6 +1900,7 @@
 // ═══ ui/navigation/menu.js ═══
 /**
  * L2_Menu - Vertical navigation menu with selectable items.
+ * Fixed padding calculations.
  */
 (function () {
     'use strict';
@@ -1698,8 +1924,12 @@
         }
         var itemH = opts.itemHeight || L2_Theme.defaultItemHeight;
         this._maxHeight = opts.maxHeight || 0; // 0 表示不限制高度
-        var totalH = items.length * itemH + 8;
-        var h = this._maxHeight > 0 ? Math.min(totalH, this._maxHeight) : totalH;
+        
+        // 计算内容高度：padding + items + padding
+        this._contentPadding = 4;  // 内容区内边距
+        var totalContentH = items.length * itemH + this._contentPadding * 2;
+        var h = this._maxHeight > 0 ? Math.min(totalContentH, this._maxHeight) : totalContentH;
+        
         L2_Base.prototype.initialize.call(this, x, y, w, h);
         this._items = items;
         this._itemHeight = itemH;
@@ -1734,7 +1964,8 @@
         var visCount = Math.ceil(ch / ih) + 1;
 
         for (var i = startIdx; i < Math.min(startIdx + visCount, this._items.length); i++) {
-            var iy = i * ih + 4 - this._scrollY;
+            // 使用统一的 padding 计算 item Y 位置
+            var iy = this._contentPadding + i * ih - this._scrollY;
             if (iy + ih < 0 || iy > ch) continue;
 
             if (i === this._activeIndex) {
@@ -1750,10 +1981,11 @@
 
         // 滚动条
         if (this._needsScrollbar()) {
-            var totalH = this._items.length * ih;
+            var totalH = this._items.length * ih + this._contentPadding * 2;
             var trackH = ch - 4;
             var thumbH = Math.max(20, Math.round(trackH * (ch / totalH)));
-            var thumbY = 2 + Math.round((trackH - thumbH) * (this._scrollY / (totalH - ch)));
+            var maxScroll = this._getMaxScroll();
+            var thumbY = 2 + (maxScroll > 0 ? Math.round((trackH - thumbH) * (this._scrollY / maxScroll)) : 0);
             c.fillRect(cw - sbW, 0, sbW, ch, 'rgba(0,0,0,0.3)');
             L2_Theme.fillRoundRect(c, cw - sbW, thumbY, sbW, thumbH, 2, '#444466');
         }
@@ -1761,12 +1993,12 @@
 
     L2_Menu.prototype._needsScrollbar = function () {
         if (this._maxHeight <= 0) return false;
-        var totalH = this._items.length * this._itemHeight + 8;
+        var totalH = this._items.length * this._itemHeight + this._contentPadding * 2;
         return totalH > this._maxHeight;
     };
 
     L2_Menu.prototype._getMaxScroll = function () {
-        var totalH = this._items.length * this._itemHeight + 8;
+        var totalH = this._items.length * this._itemHeight + this._contentPadding * 2;
         return Math.max(0, totalH - this.height);
     };
 
@@ -1777,10 +2009,12 @@
         var cw = this.cw();
         var ih = this._itemHeight;
         var ch = this.ch();
-        var sbW = this._needsScrollbar() ? 6 : 0;
+        var sbW = this._needsScrollbar() ? L2_Theme.scrollbarWidth : 0;
         var inside = loc.x >= 0 && loc.x < cw - sbW && loc.y >= 0 && loc.y < ch;
         var oldHover = this._hoverIndex;
-        this._hoverIndex = inside ? Math.floor((loc.y + this._scrollY - 4) / ih) : -1;
+        
+        // 使用统一的 padding 计算 hover index
+        this._hoverIndex = inside ? Math.floor((loc.y + this._scrollY - this._contentPadding) / ih) : -1;
         if (this._hoverIndex >= this._items.length) this._hoverIndex = -1;
         if (this._hoverIndex !== oldHover) this.markDirty();
 
@@ -2232,6 +2466,7 @@
 // ═══ ui/window/subwindow.js ═══
 /**
  * L2_SubWindow - Draggable, closable sub-window panel with title bar.
+ * Constrained to screen bounds with resize support.
  */
 (function () {
     'use strict';
@@ -2248,8 +2483,8 @@
      * @param {object} [opts] - { title, closable, draggable, onClose }
      */
     L2_SubWindow.prototype.initialize = function (x, y, w, h, opts) {
-        L2_Base.prototype.initialize.call(this, x, y, w, h);
         opts = opts || {};
+        L2_Base.prototype.initialize.call(this, x, y, w, h);
         this._title = opts.title || '';
         this._closable = opts.closable !== false;
         this._draggable = opts.draggable !== false;
@@ -2279,6 +2514,31 @@
     /** Content height (minus title bar and padding). */
     L2_SubWindow.prototype.contentH = function () {
         return this.ch() - this.contentY() - 4;
+    };
+
+    /** Get content area bounds for child positioning */
+    L2_SubWindow.prototype.getContentBounds = function () {
+        var py = this.contentY();
+        return {
+            x: this.padding,
+            y: py,
+            w: this.cw(),
+            h: this.contentH()
+        };
+    };
+
+    /** Constrain position to screen bounds */
+    L2_SubWindow.prototype._constrainPosition = function () {
+        var gw = Graphics.boxWidth || 816;
+        var gh = Graphics.boxHeight || 624;
+        this.x = Math.max(0, Math.min(this.x, gw - this.width));
+        this.y = Math.max(0, Math.min(this.y, gh - this.height));
+    };
+
+    /** Handle resize - keep window on screen */
+    L2_SubWindow.prototype.onResize = function (oldWidth, oldHeight, newWidth, newHeight) {
+        // 约束到新的屏幕大小
+        this._constrainPosition();
     };
 
     L2_SubWindow.prototype.refresh = function () {
@@ -3335,6 +3595,7 @@
 // ═══ ui/data/list.js ═══
 /**
  * L2_List - Scrollable list with selection and hover.
+ * Fixed scrollbar width handling.
  */
 (function () {
     'use strict';
@@ -3378,16 +3639,34 @@
 
     L2_List.prototype.getSelectedIndex = function () { return this._selectedIndex; };
 
+    /** Check if scrollbar is needed */
+    L2_List.prototype._needsScrollbar = function () {
+        var totalH = this._items.length * this._itemHeight;
+        return totalH > this.ch();
+    };
+
+    /** Get scrollbar width if needed */
+    L2_List.prototype._getScrollbarWidth = function () {
+        return this._needsScrollbar() ? L2_Theme.scrollbarWidth : 0;
+    };
+
+    /** Get max scroll value */
+    L2_List.prototype._getMaxScroll = function () {
+        var totalH = this._items.length * this._itemHeight;
+        return Math.max(0, totalH - this.ch());
+    };
+
     L2_List.prototype.refresh = function () {
         var c = this.bmp();
         c.clear();
         var cw = this.cw(), ch = this.ch();
+        var sbW = this._getScrollbarWidth();
+        var contentW = cw - sbW; // 内容区域宽度
 
         c.fillRect(0, 0, cw, ch, L2_Theme.bgDark);
         L2_Theme.strokeRoundRect(c, 0, 0, cw, ch, 2, L2_Theme.borderDark);
 
         var ih = this._itemHeight;
-        var sbW = L2_Theme.scrollbarWidth;
         var startIdx = Math.floor(this._scrollY / ih);
         var visCount = Math.ceil(ch / ih) + 1;
 
@@ -3396,34 +3675,35 @@
             if (iy + ih < 0 || iy > ch) continue;
 
             if (i === this._selectedIndex) {
-                c.fillRect(1, iy, cw - sbW - 2, ih, L2_Theme.selection);
+                c.fillRect(1, iy, contentW - 2, ih, L2_Theme.selection);
             } else if (i === this._hoverIndex) {
-                c.fillRect(1, iy, cw - sbW - 2, ih, L2_Theme.highlight);
+                c.fillRect(1, iy, contentW - 2, ih, L2_Theme.highlight);
             }
 
-            c.fillRect(2, iy + ih - 1, cw - sbW - 4, 1, L2_Theme.borderDark);
+            c.fillRect(2, iy + ih - 1, contentW - 4, 1, L2_Theme.borderDark);
 
             if (this._drawItemFn) {
-                this._drawItemFn(c, this._items[i], 4, iy, cw - sbW - 8, ih, i);
+                this._drawItemFn(c, this._items[i], 4, iy, contentW - 8, ih, i);
             } else {
                 var item = this._items[i];
                 c.fontSize = L2_Theme.fontNormal;
                 c.textColor = item.color || L2_Theme.textWhite;
-                c.drawText(item.text || String(item), 4, iy + 2, cw - sbW - 8, ih - 4, 'left');
+                c.drawText(item.text || String(item), 4, iy + 2, contentW - 8, ih - 4, 'left');
                 if (item.subText) {
                     c.fontSize = L2_Theme.fontSmall;
                     c.textColor = L2_Theme.textGray;
-                    c.drawText(item.subText, 4, iy + 2, cw - sbW - 8, ih - 4, 'right');
+                    c.drawText(item.subText, 4, iy + 2, contentW - 8, ih - 4, 'right');
                 }
             }
         }
 
-        // Scrollbar
+        // Scrollbar - 使用统一的总高度计算
         var totalH = this._items.length * ih;
         if (totalH > ch) {
             var trackH = ch - 4;
             var thumbH = Math.max(20, Math.round(trackH * (ch / totalH)));
-            var thumbY = 2 + Math.round((trackH - thumbH) * (this._scrollY / (totalH - ch)));
+            var maxScroll = this._getMaxScroll();
+            var thumbY = 2 + (maxScroll > 0 ? Math.round((trackH - thumbH) * (this._scrollY / maxScroll)) : 0);
             c.fillRect(cw - sbW, 0, sbW, ch, 'rgba(0,0,0,0.3)');
             L2_Theme.fillRoundRect(c, cw - sbW, thumbY, sbW, thumbH, 2, '#444466');
         }
@@ -3436,7 +3716,8 @@
         var loc = this.toLocal(TouchInput.x, TouchInput.y);
         var cw = this.cw(), ch = this.ch();
         var ih = this._itemHeight;
-        var inside = loc.x >= 0 && loc.x < cw && loc.y >= 0 && loc.y < ch;
+        var sbW = this._getScrollbarWidth();
+        var inside = loc.x >= 0 && loc.x < cw - sbW && loc.y >= 0 && loc.y < ch;
 
         var oldHover = this._hoverIndex;
         this._hoverIndex = inside ? Math.floor((loc.y + this._scrollY) / ih) : -1;
@@ -3450,9 +3731,9 @@
         }
 
         if (inside && TouchInput.wheelY) {
-            var totalH = this._items.length * ih;
+            var maxScroll = this._getMaxScroll();
             this._scrollY += TouchInput.wheelY > 0 ? ih : -ih;
-            this._scrollY = Math.max(0, Math.min(this._scrollY, Math.max(0, totalH - ch)));
+            this._scrollY = Math.max(0, Math.min(this._scrollY, maxScroll));
             this.refresh();
         }
     };
@@ -3463,6 +3744,7 @@
 // ═══ ui/data/table.js ═══
 /**
  * L2_Table - Data table with columns and rows.
+ * Fixed column width calculation with caching.
  */
 (function () {
     'use strict';
@@ -3481,7 +3763,8 @@
     L2_Table.prototype.initialize = function (x, y, w, h, opts) {
         L2_Base.prototype.initialize.call(this, x, y, w, h);
         opts = opts || {};
-        this._columns = opts.columns || [];
+        this._columns = [];
+        this._columnWidths = [];
         this._rows = [];
         this._rowHeight = opts.rowHeight || L2_Theme.defaultItemHeight;
         this._headerHeight = 26;
@@ -3489,16 +3772,71 @@
         this._selectedRow = -1;
         this._hoverRow = -1;
         this._onRowClick = opts.onRowClick || null;
+        
+        // 设置列（会触发列宽计算）
+        this.setColumns(opts.columns || []);
         this.refresh();
     };
 
     L2_Table.prototype.standardPadding = function () { return 4; };
 
+    /** Calculate and cache column widths */
+    L2_Table.prototype._calculateColumnWidths = function () {
+        var cw = this.cw();
+        var cols = this._columns;
+        var widths = [];
+        var remainingWidth = cw;
+        var unspecifiedCount = 0;
+        
+        // 第一遍：处理指定宽度的列
+        for (var i = 0; i < cols.length; i++) {
+            if (cols[i].width) {
+                widths[i] = cols[i].width;
+                remainingWidth -= cols[i].width;
+            } else {
+                widths[i] = 0; // 占位
+                unspecifiedCount++;
+            }
+        }
+        
+        // 第二遍：均分剩余宽度给未指定宽度的列
+        if (unspecifiedCount > 0) {
+            var avgWidth = Math.floor(remainingWidth / unspecifiedCount);
+            var remainder = remainingWidth - avgWidth * unspecifiedCount;
+            
+            for (var j = 0; j < cols.length; j++) {
+                if (!cols[j].width) {
+                    // 前 remainder 个未指定列多 1px
+                    widths[j] = avgWidth + (remainder > 0 ? 1 : 0);
+                    if (remainder > 0) remainder--;
+                }
+            }
+        }
+        
+        this._columnWidths = widths;
+    };
+
+    /** Get column X position */
+    L2_Table.prototype._getColumnX = function (colIndex) {
+        var x = 0;
+        for (var i = 0; i < colIndex; i++) {
+            x += this._columnWidths[i];
+        }
+        return x;
+    };
+
+    L2_Table.prototype.setColumns = function (columns) {
+        this._columns = columns || [];
+        this._calculateColumnWidths();
+        this.markDirty('bg');
+        this.markDirty('content');
+    };
+
     L2_Table.prototype.setRows = function (rows) {
         this._rows = rows || [];
         this._scrollY = 0;
         this._selectedRow = -1;
-        this.markDirty();
+        this.markDirty('content');
     };
 
     L2_Table.prototype.refresh = function () {
@@ -3506,6 +3844,7 @@
         var cw = this.cw(), ch = this.ch();
         var hh = this._headerHeight;
         var rh = this._rowHeight;
+        var self = this;
 
         // 只有背景层脏时才重绘背景和表头
         if (this.isLayerDirty('bg')) {
@@ -3518,9 +3857,8 @@
             c.fillRect(0, hh - 1, cw, 1, L2_Theme.borderDark);
 
             var colX = 0;
-            var self = this;
-            this._columns.forEach(function (col) {
-                var colW = col.width || Math.floor(cw / self._columns.length);
+            this._columns.forEach(function (col, idx) {
+                var colW = self._columnWidths[idx];
                 c.fontSize = L2_Theme.fontSmall;
                 c.textColor = L2_Theme.textGold;
                 c.drawText(col.label || col.key, colX + 4, 4, colW - 8, hh - 8, 'left');
@@ -3556,8 +3894,8 @@
 
                 var colX = 0;
                 var row = this._rows[i];
-                this._columns.forEach(function (col) {
-                    var colW = col.width || Math.floor(cw / self._columns.length);
+                this._columns.forEach(function (col, idx) {
+                    var colW = self._columnWidths[idx];
                     c.fontSize = L2_Theme.fontNormal;
                     c.textColor = L2_Theme.textWhite;
                     var val = row[col.key] !== undefined ? String(row[col.key]) : '';
@@ -3608,6 +3946,7 @@
 // ═══ ui/data/card.js ═══
 /**
  * L2_Card - Content card with optional header and actions area.
+ * Fixed content height calculation.
  */
 (function () {
     'use strict';
@@ -3624,6 +3963,12 @@
         this._footer = opts.footer || '';
         this._hover = false;
         this._onClick = opts.onClick || null;
+        
+        // 计算各部分高度
+        this._titleHeight = this._title ? 24 : 0;
+        this._footerHeight = this._footer ? 24 : 0;
+        this._contentPadding = 8;
+        
         this.refresh();
     };
 
@@ -3633,6 +3978,11 @@
         this._title = title || this._title;
         this._body = body || this._body;
         this._footer = footer || this._footer;
+        
+        // 重新计算高度
+        this._titleHeight = this._title ? 24 : 0;
+        this._footerHeight = this._footer ? 24 : 0;
+        
         this.markDirty();
     };
 
@@ -3646,27 +3996,40 @@
             L2_Theme.strokeRoundRect(c, 0, 0, cw, ch, L2_Theme.cornerRadius, L2_Theme.borderGold);
         }
 
-        var yy = 8;
+        var yy = this._contentPadding;
+        
+        // Title section
         if (this._title) {
             c.fontSize = L2_Theme.fontTitle;
             c.textColor = L2_Theme.textTitle;
             c.drawText(this._title, 10, yy, cw - 20, 20, 'left');
-            yy += 24;
+            yy += this._titleHeight;
             c.fillRect(8, yy, cw - 16, 1, L2_Theme.borderDark);
             yy += 6;
         }
 
+        // Body section - 动态计算可用高度
         if (this._body) {
+            var bodyHeight = ch - yy - this._contentPadding;
+            if (this._footer) {
+                bodyHeight -= (this._footerHeight + 6); // 6px 分隔线空间
+            }
+            
             c.fontSize = L2_Theme.fontNormal;
             c.textColor = L2_Theme.textGray;
-            c.drawText(this._body, 10, yy, cw - 20, ch - yy - 30, 'left');
+            c.drawText(this._body, 10, yy, cw - 20, bodyHeight, 'left');
+            yy += bodyHeight;
         }
 
+        // Footer section
         if (this._footer) {
-            c.fillRect(8, ch - 28, cw - 16, 1, L2_Theme.borderDark);
+            yy += 6; // 分隔线前空间
+            c.fillRect(8, yy, cw - 16, 1, L2_Theme.borderDark);
+            yy += 6; // 分隔线后空间
+            
             c.fontSize = L2_Theme.fontSmall;
             c.textColor = L2_Theme.textDim;
-            c.drawText(this._footer, 10, ch - 22, cw - 20, 18, 'left');
+            c.drawText(this._footer, 10, yy, cw - 20, this._footerHeight - 6, 'left');
         }
     };
 
@@ -4559,6 +4922,7 @@
 // ═══ ui/feedback/dialog.js ═══
 /**
  * L2_Dialog - Modal dialog with title, content, and action buttons.
+ * Auto-centered with resize support.
  */
 (function () {
     'use strict';
@@ -4580,6 +4944,11 @@
         this._closeHover = false;
         this._hoverBtn = -1;
 
+        // Button layout constants
+        this._btnWidth = 80;
+        this._btnHeight = 30;
+        this._btnGap = 12;
+
         var dw = opts.width || 360;
         this._contentLines = L2_Theme.wrapText(this._content, dw - 40, 7);
         var titleH = this._title ? 36 : 0;
@@ -4587,6 +4956,7 @@
         var btnH = this._buttons.length > 0 ? 44 : 0;
         var dh = titleH + contentH + btnH + 8;
 
+        // Initialize with centered position
         var gw = Graphics.boxWidth || 816;
         var gh = Graphics.boxHeight || 624;
         var dx = (gw - dw) / 2;
@@ -4596,10 +4966,41 @@
         this._titleH = titleH;
         this._contentH = contentH;
         this._btnH = btnH;
+        
+        // 强制启用自动居中
+        this._isCentered = true;
+        this._centerOffsetX = 0;
+        this._centerOffsetY = 0;
+        
+        // 预计算按钮布局
+        this._calculateButtonLayout();
+        
         this.refresh();
     };
 
     L2_Dialog.prototype.standardPadding = function () { return 0; };
+
+    /** Calculate button layout positions */
+    L2_Dialog.prototype._calculateButtonLayout = function () {
+        if (this._buttons.length === 0) {
+            this._btnStartX = 0;
+            return;
+        }
+        var totalBtnW = this._buttons.length * this._btnWidth + (this._buttons.length - 1) * this._btnGap;
+        this._btnStartX = (this.width - totalBtnW) / 2;
+        this._btnY = this._titleH + this._contentH + 6;
+    };
+
+    /** Get button rect for hit testing */
+    L2_Dialog.prototype._getButtonRect = function (index) {
+        var bx = this._btnStartX + index * (this._btnWidth + this._btnGap);
+        return {
+            x: bx,
+            y: this._btnY,
+            w: this._btnWidth,
+            h: this._btnHeight
+        };
+    };
 
     L2_Dialog.prototype._wrapText = function (text, maxW) {
         return L2_Theme.wrapText(text, maxW, 7);
@@ -4610,7 +5011,6 @@
         c.clear();
         var w = this.width, h = this.height;
 
-        // Overlay handled externally or by parent scene
         // Dialog body
         L2_Theme.drawPanelBg(c, 0, 0, w, h);
 
@@ -4634,10 +5034,6 @@
 
         // Buttons
         if (this._buttons.length > 0) {
-            var btnW = 80, btnH = 30, gap = 12;
-            var totalBtnW = this._buttons.length * btnW + (this._buttons.length - 1) * gap;
-            var bx = (w - totalBtnW) / 2;
-
             for (var j = 0; j < this._buttons.length; j++) {
                 var btn = this._buttons[j];
                 var hover = this._hoverBtn === j;
@@ -4646,12 +5042,12 @@
                 else if (btn.type === 'default') color = L2_Theme.bgLight;
 
                 var bg = hover ? L2_Theme.lighten(color, 0.15) : color;
-                L2_Theme.fillRoundRect(c, bx, yy + 6, btnW, btnH, 4, bg);
+                var rect = this._getButtonRect(j);
+                L2_Theme.fillRoundRect(c, rect.x, rect.y, rect.w, rect.h, 4, bg);
 
                 c.fontSize = L2_Theme.fontSmall;
                 c.textColor = L2_Theme.textWhite;
-                c.drawText(btn.text || '', bx, yy + 6, btnW, btnH, 'center');
-                bx += btnW + gap;
+                c.drawText(btn.text || '', rect.x, rect.y, rect.w, rect.h, 'center');
             }
         }
     };
@@ -4677,16 +5073,12 @@
 
         // Button hover and click
         if (this._buttons.length > 0) {
-            var btnW = 80, btnH2 = 30, gap = 12;
-            var totalBtnW = this._buttons.length * btnW + (this._buttons.length - 1) * gap;
-            var bx0 = (w - totalBtnW) / 2;
-            var byy = this._titleH + this._contentH + 6;
             var oldHover = this._hoverBtn;
             this._hoverBtn = -1;
 
             for (var j = 0; j < this._buttons.length; j++) {
-                var bbx = bx0 + j * (btnW + gap);
-                if (lx >= bbx && lx <= bbx + btnW && ly >= byy && ly <= byy + btnH2) {
+                var rect = this._getButtonRect(j);
+                if (lx >= rect.x && lx <= rect.x + rect.w && ly >= rect.y && ly <= rect.y + rect.h) {
                     this._hoverBtn = j;
                 }
             }

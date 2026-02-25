@@ -1,5 +1,6 @@
 /**
  * L2_Tabs - Tab bar for switching content panels.
+ * Fixed pixel-perfect tab width calculation.
  */
 (function () {
     'use strict';
@@ -21,10 +22,52 @@
         this._activeTab = opts.activeIndex || 0;
         this._hoverTab = -1;
         this._onChange = opts.onChange || null;
+        this._tabWidths = [];
+        this._calculateTabWidths();
         this.refresh();
     };
 
     L2_Tabs.prototype.standardPadding = function () { return 0; };
+
+    /** Calculate tab widths without pixel loss */
+    L2_Tabs.prototype._calculateTabWidths = function () {
+        var cw = this.cw();
+        var count = Math.max(this._tabs.length, 1);
+        this._tabWidths = [];
+        
+        if (count === 0) return;
+        
+        // 基础宽度（向下取整）
+        var baseWidth = Math.floor(cw / count);
+        // 剩余像素分配到前面的 tab
+        var remainder = cw - baseWidth * count;
+        
+        for (var i = 0; i < count; i++) {
+            // 前 remainder 个 tab 多 1px
+            this._tabWidths[i] = baseWidth + (i < remainder ? 1 : 0);
+        }
+    };
+
+    /** Get the X position of a tab */
+    L2_Tabs.prototype._getTabX = function (index) {
+        var x = 0;
+        for (var i = 0; i < index; i++) {
+            x += this._tabWidths[i];
+        }
+        return x;
+    };
+
+    /** Get tab index from mouse X position */
+    L2_Tabs.prototype._getTabFromX = function (mx) {
+        var x = 0;
+        for (var i = 0; i < this._tabWidths.length; i++) {
+            if (mx >= x && mx < x + this._tabWidths[i]) {
+                return i;
+            }
+            x += this._tabWidths[i];
+        }
+        return -1;
+    };
 
     L2_Tabs.prototype.getActiveTab = function () { return this._activeTab; };
     L2_Tabs.prototype.getActiveLabel = function () { return this._tabs[this._activeTab]; };
@@ -37,16 +80,19 @@
     };
 
     L2_Tabs.prototype.refresh = function () {
+        // 如果大小改变，重新计算 tab 宽度
+        this._calculateTabWidths();
+        
         var c = this.bmp();
         c.clear();
         var cw = this.cw(), ch = this.ch();
-        var tw = Math.floor(cw / Math.max(this._tabs.length, 1));
         var self = this;
 
         c.fillRect(0, 0, cw, ch, L2_Theme.bgPanel);
 
         this._tabs.forEach(function (label, i) {
-            var tx = i * tw;
+            var tx = self._getTabX(i);
+            var tw = self._tabWidths[i];
             var active = i === self._activeTab;
             var hover = i === self._hoverTab;
 
@@ -71,14 +117,14 @@
 
         var mx = TouchInput.x - this.x;
         var my = TouchInput.y - this.y;
-        var tw = Math.floor(this.cw() / Math.max(this._tabs.length, 1));
         var inside = mx >= 0 && mx < this.width && my >= 0 && my < this.height;
         var oldHover = this._hoverTab;
+        
         var tabIdx = -1;
         if (inside && this._tabs.length > 0) {
-            tabIdx = Math.floor(mx / tw);
-            tabIdx = Math.max(0, Math.min(tabIdx, this._tabs.length - 1));
+            tabIdx = this._getTabFromX(mx);
         }
+        
         this._hoverTab = tabIdx;
         if (this._hoverTab !== oldHover) this.markDirty();
         if (inside && TouchInput.isTriggered() && tabIdx >= 0) {

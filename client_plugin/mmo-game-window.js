@@ -8,7 +8,7 @@
 
     // =================================================================
     //  GameWindow — Reusable floating window (L2 style) with title bar,
-    //  close button, and drag-to-move. Subclass and override drawContent().
+    //  close button, and drag-to-move. Constrained to screen bounds.
     // =================================================================
     var GW_TITLE_H = 26;
 
@@ -23,10 +23,17 @@
         this._gwClosable = opts.closable !== false;
         this._closeHover = false;
         var w = opts.width || 300, h = opts.height || 400;
+        
+        // Initialize with centered position
         var x = Math.floor((Graphics.boxWidth - w) / 2);
         var y = Math.floor((Graphics.boxHeight - h) / 2);
+        
         L2_Base.prototype.initialize.call(this, x, y, w, h);
         this.visible = false;
+        
+        // Enable auto-centering on resize
+        this._isCentered = true;
+        
         $MMO.makeDraggable(this, 'gw_' + this._gwKey, {
             dragArea: { y: 0, h: GW_TITLE_H }
         });

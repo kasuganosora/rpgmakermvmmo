@@ -411,9 +411,7 @@
             ctx.font = fontSize + 'px ' + L2_Theme.fontFamily;
             ctx.fillStyle = color;
             ctx.textBaseline = 'alphabetic';
-            // 禁用图像平滑以获得更清晰的文字
-            ctx.imageSmoothingEnabled = false;
-            ctx.imageSmoothingQuality = 'low';
+            // 保持默认平滑设置，让字体渲染更柔和自然
         },
 
         /**
@@ -532,15 +530,14 @@
         }
     }
 
-    // Apply settings when library loads
-    if (typeof document !== 'undefined') {
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', _applyPixelSettings);
-        } else {
-            _applyPixelSettings();
-        }
-    }
-
-    // Also try to apply immediately (for RM MV environment)
-    _applyPixelSettings();
+    // 注意：禁用了全局像素化渲染设置，以保持字体抗锯齿效果
+    // 如果需要像素化效果，可以手动调用 _applyPixelSettings()
+    // if (typeof document !== 'undefined') {
+    //     if (document.readyState === 'loading') {
+    //         document.addEventListener('DOMContentLoaded', _applyPixelSettings);
+    //     } else {
+    //         _applyPixelSettings();
+    //     }
+    // }
+    // _applyPixelSettings();
 })();

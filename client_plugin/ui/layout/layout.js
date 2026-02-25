@@ -1,6 +1,6 @@
 /**
  * L2_Layout - Flex-like layout container (horizontal/vertical).
- * Positions children sequentially with gap spacing.
+ * Positions children sequentially with gap spacing and automatic wrapping.
  */
 (function () {
     'use strict';
@@ -14,7 +14,11 @@
      * @param {number} y
      * @param {number} w
      * @param {number} h
-     * @param {object} [opts] - { direction:'horizontal'|'vertical', gap, align:'start'|'center'|'end' }
+     * @param {object} [opts] - { 
+     *     direction:'horizontal'|'vertical', 
+     *     gap, 
+     *     align:'start'|'center'|'end'
+     * }
      */
     L2_Layout.prototype.initialize = function (x, y, w, h, opts) {
         L2_Base.prototype.initialize.call(this, x, y, w, h);
@@ -42,29 +46,83 @@
     };
 
     L2_Layout.prototype.layoutItems = function () {
-        var pos = 0;
         var isH = this._direction === 'horizontal';
-        var containerSize = isH ? this.ch() : this.cw();
-
+        var containerMain = isH ? this.cw() : this.ch();  // 主轴容器大小
+        var containerCross = isH ? this.ch() : this.cw(); // 交叉轴容器大小
+        
+        var pos = 0;
+        var crossPos = 0;
+        var lineStartIdx = 0;
+        var lineSize = 0;  // 当前行/列在交叉轴上的大小
+        
+        // 第一遍：计算位置，处理换行
         for (var i = 0; i < this._managed.length; i++) {
             var item = this._managed[i];
-            var itemSize = isH ? item.height : item.width;
-            var crossPos = 0;
-
+            var itemMain = isH ? item.width : item.height;
+            var itemCross = isH ? item.height : item.width;
+            
+            // 检查是否需要换行（自动换行）
+            if (i > lineStartIdx && pos + itemMain > containerMain) {
+                // 完成上一行的布局（应用对齐）
+                this._layoutLine(lineStartIdx, i - 1, crossPos, lineSize, containerCross);
+                // 开始新行
+                crossPos += lineSize + this._gap;
+                pos = 0;
+                lineStartIdx = i;
+                lineSize = 0;
+            }
+            
+            // 计算交叉轴位置
+            var itemCrossPos = crossPos;
+            // 应用对齐
             if (this._align === 'center') {
-                crossPos = (containerSize - itemSize) / 2;
+                itemCrossPos = crossPos + Math.floor((lineSize - itemCross) / 2);
             } else if (this._align === 'end') {
-                crossPos = containerSize - itemSize;
+                itemCrossPos = crossPos + lineSize - itemCross;
             }
+            
+            // 临时存储位置（最终位置可能在换行处理后才确定）
+            item._tempMain = pos;
+            item._tempCross = itemCrossPos;
+            
+            pos += itemMain + this._gap;
+            lineSize = Math.max(lineSize, itemCross);
+        }
+        
+        // 布局最后一行
+        if (lineStartIdx < this._managed.length) {
+            this._layoutLine(lineStartIdx, this._managed.length - 1, crossPos, lineSize, containerCross);
+        }
+    };
 
-            if (isH) {
-                item.x = pos;
-                item.y = crossPos;
-            } else {
-                item.x = crossPos;
-                item.y = pos;
+    /** Layout a line of items with alignment */
+    L2_Layout.prototype._layoutLine = function (startIdx, endIdx, crossPos, lineSize, containerCross) {
+        var isH = this._direction === 'horizontal';
+        
+        for (var i = startIdx; i <= endIdx; i++) {
+            var item = this._managed[i];
+            var itemCross = isH ? item.height : item.width;
+            
+            // 计算交叉轴对齐位置
+            var finalCross = crossPos;
+            // 在 wrap 模式下也应用对齐
+            if (this._align === 'center') {
+                finalCross = crossPos + Math.floor((lineSize - itemCross) / 2);
+            } else if (this._align === 'end') {
+                finalCross = crossPos + lineSize - itemCross;
             }
-            pos += (isH ? item.width : item.height) + this._gap;
+            
+            if (isH) {
+                item.x = item._tempMain;
+                item.y = finalCross;
+            } else {
+                item.x = finalCross;
+                item.y = item._tempMain;
+            }
+            
+            // 清理临时属性
+            delete item._tempMain;
+            delete item._tempCross;
         }
     };
 

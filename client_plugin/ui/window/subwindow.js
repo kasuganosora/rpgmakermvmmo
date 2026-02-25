@@ -1,5 +1,6 @@
 /**
  * L2_SubWindow - Draggable, closable sub-window panel with title bar.
+ * Constrained to screen bounds with resize support.
  */
 (function () {
     'use strict';
@@ -16,8 +17,8 @@
      * @param {object} [opts] - { title, closable, draggable, onClose }
      */
     L2_SubWindow.prototype.initialize = function (x, y, w, h, opts) {
-        L2_Base.prototype.initialize.call(this, x, y, w, h);
         opts = opts || {};
+        L2_Base.prototype.initialize.call(this, x, y, w, h);
         this._title = opts.title || '';
         this._closable = opts.closable !== false;
         this._draggable = opts.draggable !== false;
@@ -47,6 +48,31 @@
     /** Content height (minus title bar and padding). */
     L2_SubWindow.prototype.contentH = function () {
         return this.ch() - this.contentY() - 4;
+    };
+
+    /** Get content area bounds for child positioning */
+    L2_SubWindow.prototype.getContentBounds = function () {
+        var py = this.contentY();
+        return {
+            x: this.padding,
+            y: py,
+            w: this.cw(),
+            h: this.contentH()
+        };
+    };
+
+    /** Constrain position to screen bounds */
+    L2_SubWindow.prototype._constrainPosition = function () {
+        var gw = Graphics.boxWidth || 816;
+        var gh = Graphics.boxHeight || 624;
+        this.x = Math.max(0, Math.min(this.x, gw - this.width));
+        this.y = Math.max(0, Math.min(this.y, gh - this.height));
+    };
+
+    /** Handle resize - keep window on screen */
+    L2_SubWindow.prototype.onResize = function (oldWidth, oldHeight, newWidth, newHeight) {
+        // 约束到新的屏幕大小
+        this._constrainPosition();
     };
 
     L2_SubWindow.prototype.refresh = function () {

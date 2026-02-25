@@ -1,5 +1,6 @@
 /**
  * L2_Dialog - Modal dialog with title, content, and action buttons.
+ * Auto-centered with resize support.
  */
 (function () {
     'use strict';
@@ -21,6 +22,11 @@
         this._closeHover = false;
         this._hoverBtn = -1;
 
+        // Button layout constants
+        this._btnWidth = 80;
+        this._btnHeight = 30;
+        this._btnGap = 12;
+
         var dw = opts.width || 360;
         this._contentLines = L2_Theme.wrapText(this._content, dw - 40, 7);
         var titleH = this._title ? 36 : 0;
@@ -28,6 +34,7 @@
         var btnH = this._buttons.length > 0 ? 44 : 0;
         var dh = titleH + contentH + btnH + 8;
 
+        // Initialize with centered position
         var gw = Graphics.boxWidth || 816;
         var gh = Graphics.boxHeight || 624;
         var dx = (gw - dw) / 2;
@@ -37,10 +44,41 @@
         this._titleH = titleH;
         this._contentH = contentH;
         this._btnH = btnH;
+        
+        // 强制启用自动居中
+        this._isCentered = true;
+        this._centerOffsetX = 0;
+        this._centerOffsetY = 0;
+        
+        // 预计算按钮布局
+        this._calculateButtonLayout();
+        
         this.refresh();
     };
 
     L2_Dialog.prototype.standardPadding = function () { return 0; };
+
+    /** Calculate button layout positions */
+    L2_Dialog.prototype._calculateButtonLayout = function () {
+        if (this._buttons.length === 0) {
+            this._btnStartX = 0;
+            return;
+        }
+        var totalBtnW = this._buttons.length * this._btnWidth + (this._buttons.length - 1) * this._btnGap;
+        this._btnStartX = (this.width - totalBtnW) / 2;
+        this._btnY = this._titleH + this._contentH + 6;
+    };
+
+    /** Get button rect for hit testing */
+    L2_Dialog.prototype._getButtonRect = function (index) {
+        var bx = this._btnStartX + index * (this._btnWidth + this._btnGap);
+        return {
+            x: bx,
+            y: this._btnY,
+            w: this._btnWidth,
+            h: this._btnHeight
+        };
+    };
 
     L2_Dialog.prototype._wrapText = function (text, maxW) {
         return L2_Theme.wrapText(text, maxW, 7);
@@ -51,7 +89,6 @@
         c.clear();
         var w = this.width, h = this.height;
 
-        // Overlay handled externally or by parent scene
         // Dialog body
         L2_Theme.drawPanelBg(c, 0, 0, w, h);
 
@@ -75,10 +112,6 @@
 
         // Buttons
         if (this._buttons.length > 0) {
-            var btnW = 80, btnH = 30, gap = 12;
-            var totalBtnW = this._buttons.length * btnW + (this._buttons.length - 1) * gap;
-            var bx = (w - totalBtnW) / 2;
-
             for (var j = 0; j < this._buttons.length; j++) {
                 var btn = this._buttons[j];
                 var hover = this._hoverBtn === j;
@@ -87,12 +120,12 @@
                 else if (btn.type === 'default') color = L2_Theme.bgLight;
 
                 var bg = hover ? L2_Theme.lighten(color, 0.15) : color;
-                L2_Theme.fillRoundRect(c, bx, yy + 6, btnW, btnH, 4, bg);
+                var rect = this._getButtonRect(j);
+                L2_Theme.fillRoundRect(c, rect.x, rect.y, rect.w, rect.h, 4, bg);
 
                 c.fontSize = L2_Theme.fontSmall;
                 c.textColor = L2_Theme.textWhite;
-                c.drawText(btn.text || '', bx, yy + 6, btnW, btnH, 'center');
-                bx += btnW + gap;
+                c.drawText(btn.text || '', rect.x, rect.y, rect.w, rect.h, 'center');
             }
         }
     };
@@ -118,16 +151,12 @@
 
         // Button hover and click
         if (this._buttons.length > 0) {
-            var btnW = 80, btnH2 = 30, gap = 12;
-            var totalBtnW = this._buttons.length * btnW + (this._buttons.length - 1) * gap;
-            var bx0 = (w - totalBtnW) / 2;
-            var byy = this._titleH + this._contentH + 6;
             var oldHover = this._hoverBtn;
             this._hoverBtn = -1;
 
             for (var j = 0; j < this._buttons.length; j++) {
-                var bbx = bx0 + j * (btnW + gap);
-                if (lx >= bbx && lx <= bbx + btnW && ly >= byy && ly <= byy + btnH2) {
+                var rect = this._getButtonRect(j);
+                if (lx >= rect.x && lx <= rect.x + rect.w && ly >= rect.y && ly <= rect.y + rect.h) {
                     this._hoverBtn = j;
                 }
             }

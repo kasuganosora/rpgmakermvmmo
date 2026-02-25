@@ -13,7 +13,7 @@
     var HEADER_H = 28, ITEM_H = 26;
 
     // -----------------------------------------------------------------
-    // FriendListPanel — L2_Base
+    // FriendListPanel — L2_Base with auto-centering
     // -----------------------------------------------------------------
     function FriendListPanel() { this.initialize.apply(this, arguments); }
     FriendListPanel.prototype = Object.create(L2_Base.prototype);
@@ -27,6 +27,9 @@
         this._friends = [];
         this._scrollY = 0;
         this._closeHover = false;
+        
+        // Enable auto-centering on resize
+        this._isCentered = true;
     };
 
     FriendListPanel.prototype.standardPadding = function () { return 0; };
@@ -141,7 +144,7 @@
     };
 
     // -----------------------------------------------------------------
-    // GuildInfoPanel — L2_Base
+    // GuildInfoPanel — L2_Base with auto-centering
     // -----------------------------------------------------------------
     var GUILD_W = 340, GUILD_H = 380;
 
@@ -156,6 +159,9 @@
         this.visible = false;
         this._data = null;
         this._closeHover = false;
+        
+        // Enable auto-centering on resize
+        this._isCentered = true;
     };
 
     GuildInfoPanel.prototype.standardPadding = function () { return 0; };
