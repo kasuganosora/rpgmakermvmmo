@@ -110,28 +110,46 @@ func (s *PlayerSession) writePump() {
 	}
 }
 
-// Send encodes pkt and sends it non-blocking. Drops if channel full.
+// Send encodes pkt and sends it non-blocking. Drops if channel full or closed.
 func (s *PlayerSession) Send(pkt *Packet) {
+	// Skip if session is already closed
+	if s.IsClosed() {
+		return
+	}
 	data, err := json.Marshal(pkt)
 	if err != nil {
 		return
 	}
 	select {
 	case s.SendChan <- data:
+	case <-s.Done:
+		// Session closed while sending
 	default:
-		s.logger.Warn("send channel full, dropping packet",
-			zap.Int64("account_id", s.AccountID),
-			zap.String("type", pkt.Type))
+		// Only log if not closed (to avoid spam on normal disconnect)
+		if !s.IsClosed() {
+			s.logger.Warn("send channel full, dropping packet",
+				zap.Int64("account_id", s.AccountID),
+				zap.String("type", pkt.Type))
+		}
 	}
 }
 
-// SendRaw sends raw bytes non-blocking. Drops if channel full.
+// SendRaw sends raw bytes non-blocking. Drops if channel full or closed.
 func (s *PlayerSession) SendRaw(data []byte) {
+	// Skip if session is already closed
+	if s.IsClosed() {
+		return
+	}
 	select {
 	case s.SendChan <- data:
+	case <-s.Done:
+		// Session closed while sending
 	default:
-		s.logger.Warn("send channel full, dropping raw packet",
-			zap.Int64("account_id", s.AccountID))
+		// Only log if not closed (to avoid spam on normal disconnect)
+		if !s.IsClosed() {
+			s.logger.Warn("send channel full, dropping raw packet",
+				zap.Int64("account_id", s.AccountID))
+		}
 	}
 }
 
