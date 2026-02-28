@@ -72,21 +72,17 @@
         if (this._cursorBlink === 0 || this._cursorBlink === 30) this.markDirty();
 
         var changed = false;
-        // 使用查找对象代替循环，性能更好
-        var keyMap = Input._keys || {};
-        // 支持的字符集
-        var validChars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:\'",.<>?/~`\\ ';
-        for (var key in keyMap) {
-            if (keyMap[key] && validChars.indexOf(key) >= 0 && this._text.length < this._maxLength) {
-                this._text += key;
-                keyMap[key] = false;
-                changed = true;
+        // 读取按键状态
+        var keyMap = Input._keys;
+        if (keyMap) {
+            var validChars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:\'",.<>?/~`\\ ';
+            for (var key in keyMap) {
+                if (keyMap[key] && validChars.indexOf(key) >= 0 && this._text.length < this._maxLength) {
+                    this._text += key;
+                    keyMap[key] = false;
+                    changed = true;
+                }
             }
-        }
-        // Space (映射为空格字符)
-        if (Input.isTriggered('space') && this._text.length < this._maxLength) {
-            this._text += ' ';
-            changed = true;
         }
         if (Input.isTriggered('backspace') && this._text.length > 0) {
             this._text = this._text.slice(0, -1);

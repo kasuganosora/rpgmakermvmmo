@@ -199,35 +199,39 @@
 
         /** Measure text width using a Bitmap context with caching. */
         _textWidthCache: {},
+        _textWidthCacheCount: 0,
         measureText: function (bmp, text, fontSize) {
             if (!text) return 0;
-            // 使用缓存避免重复计算
             var cacheKey = text + '_' + (fontSize || 13);
             var cached = L2_Theme._textWidthCache[cacheKey];
             if (cached !== undefined) return cached;
-            
+
             var ctx = bmp._context;
             if (!ctx) {
                 var est = text.length * (fontSize || 13) * 0.6;
                 L2_Theme._textWidthCache[cacheKey] = est;
+                L2_Theme._textWidthCacheCount++;
                 return est;
             }
             var old = ctx.font;
-            ctx.font = (fontSize || 13) + 'px GameFont';
+            ctx.font = (fontSize || 13) + 'px ' + L2_Theme.fontFamily;
             var w = ctx.measureText(text).width;
             ctx.font = old;
-            
-            // 限制缓存大小
-            if (Object.keys(L2_Theme._textWidthCache).length > 1000) {
+
+            // 限制缓存大小（O(1) 计数器）
+            L2_Theme._textWidthCacheCount++;
+            if (L2_Theme._textWidthCacheCount > 1000) {
                 L2_Theme._textWidthCache = {};
+                L2_Theme._textWidthCacheCount = 0;
             }
             L2_Theme._textWidthCache[cacheKey] = w;
             return w;
         },
-        
+
         /** Clear text width cache. */
         clearTextWidthCache: function () {
             L2_Theme._textWidthCache = {};
+            L2_Theme._textWidthCacheCount = 0;
         },
 
         /** Draw a line. */
@@ -278,19 +282,32 @@
             bmp._setDirty();
         },
 
-        /** Lighten a hex color by a factor (0–1). */
-        lighten: function (hex, factor) {
-            hex = hex.replace('#', '');
+        /** Lighten a color by a factor (0–1). Supports hex and rgba(). */
+        lighten: function (color, factor) {
+            var r, g, b, a;
+            // 解析 rgba/rgb 格式
+            var rgbaMatch = color.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+))?\s*\)/);
+            if (rgbaMatch) {
+                r = parseInt(rgbaMatch[1], 10);
+                g = parseInt(rgbaMatch[2], 10);
+                b = parseInt(rgbaMatch[3], 10);
+                a = rgbaMatch[4] !== undefined ? parseFloat(rgbaMatch[4]) : 1;
+                r = Math.min(255, Math.round(r + (255 - r) * factor));
+                g = Math.min(255, Math.round(g + (255 - g) * factor));
+                b = Math.min(255, Math.round(b + (255 - b) * factor));
+                return 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')';
+            }
+            // 解析 hex 格式
+            var hex = color.replace('#', '');
             if (hex.length === 3) {
                 hex = hex.charAt(0) + hex.charAt(0) + hex.charAt(1) + hex.charAt(1) + hex.charAt(2) + hex.charAt(2);
             }
-            var r = parseInt(hex.charAt(0) + hex.charAt(1), 16);
-            var g = parseInt(hex.charAt(2) + hex.charAt(3), 16);
-            var b = parseInt(hex.charAt(4) + hex.charAt(5), 16);
+            r = parseInt(hex.charAt(0) + hex.charAt(1), 16);
+            g = parseInt(hex.charAt(2) + hex.charAt(3), 16);
+            b = parseInt(hex.charAt(4) + hex.charAt(5), 16);
             r = Math.min(255, Math.round(r + (255 - r) * factor));
             g = Math.min(255, Math.round(g + (255 - g) * factor));
             b = Math.min(255, Math.round(b + (255 - b) * factor));
-            // 使用数组 join 代替字符串拼接，性能更好
             var hexChars = [
                 '#',
                 (r >> 4).toString(16),
@@ -463,12 +480,21 @@
          */
         measureTextSharp: function (ctx, text, fontSize) {
             if (!ctx) return (text || '').length * (fontSize || 14) * 0.6;
-            var cacheKey = 'fs' + (fontSize || 14);
+            // 使用共享的文字宽度缓存
+            var cacheKey = (text || '') + '_' + (fontSize || 14);
+            var cached = L2_Theme._textWidthCache[cacheKey];
+            if (cached !== undefined) return cached;
             var oldFont = ctx.font;
             ctx.font = (fontSize || 14) + 'px ' + L2_Theme.fontFamily;
-            var w = ctx.measureText(text || '').width;
+            var w = Math.round(ctx.measureText(text || '').width);
             ctx.font = oldFont;
-            return Math.round(w);
+            L2_Theme._textWidthCacheCount++;
+            if (L2_Theme._textWidthCacheCount > 1000) {
+                L2_Theme._textWidthCache = {};
+                L2_Theme._textWidthCacheCount = 0;
+            }
+            L2_Theme._textWidthCache[cacheKey] = w;
+            return w;
         },
 
         /**
@@ -491,53 +517,4 @@
     };
 
     window.L2_Theme = L2_Theme;
-
-    // ═══════════════════════════════════════════════════
-    //  Auto-initialization for RPG Maker MV
-    // ═══════════════════════════════════════════════════
-
-    /**
-     * Apply pixel-perfect rendering settings for RPG Maker MV.
-     * This is called automatically when the library loads.
-     */
-    function _applyPixelSettings() {
-        // Apply pixelated rendering for sharper text
-        if (typeof Graphics !== 'undefined' && Graphics._renderer && Graphics._renderer.view) {
-            Graphics._renderer.view.style.imageRendering = 'pixelated';
-            Graphics._renderer.view.style.imageRendering = '-moz-crisp-edges';
-            Graphics._renderer.view.style.imageRendering = 'crisp-edges';
-            
-            // Also disable anti-aliasing on the canvas context if possible
-            var ctx = Graphics._renderer.view.getContext('2d');
-            if (ctx) {
-                ctx.imageSmoothingEnabled = false;
-                ctx.imageSmoothingQuality = 'low';
-            }
-        }
-        
-        // Hook into Scene_Boot to ensure settings persist
-        if (typeof Scene_Boot !== 'undefined' && Scene_Boot.prototype.start) {
-            var _sceneBootStart = Scene_Boot.prototype.start;
-            Scene_Boot.prototype.start = function() {
-                _sceneBootStart.call(this);
-                // Re-apply after boot in case renderer was recreated
-                if (Graphics._renderer && Graphics._renderer.view) {
-                    Graphics._renderer.view.style.imageRendering = 'pixelated';
-                    Graphics._renderer.view.style.imageRendering = '-moz-crisp-edges';
-                    Graphics._renderer.view.style.imageRendering = 'crisp-edges';
-                }
-            };
-        }
-    }
-
-    // 注意：禁用了全局像素化渲染设置，以保持字体抗锯齿效果
-    // 如果需要像素化效果，可以手动调用 _applyPixelSettings()
-    // if (typeof document !== 'undefined') {
-    //     if (document.readyState === 'loading') {
-    //         document.addEventListener('DOMContentLoaded', _applyPixelSettings);
-    //     } else {
-    //         _applyPixelSettings();
-    //     }
-    // }
-    // _applyPixelSettings();
 })();

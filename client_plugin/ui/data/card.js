@@ -29,9 +29,9 @@
     L2_Card.prototype.standardPadding = function () { return 4; };
 
     L2_Card.prototype.setContent = function (title, body, footer) {
-        this._title = title || this._title;
-        this._body = body || this._body;
-        this._footer = footer || this._footer;
+        this._title = title !== undefined ? title : this._title;
+        this._body = body !== undefined ? body : this._body;
+        this._footer = footer !== undefined ? footer : this._footer;
         
         // 重新计算高度
         this._titleHeight = this._title ? 24 : 0;

@@ -50,7 +50,7 @@
     L2_Alert.prototype.refresh = function () {
         var c = this.bmp();
         c.clear();
-        var w = this.width, h = this.height;
+        var w = this.cw(), h = this.ch();
         var colors = this._typeColors();
 
         // Background

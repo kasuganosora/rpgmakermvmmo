@@ -80,13 +80,14 @@
      */
     function _ensureHooked() {
         if (_isHooked) return;
-        _isHooked = true;
 
         // Wait for RMMV to initialize
         if (typeof TouchInput === 'undefined' || typeof Scene_Map === 'undefined') {
             setTimeout(_ensureHooked, 100);
             return;
         }
+
+        _isHooked = true;
 
         // Hook Scene_Map.prototype.processMapTouch
         // This is where the game processes clicks on the map

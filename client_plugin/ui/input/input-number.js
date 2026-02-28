@@ -20,7 +20,7 @@
         this._min = opts.min !== undefined ? opts.min : 0;
         this._max = opts.max !== undefined ? opts.max : 99999;
         this._step = opts.step || 1;
-        this._value = opts.value || this._min;
+        this._value = opts.value !== undefined ? opts.value : this._min;
         this._onChange = opts.onChange || null;
         this._focused = false;
         this._text = String(this._value);

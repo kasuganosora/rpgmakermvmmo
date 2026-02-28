@@ -102,9 +102,9 @@
         if (this._open) {
             var listY = 30;
             var oldHover = this._hoverOption;
-            if (loc.x >= 0 && loc.x < cw && loc.y >= listY) {
+            if (loc.x >= 0 && loc.x < cw && loc.y >= listY + 2) {
                 this._hoverOption = Math.floor((loc.y - listY - 2) / ih);
-                if (this._hoverOption >= this._options.length) this._hoverOption = -1;
+                if (this._hoverOption < 0 || this._hoverOption >= this._options.length) this._hoverOption = -1;
             } else {
                 this._hoverOption = -1;
             }
@@ -126,14 +126,14 @@
                 this._open = false;
                 this.move(this.x, this.y, this.width, 32);
                 this.createContents();
-                this.refresh();
+                this.markDirty();
                 return;
             }
             if (this._open) {
                 this._open = false;
                 this.move(this.x, this.y, this.width, 32);
                 this.createContents();
-                this.refresh();
+                this.markDirty();
             }
         }
     };

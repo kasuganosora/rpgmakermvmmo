@@ -127,19 +127,19 @@
         var oldHover = this._hoverIndex;
         this._hoverIndex = inside ? Math.floor((loc.y + this._scrollY) / ih) : -1;
         if (this._hoverIndex >= this._items.length) this._hoverIndex = -1;
-        if (this._hoverIndex !== oldHover) this.refresh();
+        if (this._hoverIndex !== oldHover) this.markDirty();
 
         if (inside && TouchInput.isTriggered() && this._hoverIndex >= 0) {
             this._selectedIndex = this._hoverIndex;
             if (this._onSelect) this._onSelect(this._items[this._selectedIndex], this._selectedIndex);
-            this.refresh();
+            this.markDirty();
         }
 
         if (inside && TouchInput.wheelY) {
             var maxScroll = this._getMaxScroll();
             this._scrollY += TouchInput.wheelY > 0 ? ih : -ih;
             this._scrollY = Math.max(0, Math.min(this._scrollY, maxScroll));
-            this.refresh();
+            this.markDirty();
         }
     };
 

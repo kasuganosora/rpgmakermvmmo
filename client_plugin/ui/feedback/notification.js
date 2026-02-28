@@ -107,7 +107,7 @@
         if (this._closable) {
             var wasHover = this._closeHover;
             this._closeHover = lx >= this.width - 26 && lx <= this.width - 4 && ly >= 4 && ly <= 24;
-            if (this._closeHover !== wasHover) this.refresh();
+            if (this._closeHover !== wasHover) this.markDirty();
             if (this._closeHover && TouchInput.isTriggered()) {
                 this._dismiss();
                 return;
@@ -227,6 +227,8 @@
             n.visible = true;
             n.opacity = 255;
             n._dirty = true;
+            // 重新创建 bitmap 以匹配新尺寸
+            if (n.createContents) n.createContents();
         }
         
         _activeNotifs.push(n);

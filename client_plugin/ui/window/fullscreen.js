@@ -74,15 +74,22 @@
                                my >= btnY && my <= btnY + btnSize;
             if (this._closeHover !== wasHover) this.markDirty();
             if (this._closeHover && TouchInput.isTriggered()) {
-                this.visible = false;
-                if (this._onClose) this._onClose();
+                this._doClose();
+                return;
+            }
+            // ESC to close (cancel 是 RMMV 对 escape 的别名)
+            if (Input.isTriggered('cancel')) {
+                this._doClose();
+                return;
             }
         }
-        // ESC to close
-        if (Input.isTriggered('escape') || Input.isTriggered('cancel')) {
-            this.visible = false;
-            if (this._onClose) this._onClose();
-        }
+    };
+
+    L2_FullscreenWindow.prototype._doClose = function () {
+        if (this._closed) return;
+        this._closed = true;
+        this.visible = false;
+        if (this._onClose) this._onClose();
     };
 
     L2_FullscreenWindow.prototype.onClose = function (fn) { this._onClose = fn; };

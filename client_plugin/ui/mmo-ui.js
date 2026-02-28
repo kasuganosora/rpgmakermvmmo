@@ -218,39 +218,35 @@
 
         /** Measure text width using a Bitmap context with caching. */
         _textWidthCache: {},
-        _textWidthCacheCount: 0,
         measureText: function (bmp, text, fontSize) {
             if (!text) return 0;
+            // 使用缓存避免重复计算
             var cacheKey = text + '_' + (fontSize || 13);
             var cached = L2_Theme._textWidthCache[cacheKey];
             if (cached !== undefined) return cached;
-
+            
             var ctx = bmp._context;
             if (!ctx) {
                 var est = text.length * (fontSize || 13) * 0.6;
                 L2_Theme._textWidthCache[cacheKey] = est;
-                L2_Theme._textWidthCacheCount++;
                 return est;
             }
             var old = ctx.font;
-            ctx.font = (fontSize || 13) + 'px ' + L2_Theme.fontFamily;
+            ctx.font = (fontSize || 13) + 'px GameFont';
             var w = ctx.measureText(text).width;
             ctx.font = old;
-
-            // 限制缓存大小（O(1) 计数器）
-            L2_Theme._textWidthCacheCount++;
-            if (L2_Theme._textWidthCacheCount > 1000) {
+            
+            // 限制缓存大小
+            if (Object.keys(L2_Theme._textWidthCache).length > 1000) {
                 L2_Theme._textWidthCache = {};
-                L2_Theme._textWidthCacheCount = 0;
             }
             L2_Theme._textWidthCache[cacheKey] = w;
             return w;
         },
-
+        
         /** Clear text width cache. */
         clearTextWidthCache: function () {
             L2_Theme._textWidthCache = {};
-            L2_Theme._textWidthCacheCount = 0;
         },
 
         /** Draw a line. */
@@ -301,32 +297,19 @@
             bmp._setDirty();
         },
 
-        /** Lighten a color by a factor (0–1). Supports hex and rgba(). */
-        lighten: function (color, factor) {
-            var r, g, b, a;
-            // 解析 rgba/rgb 格式
-            var rgbaMatch = color.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+))?\s*\)/);
-            if (rgbaMatch) {
-                r = parseInt(rgbaMatch[1], 10);
-                g = parseInt(rgbaMatch[2], 10);
-                b = parseInt(rgbaMatch[3], 10);
-                a = rgbaMatch[4] !== undefined ? parseFloat(rgbaMatch[4]) : 1;
-                r = Math.min(255, Math.round(r + (255 - r) * factor));
-                g = Math.min(255, Math.round(g + (255 - g) * factor));
-                b = Math.min(255, Math.round(b + (255 - b) * factor));
-                return 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')';
-            }
-            // 解析 hex 格式
-            var hex = color.replace('#', '');
+        /** Lighten a hex color by a factor (0–1). */
+        lighten: function (hex, factor) {
+            hex = hex.replace('#', '');
             if (hex.length === 3) {
                 hex = hex.charAt(0) + hex.charAt(0) + hex.charAt(1) + hex.charAt(1) + hex.charAt(2) + hex.charAt(2);
             }
-            r = parseInt(hex.charAt(0) + hex.charAt(1), 16);
-            g = parseInt(hex.charAt(2) + hex.charAt(3), 16);
-            b = parseInt(hex.charAt(4) + hex.charAt(5), 16);
+            var r = parseInt(hex.charAt(0) + hex.charAt(1), 16);
+            var g = parseInt(hex.charAt(2) + hex.charAt(3), 16);
+            var b = parseInt(hex.charAt(4) + hex.charAt(5), 16);
             r = Math.min(255, Math.round(r + (255 - r) * factor));
             g = Math.min(255, Math.round(g + (255 - g) * factor));
             b = Math.min(255, Math.round(b + (255 - b) * factor));
+            // 使用数组 join 代替字符串拼接，性能更好
             var hexChars = [
                 '#',
                 (r >> 4).toString(16),
@@ -499,21 +482,12 @@
          */
         measureTextSharp: function (ctx, text, fontSize) {
             if (!ctx) return (text || '').length * (fontSize || 14) * 0.6;
-            // 使用共享的文字宽度缓存
-            var cacheKey = (text || '') + '_' + (fontSize || 14);
-            var cached = L2_Theme._textWidthCache[cacheKey];
-            if (cached !== undefined) return cached;
+            var cacheKey = 'fs' + (fontSize || 14);
             var oldFont = ctx.font;
             ctx.font = (fontSize || 14) + 'px ' + L2_Theme.fontFamily;
-            var w = Math.round(ctx.measureText(text || '').width);
+            var w = ctx.measureText(text || '').width;
             ctx.font = oldFont;
-            L2_Theme._textWidthCacheCount++;
-            if (L2_Theme._textWidthCacheCount > 1000) {
-                L2_Theme._textWidthCache = {};
-                L2_Theme._textWidthCacheCount = 0;
-            }
-            L2_Theme._textWidthCache[cacheKey] = w;
-            return w;
+            return Math.round(w);
         },
 
         /**
@@ -536,6 +510,55 @@
     };
 
     window.L2_Theme = L2_Theme;
+
+    // ═══════════════════════════════════════════════════
+    //  Auto-initialization for RPG Maker MV
+    // ═══════════════════════════════════════════════════
+
+    /**
+     * Apply pixel-perfect rendering settings for RPG Maker MV.
+     * This is called automatically when the library loads.
+     */
+    function _applyPixelSettings() {
+        // Apply pixelated rendering for sharper text
+        if (typeof Graphics !== 'undefined' && Graphics._renderer && Graphics._renderer.view) {
+            Graphics._renderer.view.style.imageRendering = 'pixelated';
+            Graphics._renderer.view.style.imageRendering = '-moz-crisp-edges';
+            Graphics._renderer.view.style.imageRendering = 'crisp-edges';
+            
+            // Also disable anti-aliasing on the canvas context if possible
+            var ctx = Graphics._renderer.view.getContext('2d');
+            if (ctx) {
+                ctx.imageSmoothingEnabled = false;
+                ctx.imageSmoothingQuality = 'low';
+            }
+        }
+        
+        // Hook into Scene_Boot to ensure settings persist
+        if (typeof Scene_Boot !== 'undefined' && Scene_Boot.prototype.start) {
+            var _sceneBootStart = Scene_Boot.prototype.start;
+            Scene_Boot.prototype.start = function() {
+                _sceneBootStart.call(this);
+                // Re-apply after boot in case renderer was recreated
+                if (Graphics._renderer && Graphics._renderer.view) {
+                    Graphics._renderer.view.style.imageRendering = 'pixelated';
+                    Graphics._renderer.view.style.imageRendering = '-moz-crisp-edges';
+                    Graphics._renderer.view.style.imageRendering = 'crisp-edges';
+                }
+            };
+        }
+    }
+
+    // 注意：禁用了全局像素化渲染设置，以保持字体抗锯齿效果
+    // 如果需要像素化效果，可以手动调用 _applyPixelSettings()
+    // if (typeof document !== 'undefined') {
+    //     if (document.readyState === 'loading') {
+    //         document.addEventListener('DOMContentLoaded', _applyPixelSettings);
+    //     } else {
+    //         _applyPixelSettings();
+    //     }
+    // }
+    // _applyPixelSettings();
 })();
 
 // ═══ ui/core/input-blocker.js ═══
@@ -621,14 +644,13 @@
      */
     function _ensureHooked() {
         if (_isHooked) return;
+        _isHooked = true;
 
         // Wait for RMMV to initialize
         if (typeof TouchInput === 'undefined' || typeof Scene_Map === 'undefined') {
             setTimeout(_ensureHooked, 100);
             return;
         }
-
-        _isHooked = true;
 
         // Hook Scene_Map.prototype.processMapTouch
         // This is where the game processes clicks on the map
@@ -697,14 +719,13 @@
 
     // Global cache for expensive calculations
     var _colorCache = {};
-    var _colorCacheCount = 0;
+    var _textWidthCache = {};
     var _cacheLimit = 1000;
-
+    
     // Track all L2 components for resize events
     var _allComponents = [];
     var _lastGraphicsWidth = 0;
     var _lastGraphicsHeight = 0;
-    var _lastResizeFrame = -1;
 
     function L2_Base() { this.initialize.apply(this, arguments); }
     L2_Base.prototype = Object.create(Window_Base.prototype);
@@ -825,8 +846,8 @@
         // 更新输入拦截器状态
         this._updateInputBlocker();
         
-        // 检查全局 resize（静态，每帧只执行一次）
-        L2_Base._checkGlobalResize();
+        // 检查全局 resize
+        this._checkGlobalResize();
         
         // 帧跳过优化
         this._lastFrameUpdated++;
@@ -843,21 +864,17 @@
         }
     };
 
-    /** Static: Check if screen size has changed (runs once per frame). */
-    L2_Base._checkGlobalResize = function () {
-        var frame = Graphics.frameCount || 0;
-        if (frame === _lastResizeFrame) return;
-        _lastResizeFrame = frame;
-
+    /** Check if screen size has changed and notify all components */
+    L2_Base.prototype._checkGlobalResize = function () {
         var currentW = Graphics.boxWidth || 816;
         var currentH = Graphics.boxHeight || 624;
-
+        
         if (currentW !== _lastGraphicsWidth || currentH !== _lastGraphicsHeight) {
             var oldW = _lastGraphicsWidth || currentW;
             var oldH = _lastGraphicsHeight || currentH;
             _lastGraphicsWidth = currentW;
             _lastGraphicsHeight = currentH;
-
+            
             // 通知所有组件
             L2_Base._notifyResize(oldW, oldH, currentW, currentH);
         }
@@ -873,28 +890,10 @@
         }
     };
 
-    /** Static: Purge destroyed components from tracking list (call on scene change). */
-    L2_Base._purgeDestroyed = function () {
-        _allComponents = _allComponents.filter(function (c) { return c && !c._destroyed; });
-    };
-
-    // Hook into SceneManager scene change to clean up stale refs
-    if (typeof SceneManager !== 'undefined') {
-        var _smGoto = SceneManager.goto;
-        if (_smGoto) {
-            SceneManager.goto = function (sceneClass) {
-                L2_Base._purgeDestroyed();
-                if (typeof L2_InputBlocker !== 'undefined') L2_InputBlocker.clear();
-                _smGoto.call(this, sceneClass);
-            };
-        }
-    }
-
     /** Static method to clear global caches. */
     L2_Base.clearCaches = function () {
         _colorCache = {};
-        _colorCacheCount = 0;
-        if (typeof L2_Theme !== 'undefined') L2_Theme.clearTextWidthCache();
+        _textWidthCache = {};
     };
 
     /** Get cached color value. */
@@ -903,11 +902,9 @@
             return _colorCache[key];
         }
         var value = calculator();
-        // 限制缓存大小（O(1) 计数器代替 O(n) Object.keys）
-        _colorCacheCount++;
-        if (_colorCacheCount > _cacheLimit) {
+        // 限制缓存大小
+        if (Object.keys(_colorCache).length > _cacheLimit) {
             _colorCache = {};
-            _colorCacheCount = 0;
         }
         _colorCache[key] = value;
         return value;
@@ -986,8 +983,8 @@
 
     /** Hit test: is (mx, my) inside this component's bounds? */
     L2_Base.prototype.isInside = function (mx, my) {
-        return mx >= this.x && mx < this.x + this.width &&
-               my >= this.y && my < this.y + this.height;
+        return mx >= this.x && mx <= this.x + this.width &&
+               my >= this.y && my <= this.y + this.height;
     };
 
     /** Convert screen coords to local content coords. */
@@ -1039,8 +1036,8 @@
         for (var i = components.length - 1; i >= 0; i--) {
             var comp = components[i];
             if (comp && comp.visible && !comp._destroyed &&
-                mx >= comp.x && mx < comp.x + comp.width &&
-                my >= comp.y && my < comp.y + comp.height) {
+                mx >= comp.x && mx <= comp.x + comp.width &&
+                my >= comp.y && my <= comp.y + comp.height) {
                 return i;
             }
         }
@@ -1159,21 +1156,11 @@
         this.layoutItems();
     };
 
-    /** Batch add multiple items (avoids O(N²) layout recalc). */
-    L2_Grid.prototype.addItems = function (components) {
-        for (var i = 0; i < components.length; i++) {
-            this._managed.push(components[i]);
-            this.addChild(components[i]);
-        }
-        this.layoutItems();
-    };
-
     /** Remove all grid items. */
     L2_Grid.prototype.clearItems = function () {
         var self = this;
         this._managed.forEach(function (c) {
             if (c.parent === self) self.removeChild(c);
-            if (c.destroy) c.destroy();
         });
         this._managed = [];
     };
@@ -1189,29 +1176,17 @@
     L2_Grid.prototype.layoutItems = function () {
         this._calculateCellWidth();
         var cols = this._cols;
-        var rowY = 0;
-        var lastRow = -1;
-        var rowHeight = 0;
 
         for (var i = 0; i < this._managed.length; i++) {
             var col = i % cols;
             var row = Math.floor(i / cols);
             var cellW = this._getCellWidth(col);
             var cx = col * (this._cellWidth + this._colGap);
-
-            // 换行时累计上一行的最大高度
-            if (row !== lastRow) {
-                if (lastRow >= 0) {
-                    rowY += rowHeight + this._rowGap;
-                }
-                lastRow = row;
-                rowHeight = 0;
-            }
-            rowHeight = Math.max(rowHeight, this._managed[i].height);
-
+            var cy = row * (this._managed[i].height + this._rowGap);
+            
             this._managed[i].x = cx;
-            this._managed[i].y = rowY;
-
+            this._managed[i].y = cy;
+            
             // 自动调整子元素宽度以适应 cell
             if (this._managed[i].width !== cellW) {
                 this._managed[i].width = cellW;
@@ -1278,20 +1253,10 @@
         this.layoutItems();
     };
 
-    /** Batch add multiple items (avoids O(N²) layout recalc). */
-    L2_Layout.prototype.addItems = function (components) {
-        for (var i = 0; i < components.length; i++) {
-            this._managed.push(components[i]);
-            this.addChild(components[i]);
-        }
-        this.layoutItems();
-    };
-
     L2_Layout.prototype.clearItems = function () {
         var self = this;
         this._managed.forEach(function (c) {
             if (c.parent === self) self.removeChild(c);
-            if (c.destroy) c.destroy();
         });
         this._managed = [];
     };
@@ -1371,9 +1336,9 @@
                 item.y = item._tempMain;
             }
             
-            // 清理临时属性（用赋值代替 delete 避免 V8 去优化）
-            item._tempMain = undefined;
-            item._tempCross = undefined;
+            // 清理临时属性
+            delete item._tempMain;
+            delete item._tempCross;
         }
     };
 
@@ -1512,12 +1477,9 @@
                 var iconSize = 20;
                 var iconX = 6;
                 var iconY = (ch - iconSize) / 2;
-                // Draw from IconSet (使用缓存引用)
+                // Draw from IconSet
                 if (ImageManager && ImageManager.loadSystem) {
-                    if (!L2_Button._cachedIconSet || !L2_Button._cachedIconSet.isReady()) {
-                        L2_Button._cachedIconSet = ImageManager.loadSystem('IconSet');
-                    }
-                    var iconSet = L2_Button._cachedIconSet;
+                    var iconSet = ImageManager.loadSystem('IconSet');
                     if (iconSet && iconSet.isReady()) {
                         var pw = Window_Base._iconWidth || 32;
                         var ph = Window_Base._iconHeight || 32;
@@ -1632,24 +1594,19 @@
         this.markDirty();
     };
 
-    // 缓存 IconSet bitmap 引用，避免每帧 loadSystem
-    var _cachedIconSet = null;
-
     L2_Icon.prototype.refresh = function () {
         var c = this.bmp();
         c.clear();
         if (this._iconIndex < 0) return;
 
         if (ImageManager && ImageManager.loadSystem) {
-            if (!_cachedIconSet || !_cachedIconSet.isReady()) {
-                _cachedIconSet = ImageManager.loadSystem('IconSet');
-            }
-            if (_cachedIconSet && _cachedIconSet.isReady()) {
+            var iconSet = ImageManager.loadSystem('IconSet');
+            if (iconSet && iconSet.isReady()) {
                 var pw = Window_Base._iconWidth || 32;
                 var ph = Window_Base._iconHeight || 32;
                 var sx = (this._iconIndex % 16) * pw;
                 var sy = Math.floor(this._iconIndex / 16) * ph;
-                c.blt(_cachedIconSet, sx, sy, pw, ph, 0, 0, this._iconSize, this._iconSize);
+                c.blt(iconSet, sx, sy, pw, ph, 0, 0, this._iconSize, this._iconSize);
             }
         }
     };
@@ -2750,22 +2707,15 @@
                                my >= btnY && my <= btnY + btnSize;
             if (this._closeHover !== wasHover) this.markDirty();
             if (this._closeHover && TouchInput.isTriggered()) {
-                this._doClose();
-                return;
-            }
-            // ESC to close (cancel 是 RMMV 对 escape 的别名)
-            if (Input.isTriggered('cancel')) {
-                this._doClose();
-                return;
+                this.visible = false;
+                if (this._onClose) this._onClose();
             }
         }
-    };
-
-    L2_FullscreenWindow.prototype._doClose = function () {
-        if (this._closed) return;
-        this._closed = true;
-        this.visible = false;
-        if (this._onClose) this._onClose();
+        // ESC to close
+        if (Input.isTriggered('escape') || Input.isTriggered('cancel')) {
+            this.visible = false;
+            if (this._onClose) this._onClose();
+        }
     };
 
     L2_FullscreenWindow.prototype.onClose = function (fn) { this._onClose = fn; };
@@ -2848,17 +2798,21 @@
         if (this._cursorBlink === 0 || this._cursorBlink === 30) this.markDirty();
 
         var changed = false;
-        // 读取按键状态
-        var keyMap = Input._keys;
-        if (keyMap) {
-            var validChars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:\'",.<>?/~`\\ ';
-            for (var key in keyMap) {
-                if (keyMap[key] && validChars.indexOf(key) >= 0 && this._text.length < this._maxLength) {
-                    this._text += key;
-                    keyMap[key] = false;
-                    changed = true;
-                }
+        // 使用查找对象代替循环，性能更好
+        var keyMap = Input._keys || {};
+        // 支持的字符集
+        var validChars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:\'",.<>?/~`\\ ';
+        for (var key in keyMap) {
+            if (keyMap[key] && validChars.indexOf(key) >= 0 && this._text.length < this._maxLength) {
+                this._text += key;
+                keyMap[key] = false;
+                changed = true;
             }
+        }
+        // Space (映射为空格字符)
+        if (Input.isTriggered('space') && this._text.length < this._maxLength) {
+            this._text += ' ';
+            changed = true;
         }
         if (Input.isTriggered('backspace') && this._text.length > 0) {
             this._text = this._text.slice(0, -1);
@@ -2905,7 +2859,7 @@
         this._min = opts.min !== undefined ? opts.min : 0;
         this._max = opts.max !== undefined ? opts.max : 99999;
         this._step = opts.step || 1;
-        this._value = opts.value !== undefined ? opts.value : this._min;
+        this._value = opts.value || this._min;
         this._onChange = opts.onChange || null;
         this._focused = false;
         this._text = String(this._value);
@@ -3129,9 +3083,9 @@
         if (this._open) {
             var listY = 30;
             var oldHover = this._hoverOption;
-            if (loc.x >= 0 && loc.x < cw && loc.y >= listY + 2) {
+            if (loc.x >= 0 && loc.x < cw && loc.y >= listY) {
                 this._hoverOption = Math.floor((loc.y - listY - 2) / ih);
-                if (this._hoverOption < 0 || this._hoverOption >= this._options.length) this._hoverOption = -1;
+                if (this._hoverOption >= this._options.length) this._hoverOption = -1;
             } else {
                 this._hoverOption = -1;
             }
@@ -3153,14 +3107,14 @@
                 this._open = false;
                 this.move(this.x, this.y, this.width, 32);
                 this.createContents();
-                this.markDirty();
+                this.refresh();
                 return;
             }
             if (this._open) {
                 this._open = false;
                 this.move(this.x, this.y, this.width, 32);
                 this.createContents();
-                this.markDirty();
+                this.refresh();
             }
         }
     };
@@ -3372,7 +3326,7 @@
         opts = opts || {};
         this._label = opts.label || '';
         L2_Base.prototype.initialize.call(this, x, y, (opts.width || 90) + 4, 24 + 4);
-        this._on = opts.on !== undefined ? !!opts.on : (opts.value !== undefined ? !!opts.value : false);
+        this._on = opts.on || opts.value || false;
         this._onChange = opts.onChange || null;
         this._hover = false;
         this._animPos = this._on ? 1 : 0;
@@ -3550,7 +3504,7 @@
     L2_Textarea.prototype.standardPadding = function () { return 4; };
 
     L2_Textarea.prototype.getText = function () { return this._text; };
-    L2_Textarea.prototype.setText = function (t) { this._text = t; this._scrollY = 0; this._cachedLinesText = null; this.markDirty(); };
+    L2_Textarea.prototype.setText = function (t) { this._text = t; this._scrollY = 0; this.markDirty(); };
 
     L2_Textarea.prototype.refresh = function () {
         var c = this.bmp();
@@ -3564,12 +3518,7 @@
         c.fontSize = L2_Theme.fontNormal;
         c.textColor = L2_Theme.textWhite;
 
-        // 使用缓存的行数组避免每帧 split
-        if (!this._cachedLines || this._cachedLinesText !== this._text) {
-            this._cachedLines = this._text.split('\n');
-            this._cachedLinesText = this._text;
-        }
-        var lines = this._cachedLines;
+        var lines = this._text.split('\n');
         var lh = this._lineHeight;
         var startLine = Math.floor(this._scrollY / lh);
         var visLines = Math.ceil(ch / lh);
@@ -3606,11 +3555,8 @@
         // Scroll
         if (inside && TouchInput.wheelY) {
             var lh = this._lineHeight;
-            if (!this._cachedLines || this._cachedLinesText !== this._text) {
-                this._cachedLines = this._text.split('\n');
-                this._cachedLinesText = this._text;
-            }
-            var totalH = this._cachedLines.length * lh;
+            var lines = this._text.split('\n');
+            var totalH = lines.length * lh;
             this._scrollY += TouchInput.wheelY > 0 ? lh * 2 : -lh * 2;
             this._scrollY = Math.max(0, Math.min(this._scrollY, Math.max(0, totalH - this.ch())));
             this.markDirty();
@@ -3620,18 +3566,17 @@
         if (this._focused && this._editable) {
             this._cursorBlink = (this._cursorBlink + 1) % 60;
             var changed = false;
-            // 读取按键状态
-            var keyMap = Input._keys;
-            if (keyMap) {
-                var validChars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:\'",.<>?/~`\\ ';
-                for (var key in keyMap) {
-                    if (keyMap[key] && validChars.indexOf(key) >= 0) {
-                        this._text += key;
-                        keyMap[key] = false;
-                        changed = true;
-                    }
+            // 使用查找对象代替循环，性能更好
+            var keyMap = Input._keys || {};
+            var validChars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:\'",.<>?/~`\\ ';
+            for (var key in keyMap) {
+                if (keyMap[key] && validChars.indexOf(key) >= 0) {
+                    this._text += key;
+                    keyMap[key] = false;
+                    changed = true;
                 }
             }
+            if (Input.isTriggered('space')) { this._text += ' '; changed = true; }
             if (Input.isTriggered('backspace') && this._text.length > 0) {
                 this._text = this._text.slice(0, -1);
                 changed = true;
@@ -3777,19 +3722,19 @@
         var oldHover = this._hoverIndex;
         this._hoverIndex = inside ? Math.floor((loc.y + this._scrollY) / ih) : -1;
         if (this._hoverIndex >= this._items.length) this._hoverIndex = -1;
-        if (this._hoverIndex !== oldHover) this.markDirty();
+        if (this._hoverIndex !== oldHover) this.refresh();
 
         if (inside && TouchInput.isTriggered() && this._hoverIndex >= 0) {
             this._selectedIndex = this._hoverIndex;
             if (this._onSelect) this._onSelect(this._items[this._selectedIndex], this._selectedIndex);
-            this.markDirty();
+            this.refresh();
         }
 
         if (inside && TouchInput.wheelY) {
             var maxScroll = this._getMaxScroll();
             this._scrollY += TouchInput.wheelY > 0 ? ih : -ih;
             this._scrollY = Math.max(0, Math.min(this._scrollY, maxScroll));
-            this.markDirty();
+            this.refresh();
         }
     };
 
@@ -4030,9 +3975,9 @@
     L2_Card.prototype.standardPadding = function () { return 4; };
 
     L2_Card.prototype.setContent = function (title, body, footer) {
-        this._title = title !== undefined ? title : this._title;
-        this._body = body !== undefined ? body : this._body;
-        this._footer = footer !== undefined ? footer : this._footer;
+        this._title = title || this._title;
+        this._body = body || this._body;
+        this._footer = footer || this._footer;
         
         // 重新计算高度
         this._titleHeight = this._title ? 24 : 0;
@@ -4123,8 +4068,8 @@
         L2_Base.prototype.initialize.call(this, x, y, w, h);
         this._bgColor = opts.bgColor || L2_Theme.hpBg;
         this._fillColor = opts.fillColor || L2_Theme.hpFill;
-        this._value = opts.value !== undefined ? opts.value : 0;
-        this._maxValue = opts.max !== undefined ? opts.max : 100;
+        this._value = opts.value || 0;
+        this._maxValue = opts.max || 100;
         this._label = opts.label || '';
         this._showText = opts.showText !== false;
         this._showPercent = opts.showPercent || false;
@@ -4177,13 +4122,7 @@
      */
     L2_Tag.prototype.initialize = function (x, y, text, opts) {
         opts = opts || {};
-        // CJK 字符宽度约为 ASCII 的 2 倍
-        var cjkCount = 0;
-        for (var ci = 0; ci < text.length; ci++) {
-            if (text.charCodeAt(ci) > 0x7F) cjkCount++;
-        }
-        var estWidth = (text.length - cjkCount) * 8 + cjkCount * 14;
-        var w = Math.max(estWidth + 20 + (opts.closable ? 18 : 0), 40);
+        var w = Math.max(text.length * 8 + 20 + (opts.closable ? 18 : 0), 40);
         L2_Base.prototype.initialize.call(this, x, y, w, 22 + 4);
         this._text = text;
         this._textColor = opts.color || L2_Theme.textWhite;
@@ -4229,11 +4168,12 @@
     L2_Tag.prototype.update = function () {
         L2_Base.prototype.update.call(this);
         if (!this.visible || !this._closable) return;
-        // 使用 toLocal 处理嵌套容器中的坐标转换
-        var loc = this.toLocal(TouchInput.x, TouchInput.y);
-        var cw = this.cw(), ch = this.ch();
+        var cw = this.cw();
+        var bx = this.x + this.padding + cw - 16;
+        var by = this.y + this.padding;
+        var mx = TouchInput.x, my = TouchInput.y;
         var wasHover = this._closeHover;
-        this._closeHover = loc.x >= cw - 16 && loc.x <= cw && loc.y >= 0 && loc.y <= ch;
+        this._closeHover = mx >= bx && mx <= bx + 14 && my >= by && my <= by + this.ch();
         if (this._closeHover !== wasHover) this.markDirty();
         if (this._closeHover && TouchInput.isTriggered() && this._onClose) this._onClose();
     };
@@ -5124,15 +5064,15 @@
         if (this._closable && this._title) {
             var wasCloseHover = this._closeHover;
             this._closeHover = lx >= w - 32 && lx <= w && ly >= 4 && ly <= 32;
-            if (this._closeHover !== wasCloseHover) this.markDirty();
+            if (this._closeHover !== wasCloseHover) this.refresh();
             if (this._closeHover && TouchInput.isTriggered()) {
                 this.close();
                 return;
             }
         }
 
-        // Button hover and click (guard against null after close)
-        if (this._buttons && this._buttons.length > 0) {
+        // Button hover and click
+        if (this._buttons.length > 0) {
             var oldHover = this._hoverBtn;
             this._hoverBtn = -1;
 
@@ -5142,7 +5082,7 @@
                     this._hoverBtn = j;
                 }
             }
-            if (this._hoverBtn !== oldHover) this.markDirty();
+            if (this._hoverBtn !== oldHover) this.refresh();
 
             if (TouchInput.isTriggered() && this._hoverBtn >= 0) {
                 var onClick = this._buttons[this._hoverBtn].onClick;
@@ -5537,8 +5477,6 @@
             msg.opacity = 255;
             msg._dirty = true;
             msg._dirtyLayers = { bg: true, content: true };
-            // 重新创建 bitmap 以匹配新尺寸
-            if (msg.createContents) msg.createContents();
         }
         
         _activeMessages.push(msg);
@@ -5669,7 +5607,7 @@
         if (this._closable) {
             var wasHover = this._closeHover;
             this._closeHover = lx >= this.width - 26 && lx <= this.width - 4 && ly >= 4 && ly <= 24;
-            if (this._closeHover !== wasHover) this.markDirty();
+            if (this._closeHover !== wasHover) this.refresh();
             if (this._closeHover && TouchInput.isTriggered()) {
                 this._dismiss();
                 return;
@@ -5789,8 +5727,6 @@
             n.visible = true;
             n.opacity = 255;
             n._dirty = true;
-            // 重新创建 bitmap 以匹配新尺寸
-            if (n.createContents) n.createContents();
         }
         
         _activeNotifs.push(n);
@@ -5872,7 +5808,7 @@
     L2_Alert.prototype.refresh = function () {
         var c = this.bmp();
         c.clear();
-        var w = this.cw(), h = this.ch();
+        var w = this.width, h = this.height;
         var colors = this._typeColors();
 
         // Background

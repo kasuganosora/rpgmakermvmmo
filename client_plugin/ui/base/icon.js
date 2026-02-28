@@ -31,19 +31,24 @@
         this.markDirty();
     };
 
+    // 缓存 IconSet bitmap 引用，避免每帧 loadSystem
+    var _cachedIconSet = null;
+
     L2_Icon.prototype.refresh = function () {
         var c = this.bmp();
         c.clear();
         if (this._iconIndex < 0) return;
 
         if (ImageManager && ImageManager.loadSystem) {
-            var iconSet = ImageManager.loadSystem('IconSet');
-            if (iconSet && iconSet.isReady()) {
+            if (!_cachedIconSet || !_cachedIconSet.isReady()) {
+                _cachedIconSet = ImageManager.loadSystem('IconSet');
+            }
+            if (_cachedIconSet && _cachedIconSet.isReady()) {
                 var pw = Window_Base._iconWidth || 32;
                 var ph = Window_Base._iconHeight || 32;
                 var sx = (this._iconIndex % 16) * pw;
                 var sy = Math.floor(this._iconIndex / 16) * ph;
-                c.blt(iconSet, sx, sy, pw, ph, 0, 0, this._iconSize, this._iconSize);
+                c.blt(_cachedIconSet, sx, sy, pw, ph, 0, 0, this._iconSize, this._iconSize);
             }
         }
     };

@@ -37,10 +37,20 @@
         this.layoutItems();
     };
 
+    /** Batch add multiple items (avoids O(N²) layout recalc). */
+    L2_Layout.prototype.addItems = function (components) {
+        for (var i = 0; i < components.length; i++) {
+            this._managed.push(components[i]);
+            this.addChild(components[i]);
+        }
+        this.layoutItems();
+    };
+
     L2_Layout.prototype.clearItems = function () {
         var self = this;
         this._managed.forEach(function (c) {
             if (c.parent === self) self.removeChild(c);
+            if (c.destroy) c.destroy();
         });
         this._managed = [];
     };
@@ -120,9 +130,9 @@
                 item.y = item._tempMain;
             }
             
-            // 清理临时属性
-            delete item._tempMain;
-            delete item._tempCross;
+            // 清理临时属性（用赋值代替 delete 避免 V8 去优化）
+            item._tempMain = undefined;
+            item._tempCross = undefined;
         }
     };
 

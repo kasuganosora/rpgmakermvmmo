@@ -51,11 +51,21 @@
         this.layoutItems();
     };
 
+    /** Batch add multiple items (avoids O(N²) layout recalc). */
+    L2_Grid.prototype.addItems = function (components) {
+        for (var i = 0; i < components.length; i++) {
+            this._managed.push(components[i]);
+            this.addChild(components[i]);
+        }
+        this.layoutItems();
+    };
+
     /** Remove all grid items. */
     L2_Grid.prototype.clearItems = function () {
         var self = this;
         this._managed.forEach(function (c) {
             if (c.parent === self) self.removeChild(c);
+            if (c.destroy) c.destroy();
         });
         this._managed = [];
     };
@@ -71,17 +81,29 @@
     L2_Grid.prototype.layoutItems = function () {
         this._calculateCellWidth();
         var cols = this._cols;
+        var rowY = 0;
+        var lastRow = -1;
+        var rowHeight = 0;
 
         for (var i = 0; i < this._managed.length; i++) {
             var col = i % cols;
             var row = Math.floor(i / cols);
             var cellW = this._getCellWidth(col);
             var cx = col * (this._cellWidth + this._colGap);
-            var cy = row * (this._managed[i].height + this._rowGap);
-            
+
+            // 换行时累计上一行的最大高度
+            if (row !== lastRow) {
+                if (lastRow >= 0) {
+                    rowY += rowHeight + this._rowGap;
+                }
+                lastRow = row;
+                rowHeight = 0;
+            }
+            rowHeight = Math.max(rowHeight, this._managed[i].height);
+
             this._managed[i].x = cx;
-            this._managed[i].y = cy;
-            
+            this._managed[i].y = rowY;
+
             // 自动调整子元素宽度以适应 cell
             if (this._managed[i].width !== cellW) {
                 this._managed[i].width = cellW;

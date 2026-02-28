@@ -17,7 +17,7 @@
         opts = opts || {};
         this._label = opts.label || '';
         L2_Base.prototype.initialize.call(this, x, y, (opts.width || 90) + 4, 24 + 4);
-        this._on = opts.on || opts.value || false;
+        this._on = opts.on !== undefined ? !!opts.on : (opts.value !== undefined ? !!opts.value : false);
         this._onChange = opts.onChange || null;
         this._hover = false;
         this._animPos = this._on ? 1 : 0;

@@ -13,13 +13,14 @@
 
     // Global cache for expensive calculations
     var _colorCache = {};
-    var _textWidthCache = {};
+    var _colorCacheCount = 0;
     var _cacheLimit = 1000;
-    
+
     // Track all L2 components for resize events
     var _allComponents = [];
     var _lastGraphicsWidth = 0;
     var _lastGraphicsHeight = 0;
+    var _lastResizeFrame = -1;
 
     function L2_Base() { this.initialize.apply(this, arguments); }
     L2_Base.prototype = Object.create(Window_Base.prototype);
@@ -140,8 +141,8 @@
         // 更新输入拦截器状态
         this._updateInputBlocker();
         
-        // 检查全局 resize
-        this._checkGlobalResize();
+        // 检查全局 resize（静态，每帧只执行一次）
+        L2_Base._checkGlobalResize();
         
         // 帧跳过优化
         this._lastFrameUpdated++;
@@ -158,17 +159,21 @@
         }
     };
 
-    /** Check if screen size has changed and notify all components */
-    L2_Base.prototype._checkGlobalResize = function () {
+    /** Static: Check if screen size has changed (runs once per frame). */
+    L2_Base._checkGlobalResize = function () {
+        var frame = Graphics.frameCount || 0;
+        if (frame === _lastResizeFrame) return;
+        _lastResizeFrame = frame;
+
         var currentW = Graphics.boxWidth || 816;
         var currentH = Graphics.boxHeight || 624;
-        
+
         if (currentW !== _lastGraphicsWidth || currentH !== _lastGraphicsHeight) {
             var oldW = _lastGraphicsWidth || currentW;
             var oldH = _lastGraphicsHeight || currentH;
             _lastGraphicsWidth = currentW;
             _lastGraphicsHeight = currentH;
-            
+
             // 通知所有组件
             L2_Base._notifyResize(oldW, oldH, currentW, currentH);
         }
@@ -184,10 +189,28 @@
         }
     };
 
+    /** Static: Purge destroyed components from tracking list (call on scene change). */
+    L2_Base._purgeDestroyed = function () {
+        _allComponents = _allComponents.filter(function (c) { return c && !c._destroyed; });
+    };
+
+    // Hook into SceneManager scene change to clean up stale refs
+    if (typeof SceneManager !== 'undefined') {
+        var _smGoto = SceneManager.goto;
+        if (_smGoto) {
+            SceneManager.goto = function (sceneClass) {
+                L2_Base._purgeDestroyed();
+                if (typeof L2_InputBlocker !== 'undefined') L2_InputBlocker.clear();
+                _smGoto.call(this, sceneClass);
+            };
+        }
+    }
+
     /** Static method to clear global caches. */
     L2_Base.clearCaches = function () {
         _colorCache = {};
-        _textWidthCache = {};
+        _colorCacheCount = 0;
+        if (typeof L2_Theme !== 'undefined') L2_Theme.clearTextWidthCache();
     };
 
     /** Get cached color value. */
@@ -196,9 +219,11 @@
             return _colorCache[key];
         }
         var value = calculator();
-        // 限制缓存大小
-        if (Object.keys(_colorCache).length > _cacheLimit) {
+        // 限制缓存大小（O(1) 计数器代替 O(n) Object.keys）
+        _colorCacheCount++;
+        if (_colorCacheCount > _cacheLimit) {
             _colorCache = {};
+            _colorCacheCount = 0;
         }
         _colorCache[key] = value;
         return value;
@@ -277,8 +302,8 @@
 
     /** Hit test: is (mx, my) inside this component's bounds? */
     L2_Base.prototype.isInside = function (mx, my) {
-        return mx >= this.x && mx <= this.x + this.width &&
-               my >= this.y && my <= this.y + this.height;
+        return mx >= this.x && mx < this.x + this.width &&
+               my >= this.y && my < this.y + this.height;
     };
 
     /** Convert screen coords to local content coords. */
@@ -330,8 +355,8 @@
         for (var i = components.length - 1; i >= 0; i--) {
             var comp = components[i];
             if (comp && comp.visible && !comp._destroyed &&
-                mx >= comp.x && mx <= comp.x + comp.width &&
-                my >= comp.y && my <= comp.y + comp.height) {
+                mx >= comp.x && mx < comp.x + comp.width &&
+                my >= comp.y && my < comp.y + comp.height) {
                 return i;
             }
         }

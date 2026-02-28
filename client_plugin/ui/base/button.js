@@ -106,9 +106,12 @@
                 var iconSize = 20;
                 var iconX = 6;
                 var iconY = (ch - iconSize) / 2;
-                // Draw from IconSet
+                // Draw from IconSet (使用缓存引用)
                 if (ImageManager && ImageManager.loadSystem) {
-                    var iconSet = ImageManager.loadSystem('IconSet');
+                    if (!L2_Button._cachedIconSet || !L2_Button._cachedIconSet.isReady()) {
+                        L2_Button._cachedIconSet = ImageManager.loadSystem('IconSet');
+                    }
+                    var iconSet = L2_Button._cachedIconSet;
                     if (iconSet && iconSet.isReady()) {
                         var pw = Window_Base._iconWidth || 32;
                         var ph = Window_Base._iconHeight || 32;

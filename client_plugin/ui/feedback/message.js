@@ -192,6 +192,8 @@
             msg.opacity = 255;
             msg._dirty = true;
             msg._dirtyLayers = { bg: true, content: true };
+            // 重新创建 bitmap 以匹配新尺寸
+            if (msg.createContents) msg.createContents();
         }
         
         _activeMessages.push(msg);

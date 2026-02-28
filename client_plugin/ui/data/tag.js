@@ -16,7 +16,13 @@
      */
     L2_Tag.prototype.initialize = function (x, y, text, opts) {
         opts = opts || {};
-        var w = Math.max(text.length * 8 + 20 + (opts.closable ? 18 : 0), 40);
+        // CJK 字符宽度约为 ASCII 的 2 倍
+        var cjkCount = 0;
+        for (var ci = 0; ci < text.length; ci++) {
+            if (text.charCodeAt(ci) > 0x7F) cjkCount++;
+        }
+        var estWidth = (text.length - cjkCount) * 8 + cjkCount * 14;
+        var w = Math.max(estWidth + 20 + (opts.closable ? 18 : 0), 40);
         L2_Base.prototype.initialize.call(this, x, y, w, 22 + 4);
         this._text = text;
         this._textColor = opts.color || L2_Theme.textWhite;
@@ -62,12 +68,11 @@
     L2_Tag.prototype.update = function () {
         L2_Base.prototype.update.call(this);
         if (!this.visible || !this._closable) return;
-        var cw = this.cw();
-        var bx = this.x + this.padding + cw - 16;
-        var by = this.y + this.padding;
-        var mx = TouchInput.x, my = TouchInput.y;
+        // 使用 toLocal 处理嵌套容器中的坐标转换
+        var loc = this.toLocal(TouchInput.x, TouchInput.y);
+        var cw = this.cw(), ch = this.ch();
         var wasHover = this._closeHover;
-        this._closeHover = mx >= bx && mx <= bx + 14 && my >= by && my <= by + this.ch();
+        this._closeHover = loc.x >= cw - 16 && loc.x <= cw && loc.y >= 0 && loc.y <= ch;
         if (this._closeHover !== wasHover) this.markDirty();
         if (this._closeHover && TouchInput.isTriggered() && this._onClose) this._onClose();
     };

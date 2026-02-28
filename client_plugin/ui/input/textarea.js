@@ -24,7 +24,7 @@
     L2_Textarea.prototype.standardPadding = function () { return 4; };
 
     L2_Textarea.prototype.getText = function () { return this._text; };
-    L2_Textarea.prototype.setText = function (t) { this._text = t; this._scrollY = 0; this.markDirty(); };
+    L2_Textarea.prototype.setText = function (t) { this._text = t; this._scrollY = 0; this._cachedLinesText = null; this.markDirty(); };
 
     L2_Textarea.prototype.refresh = function () {
         var c = this.bmp();
@@ -38,7 +38,12 @@
         c.fontSize = L2_Theme.fontNormal;
         c.textColor = L2_Theme.textWhite;
 
-        var lines = this._text.split('\n');
+        // 使用缓存的行数组避免每帧 split
+        if (!this._cachedLines || this._cachedLinesText !== this._text) {
+            this._cachedLines = this._text.split('\n');
+            this._cachedLinesText = this._text;
+        }
+        var lines = this._cachedLines;
         var lh = this._lineHeight;
         var startLine = Math.floor(this._scrollY / lh);
         var visLines = Math.ceil(ch / lh);
@@ -75,8 +80,11 @@
         // Scroll
         if (inside && TouchInput.wheelY) {
             var lh = this._lineHeight;
-            var lines = this._text.split('\n');
-            var totalH = lines.length * lh;
+            if (!this._cachedLines || this._cachedLinesText !== this._text) {
+                this._cachedLines = this._text.split('\n');
+                this._cachedLinesText = this._text;
+            }
+            var totalH = this._cachedLines.length * lh;
             this._scrollY += TouchInput.wheelY > 0 ? lh * 2 : -lh * 2;
             this._scrollY = Math.max(0, Math.min(this._scrollY, Math.max(0, totalH - this.ch())));
             this.markDirty();
@@ -86,17 +94,18 @@
         if (this._focused && this._editable) {
             this._cursorBlink = (this._cursorBlink + 1) % 60;
             var changed = false;
-            // 使用查找对象代替循环，性能更好
-            var keyMap = Input._keys || {};
-            var validChars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:\'",.<>?/~`\\ ';
-            for (var key in keyMap) {
-                if (keyMap[key] && validChars.indexOf(key) >= 0) {
-                    this._text += key;
-                    keyMap[key] = false;
-                    changed = true;
+            // 读取按键状态
+            var keyMap = Input._keys;
+            if (keyMap) {
+                var validChars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:\'",.<>?/~`\\ ';
+                for (var key in keyMap) {
+                    if (keyMap[key] && validChars.indexOf(key) >= 0) {
+                        this._text += key;
+                        keyMap[key] = false;
+                        changed = true;
+                    }
                 }
             }
-            if (Input.isTriggered('space')) { this._text += ' '; changed = true; }
             if (Input.isTriggered('backspace') && this._text.length > 0) {
                 this._text = this._text.slice(0, -1);
                 changed = true;

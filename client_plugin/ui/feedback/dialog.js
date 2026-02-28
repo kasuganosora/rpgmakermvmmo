@@ -142,15 +142,15 @@
         if (this._closable && this._title) {
             var wasCloseHover = this._closeHover;
             this._closeHover = lx >= w - 32 && lx <= w && ly >= 4 && ly <= 32;
-            if (this._closeHover !== wasCloseHover) this.refresh();
+            if (this._closeHover !== wasCloseHover) this.markDirty();
             if (this._closeHover && TouchInput.isTriggered()) {
                 this.close();
                 return;
             }
         }
 
-        // Button hover and click
-        if (this._buttons.length > 0) {
+        // Button hover and click (guard against null after close)
+        if (this._buttons && this._buttons.length > 0) {
             var oldHover = this._hoverBtn;
             this._hoverBtn = -1;
 
@@ -160,7 +160,7 @@
                     this._hoverBtn = j;
                 }
             }
-            if (this._hoverBtn !== oldHover) this.refresh();
+            if (this._hoverBtn !== oldHover) this.markDirty();
 
             if (TouchInput.isTriggered() && this._hoverBtn >= 0) {
                 var onClick = this._buttons[this._hoverBtn].onClick;

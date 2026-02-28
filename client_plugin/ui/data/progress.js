@@ -20,8 +20,8 @@
         L2_Base.prototype.initialize.call(this, x, y, w, h);
         this._bgColor = opts.bgColor || L2_Theme.hpBg;
         this._fillColor = opts.fillColor || L2_Theme.hpFill;
-        this._value = opts.value || 0;
-        this._maxValue = opts.max || 100;
+        this._value = opts.value !== undefined ? opts.value : 0;
+        this._maxValue = opts.max !== undefined ? opts.max : 100;
         this._label = opts.label || '';
         this._showText = opts.showText !== false;
         this._showPercent = opts.showPercent || false;
