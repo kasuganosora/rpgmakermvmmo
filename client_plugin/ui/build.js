@@ -67,6 +67,7 @@ const FILES = [
     'ui/data/statistic.js',
     'ui/data/empty.js',
     'ui/data/loading.js',
+    'ui/data/chat-bubble.js',
 
     // Feedback / Message
     'ui/feedback/dialog.js',
@@ -91,7 +92,7 @@ const HEADER = `/*:
  *   Navigation: L2_Tabs, L2_Menu, L2_Dropdown, L2_Pagination, L2_Steps, L2_Breadcrumb
  *   Window:     L2_SubWindow, L2_FullscreenWindow
  *   Input:      L2_Input, L2_InputNumber, L2_Select, L2_Checkbox, L2_Radio, L2_Switch, L2_Slider, L2_Textarea
- *   Data:       L2_List, L2_Table, L2_Card, L2_Progress, L2_Tag, L2_Badge, L2_Avatar, L2_Collapse, L2_Tooltip, L2_Tree, L2_Statistic, L2_Empty, L2_Loading
+ *   Data:       L2_List, L2_Table, L2_Card, L2_Progress, L2_Tag, L2_Badge, L2_Avatar, L2_Collapse, L2_Tooltip, L2_Tree, L2_Statistic, L2_Empty, L2_Loading, L2_ChatBubble
  *   Feedback:   L2_Dialog, L2_Drawer, L2_Message, L2_Notification, L2_Alert, L2_Popconfirm
  */
 `;

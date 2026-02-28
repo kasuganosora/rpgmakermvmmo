@@ -376,6 +376,9 @@
                     <li class="component-item" data-component="progress" onclick="showComponent('progress')">
                         Progress <span class="component-tag">进度条</span>
                     </li>
+                    <li class="component-item" data-component="chatbubble" onclick="showComponent('chatbubble')">
+                        ChatBubble <span class="component-tag">气泡</span>
+                    </li>
                 </ul>
             </div>
             
@@ -1417,7 +1420,56 @@ L2_Theme.drawBar(c, x, y, width, height, ratio, bgColor, fillColor);`,
                     addToScene(container);
                 }
             },
-            
+
+            chatbubble: {
+                title: 'ChatBubble 聊天气泡',
+                code: `<span class="code-keyword">new</span> <span class="code-function">L2_ChatBubble</span>(x, y, <span class="code-string">'消息文字'</span>, {
+    maxWidth: <span class="code-number">200</span>,
+    tailAlign: <span class="code-string">'center'</span>,
+    duration: <span class="code-number">0</span>
+});`,
+                properties: {
+                    'text': '显示的文字内容',
+                    'maxWidth': '最大宽度 (默认200)',
+                    'fontSize': '字体大小 (默认13)',
+                    'tailAlign': '箭头对齐 left/center/right',
+                    'duration': '显示帧数 (默认300, 0=永久)',
+                    'typewriter': '打字速度 (true=默认0.2s/字, 数字=每N帧1字, 0=关闭)',
+                    'bgColor': '背景颜色',
+                    'textColor': '文字颜色'
+                },
+                render: function() {
+                    // Short text - single line
+                    addToScene(new L2_ChatBubble(60, 80, '你好！', { duration: 0 }));
+
+                    // Long text - auto wrapping
+                    addToScene(new L2_ChatBubble(60, 160, '等一下，我是谁？我好像什么都想不起来了。', { duration: 0 }));
+
+                    // Multi-line with \n
+                    addToScene(new L2_ChatBubble(60, 280, '第一行文字\n第二行文字\n第三行文字', { duration: 0 }));
+
+                    // Wider max width
+                    addToScene(new L2_ChatBubble(300, 80, '这是一段更长的聊天消息，设置了更大的最大宽度，文字会在300像素处换行显示。', { maxWidth: 300, duration: 0 }));
+
+                    // Dark theme variant
+                    addToScene(new L2_ChatBubble(300, 260, 'Dark theme bubble!', {
+                        duration: 0,
+                        bgColor: 'rgba(20,20,40,0.92)',
+                        textColor: '#E8E8E8',
+                        borderColor: '#3A3A55'
+                    }));
+
+                    // Typewriter: center expand (default)
+                    addToScene(new L2_ChatBubble(250, 340, '中心展开动画效果演示', { duration: 0, typewriter: true }));
+
+                    // Typewriter: tail left, expand right
+                    addToScene(new L2_ChatBubble(60, 430, '箭头在左边，向右展开', { duration: 0, typewriter: true, tailAlign: 'left' }));
+
+                    // Typewriter: tail right, expand left
+                    addToScene(new L2_ChatBubble(430, 430, '箭头在右边，向左展开', { duration: 0, typewriter: true, tailAlign: 'right' }));
+                }
+            },
+
             dialog: {
                 title: 'Dialog 对话框',
                 code: `<span class="code-keyword">new</span> <span class="code-function">L2_Dialog</span>({

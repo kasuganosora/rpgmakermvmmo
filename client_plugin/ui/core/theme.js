@@ -208,9 +208,14 @@
 
             var ctx = bmp._context;
             if (!ctx) {
-                var est = text.length * (fontSize || 13) * 0.6;
-                L2_Theme._textWidthCache[cacheKey] = est;
-                L2_Theme._textWidthCacheCount++;
+                // CJK-aware fallback: chars > 0x7F are ~1x fontSize, Latin ~0.6x
+                var fs = fontSize || 13;
+                var est = 0;
+                for (var ei = 0; ei < text.length; ei++) {
+                    est += text.charCodeAt(ei) > 0x7F ? fs : fs * 0.6;
+                }
+                // Do NOT cache fallback estimates — they'll be replaced
+                // by accurate measurements once a context is available
                 return est;
             }
             var old = ctx.font;
