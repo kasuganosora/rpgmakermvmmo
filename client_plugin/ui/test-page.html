@@ -619,7 +619,19 @@
         window.Scene_Boot = {
             prototype: { start: function() {} }
         };
-        
+
+        // Mock Scene_Map, Game_Player, Game_Temp
+        // Required so L2_InputBlocker._ensureHooked() can hook and stop retrying.
+        // Without these, _ensureHooked loops via setTimeout forever.
+        window.Scene_Map = function() {};
+        Scene_Map.prototype.processMapTouch = function() {};
+
+        window.Game_Player = function() {};
+        Game_Player.prototype.moveByInput = function() {};
+
+        window.Game_Temp = function() {};
+        Game_Temp.prototype.setDestination = function() {};
+
         // Mock Bitmap
         function Bitmap(width, height) {
             this.width = width;
@@ -864,7 +876,7 @@
             var _activeL2Input = null;
 
             _hiddenInput.addEventListener('keydown', function(e) {
-                if (!_activeL2Input) return;
+                if (!_activeL2Input || _activeL2Input._destroyed) { _activeL2Input = null; return; }
                 if (e.key === 'Enter') {
                     var inp = _activeL2Input;
                     inp._focused = false;
@@ -884,7 +896,7 @@
 
             // Sync on every input event (handles IME, paste, etc.)
             _hiddenInput.addEventListener('input', function() {
-                if (!_activeL2Input) return;
+                if (!_activeL2Input || _activeL2Input._destroyed) { _activeL2Input = null; return; }
                 var newText = _hiddenInput.value;
                 if (newText.length > _activeL2Input._maxLength) {
                     newText = newText.slice(0, _activeL2Input._maxLength);
@@ -969,6 +981,16 @@
                     c.textColor = L2_Theme.textDim;
                     c.drawText(this._placeholder, 6, 0, cw - 12, ch, 'left');
                 }
+            };
+
+            // Override destroy to clear hidden input reference
+            var _origInputDestroy = L2_Input.prototype.destroy;
+            L2_Input.prototype.destroy = function() {
+                if (_activeL2Input === this) {
+                    _activeL2Input = null;
+                    _hiddenInput.blur();
+                }
+                if (_origInputDestroy) _origInputDestroy.call(this);
             };
         }
     </script>
@@ -1360,27 +1382,32 @@ L2_Theme.drawBar(c, x, y, width, height, ratio, bgColor, fillColor);`,
                 },
                 render: function() {
                     // Manual rendering for progress bars
-                    const container = new L2_Base(50, 50, 400, 200);
+                    const container = new L2_Base(50, 50, 500, 200);
                     container.refresh = function() {
                         const c = this.bmp();
                         const cw = this.cw();
-                        
+                        var labelW = 40;
+                        var barX = labelW + 10;
+                        var textW = 70;
+                        var barW = cw - barX - textW - 10;
+                        var textX = barX + barW + 10;
+
                         // HP bar
                         c.fontSize = 12;
                         c.textColor = L2_Theme.textWhite;
-                        c.drawText('HP', 0, 0, 40, 20, 'left');
-                        L2_Theme.drawBar(c, 50, 2, 300, 16, 0.75, L2_Theme.hpBg, L2_Theme.hpFill);
-                        c.drawText('75/100', 360, 0, 60, 20, 'right');
-                        
+                        c.drawText('HP', 0, 0, labelW, 20, 'left');
+                        L2_Theme.drawBar(c, barX, 2, barW, 16, 0.75, L2_Theme.hpBg, L2_Theme.hpFill);
+                        c.drawText('75/100', textX, 0, textW, 20, 'right');
+
                         // MP bar
-                        c.drawText('MP', 0, 30, 40, 20, 'left');
-                        L2_Theme.drawBar(c, 50, 32, 300, 14, 0.45, L2_Theme.mpBg, L2_Theme.mpFill);
-                        c.drawText('45/100', 360, 30, 60, 20, 'right');
-                        
+                        c.drawText('MP', 0, 30, labelW, 20, 'left');
+                        L2_Theme.drawBar(c, barX, 32, barW, 14, 0.45, L2_Theme.mpBg, L2_Theme.mpFill);
+                        c.drawText('45/100', textX, 30, textW, 20, 'right');
+
                         // EXP bar
-                        c.drawText('EXP', 0, 60, 40, 20, 'left');
-                        L2_Theme.drawBar(c, 50, 62, 300, 10, 0.6, '#1a1a00', '#CCCC00');
-                        
+                        c.drawText('EXP', 0, 60, labelW, 20, 'left');
+                        L2_Theme.drawBar(c, barX, 62, barW, 10, 0.6, '#1a1a00', '#CCCC00');
+
                         // Custom bars
                         c.textColor = L2_Theme.textGold;
                         c.drawText('自定义进度条', 0, 100, 200, 20, 'left');
@@ -1577,7 +1604,16 @@ L2_Theme.drawBar(c, x, y, width, height, ratio, bgColor, fillColor);`,
         }
         
         function clearCanvas() {
+            // Destroy all existing objects to prevent _allComponents / _registeredUI leaks
+            for (var i = 0; i < uiObjects.length; i++) {
+                if (uiObjects[i] && uiObjects[i].destroy) {
+                    uiObjects[i].destroy();
+                }
+            }
             uiObjects = [];
+            // Belt-and-suspenders: clear any leftover registrations
+            if (typeof L2_InputBlocker !== 'undefined') L2_InputBlocker.clear();
+            if (typeof L2_Base !== 'undefined' && L2_Base._purgeDestroyed) L2_Base._purgeDestroyed();
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             logEvent('Canvas cleared');
         }
@@ -1627,19 +1663,31 @@ L2_Theme.drawBar(c, x, y, width, height, ratio, bgColor, fillColor);`,
                 ctx.clip();
                 ctx.translate(absX + (obj.padding || 0), absY + (obj.padding || 0));
 
-                // Set Bitmap _context for drawing
+                // Run update() with null context so any internal refresh() triggered
+                // by dirty-check inside update() is a drawing no-op.
+                // (all Bitmap draw methods guard on _context before drawing)
+                if (obj.contents) {
+                    obj.contents._context = null;
+                }
+                if (obj.update) {
+                    obj.update();
+                }
+
+                // Force dirty: the shared canvas is cleared every frame so we must
+                // always redraw, but update() may have consumed the dirty flags
+                // during its internal refresh() call (with null context = drew nothing).
+                if (obj._dirtyLayers) {
+                    obj._dirty = true;
+                    obj._dirtyLayers.bg = true;
+                    obj._dirtyLayers.content = true;
+                }
+
+                // Now set the real context and refresh() for the shared-canvas redraw
                 if (obj.contents) {
                     obj.contents._context = ctx;
                 }
-
-                // Force dirty before update so L2_Base.update will call refresh() once
-                if (obj.markDirty) {
-                    obj.markDirty();
-                }
-
-                // update() internally calls refresh() when dirty — single draw per frame
-                if (obj.update) {
-                    obj.update();
+                if (obj.refresh) {
+                    obj.refresh();
                 }
 
                 ctx.restore();

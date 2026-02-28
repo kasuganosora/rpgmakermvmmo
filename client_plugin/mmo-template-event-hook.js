@@ -105,7 +105,7 @@
             return originalSetValue.call(this, key, value);
         };
 
-        console.log('[MMO-TemplateEvent-Hook] Game_SelfSwitches.setValue hooked');
+        debugLog('Game_SelfSwitches.setValue hooked');
     }
 
     //=============================================================================
@@ -113,12 +113,12 @@
     //=============================================================================
     function hookTemplateEvent() {
         if (typeof TemplateEvent === 'undefined') {
-            console.log('[MMO-TemplateEvent-Hook] TemplateEvent not detected');
+            debugLog('TemplateEvent not detected');
             return false;
         }
 
         _templateEventDetected = true;
-        console.log('[MMO-TemplateEvent-Hook] TemplateEvent.js detected');
+        debugLog('TemplateEvent.js detected');
 
         // Hook setSelfVariable if it exists
         if (TemplateEvent.setSelfVariable) {
@@ -137,7 +137,7 @@
     // Initialize
     //=============================================================================
     function initialize() {
-        console.log('[MMO-TemplateEvent-Hook] Initializing...');
+        debugLog('Initializing...');
 
         // Wait for MMO to be ready
         const checkInterval = setInterval(function () {
@@ -146,7 +146,7 @@
 
                 // Check server availability
                 checkServerAvailability();
-                console.log('[MMO-TemplateEvent-Hook] Server available:', _isServerAvailable);
+                debugLog('Server available:', _isServerAvailable);
 
                 // Hook into RPG Maker MV
                 if (typeof Game_SelfSwitches !== 'undefined') {
@@ -165,7 +165,7 @@
                     return originalTerminate.call(this);
                 };
 
-                console.log('[MMO-TemplateEvent-Hook] Initialization complete');
+                debugLog('Initialization complete');
             }
         }, 100);
 
@@ -192,5 +192,5 @@
         initialize();
     }
 
-    console.log('[MMO-TemplateEvent-Hook] Plugin loaded');
+    debugLog('Plugin loaded');
 })();

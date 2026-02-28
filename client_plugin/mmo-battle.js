@@ -316,7 +316,6 @@
     $MMO.on('monster_sync', function (data) { MonsterManager.updateMonster(data); });
     $MMO.on('monster_death', function (data) {
         MonsterManager.removeMonster(data.inst_id);
-        if (data.exp_gain) console.log('[Battle] Gained ' + data.exp_gain + ' EXP');
     });
     $MMO.on('drop_spawn', function (data) { MonsterManager.spawnDrop(data); });
     $MMO.on('drop_remove', function (data) { MonsterManager.removeDrop(data.drop_id); });

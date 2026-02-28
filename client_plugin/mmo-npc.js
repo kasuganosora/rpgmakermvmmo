@@ -17,7 +17,6 @@
 
 (function () {
     'use strict';
-    console.log('[MMO-NPC] Plugin loading...');
 
     var QUEUE_MAX = 10;
 
@@ -56,10 +55,6 @@
         // Hide NPCs with no sprite image (invisible events like transfer triggers).
         if (!walkName) this.visible = false;
         
-        // Debug log for events with unusual sprites
-        if (walkName && walkName.indexOf('item') >= 0 || walkName.indexOf('mark') >= 0 || walkName.indexOf('arrow') >= 0) {
-            console.log('[MMO-NPC] Event ' + data.event_id + ' (' + data.name + ') uses sprite: ' + walkName);
-        }
     };
 
     Sprite_ServerNPC.prototype.syncData = function (data) {
@@ -138,20 +133,14 @@
             for (var i = 0; i < toAdd.length; i++) {
                 this._addOne(toAdd[i]);
             }
-            console.log('[MMO-NPC] init: created', Object.keys(this._sprites).length, 'sprites');
         },
 
         populate: function (npcList) {
-            console.log('[MMO-NPC] populate:', npcList.length, 'NPCs,',
-                'container:', !!this._container);
             this._initNPCs = npcList;
             this.clear();
             for (var i = 0; i < npcList.length; i++) {
                 this._addOne(npcList[i]);
             }
-            console.log('[MMO-NPC] populate done: sprites:',
-                Object.keys(this._sprites).length,
-                'pending:', this._pending.length);
         },
 
         _addOne: function (data) {
@@ -312,8 +301,6 @@
             var c = sp._character;
             if (Math.round(c._realX) === x && Math.round(c._realY) === y) {
                 if (triggers.indexOf(0) >= 0 || triggers.indexOf(1) >= 0 || triggers.indexOf(2) >= 0) {
-                    console.log('[MMO-NPC] npc_interact EV' + sp._npcData.event_id,
-                        'at', x, y, 'triggers', triggers);
                     $MMO.send('npc_interact', { event_id: sp._npcData.event_id });
                     return;
                 }
@@ -354,7 +341,6 @@
 
     $MMO.on('npc_dialog', function (data) {
         if (!data) return;
-        console.log('[MMO-NPC] npc_dialog received:', data.lines, 'face:', data.face);
         $MMO._npcDialogActive = true;
         $MMO._npcDialogPending = true;
         var face = data.face || '';
@@ -373,7 +359,6 @@
         for (var i = 0; i < lines.length; i++) {
             $gameMessage.add(lines[i]);
         }
-        console.log('[MMO-NPC] Dialog displayed, _npcDialogPending = true');
     });
 
     // Process any queued dialogs when entering Scene_Map
@@ -383,11 +368,9 @@
         // Send scene_ready so the server knows it can start autorun events.
         if ($MMO && $MMO.send) {
             $MMO.send('scene_ready', {});
-            console.log('[MMO-NPC] scene_ready sent');
         }
         // Process queued dialog if any
         if ($MMO._queuedDialog) {
-            console.log('[MMO-NPC] Processing queued dialog');
             var data = $MMO._queuedDialog;
             $MMO._queuedDialog = null;
             $MMO._npcDialogActive = true;
@@ -402,7 +385,6 @@
 
     $MMO.on('npc_choices', function (data) {
         if (!data || !data.choices) return;
-        console.log('[MMO-NPC] npc_choices received:', data.choices);
         $MMO._npcDialogActive = true;
         var choices = data.choices;
 
@@ -419,7 +401,6 @@
     });
 
     $MMO.on('npc_dialog_end', function () {
-        console.log('[MMO-NPC] npc_dialog_end');
         $MMO._npcDialogActive = false;
         $MMO._npcDialogPending = false;
     });
@@ -431,7 +412,6 @@
         _Window_Message_terminateMessage.call(this);
         if ($MMO._npcDialogPending) {
             $MMO._npcDialogPending = false;
-            console.log('[MMO-NPC] Sending npc_dialog_ack');
             $MMO.send('npc_dialog_ack', {});
         }
     };
@@ -567,5 +547,4 @@
     window.NPCManager = NPCManager;
     window.Sprite_ServerNPC = Sprite_ServerNPC;
 
-    console.log('[MMO-NPC] Plugin loaded successfully');
 })();

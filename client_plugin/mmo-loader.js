@@ -52,7 +52,7 @@
 
     var httpBase = MMO_CONFIG.serverUrl.replace(/^ws/, 'http');
 
-    console.log('[MMO] Config ready. Server: ' + MMO_CONFIG.serverUrl +
+    if (MMO_CONFIG.debug) console.log('[MMO] Config ready. Server: ' + MMO_CONFIG.serverUrl +
                 ' Debug: ' + MMO_CONFIG.debug);
 
     // ---- Remote plugin loader ----
@@ -85,7 +85,7 @@
         }
     }
 
-    console.log('[MMO] Remote load complete: ' + loaded + '/' + LOAD_ORDER.length +
+    if (MMO_CONFIG.debug || failed.length) console.log('[MMO] Remote load complete: ' + loaded + '/' + LOAD_ORDER.length +
                 (failed.length ? ' | FAILED: ' + failed.join(', ') : ''));
 
     // ---- Auto-detect TemplateEvent.js and load hook ----
@@ -108,7 +108,7 @@
     }
 
     if (hasTemplateEvent) {
-        console.log('[MMO] TemplateEvent.js detected, loading hook...');
+        if (MMO_CONFIG.debug) console.log('[MMO] TemplateEvent.js detected, loading hook...');
         try {
             var hookUrl = httpBase + '/plugins/mmo-template-event-hook.js?_t=' + Date.now();
             var hookXhr = new XMLHttpRequest();
@@ -116,7 +116,7 @@
             hookXhr.send();
             if (hookXhr.status === 200) {
                 (0, eval)(hookXhr.responseText);
-                console.log('[MMO] TemplateEvent hook loaded successfully');
+                if (MMO_CONFIG.debug) console.log('[MMO] TemplateEvent hook loaded successfully');
             } else {
                 console.warn('[MMO] Failed to load TemplateEvent hook: HTTP ' + hookXhr.status);
             }
