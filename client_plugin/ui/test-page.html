@@ -1,709 +1,1860 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-CN">
 <head>
-<meta charset="utf-8">
-<title>L2 UI Component Test Page</title>
-<style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { 
-        background: #0D0D1A; 
-        overflow: hidden;
-        font-family: "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "WenQuanYi Micro Hei", sans-serif;
-    }
-    canvas { 
-        display: block;
-        image-rendering: pixelated;
-        image-rendering: -moz-crisp-edges;
-        image-rendering: crisp-edges;
-    }
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>L2 UI 组件演示 - RPG Maker MMO</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Microsoft YaHei', 'PingFang SC', sans-serif;
+            background: #0a0a14;
+            color: #e8e8e8;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        /* Header */
+        .header {
+            background: linear-gradient(180deg, #1a1a30 0%, #0f0f1a 100%);
+            border-bottom: 1px solid #2a2a44;
+            padding: 16px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .header h1 {
+            font-size: 20px;
+            color: #ffd700;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .header .subtitle {
+            font-size: 12px;
+            color: #666;
+            font-weight: normal;
+        }
+        
+        .header-controls {
+            display: flex;
+            gap: 12px;
+        }
+        
+        .btn {
+            background: #1a1a30;
+            border: 1px solid #2a2a44;
+            color: #aaa;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+        
+        .btn:hover {
+            background: #252545;
+            border-color: #3a3a55;
+            color: #fff;
+        }
+        
+        .btn.primary {
+            background: #4488ff;
+            border-color: #4488ff;
+            color: #fff;
+        }
+        
+        .btn.primary:hover {
+            background: #5599ff;
+        }
+        
+        /* Layout */
+        .container {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+        
+        /* Sidebar */
+        .sidebar {
+            width: 220px;
+            background: #0d0d1a;
+            border-right: 1px solid #2a2a44;
+            overflow-y: auto;
+        }
+        
+        .category {
+            border-bottom: 1px solid #1a1a2e;
+        }
+        
+        .category-title {
+            padding: 12px 16px;
+            font-size: 11px;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            background: #080810;
+        }
+        
+        .component-list {
+            list-style: none;
+        }
+        
+        .component-item {
+            padding: 10px 16px 10px 24px;
+            cursor: pointer;
+            font-size: 13px;
+            color: #aaa;
+            border-left: 3px solid transparent;
+            transition: all 0.15s;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .component-item:hover {
+            background: #151528;
+            color: #fff;
+        }
+        
+        .component-item.active {
+            background: #1a1a35;
+            border-left-color: #ffd700;
+            color: #ffd700;
+        }
+        
+        .component-tag {
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 2px;
+            background: #2a2a44;
+            color: #666;
+        }
+        
+        /* Main Content */
+        .main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        
+        .toolbar {
+            background: #121225;
+            border-bottom: 1px solid #2a2a44;
+            padding: 12px 20px;
+            display: flex;
+            gap: 16px;
+            align-items: center;
+        }
+        
+        .toolbar-group {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            padding-right: 16px;
+            border-right: 1px solid #2a2a44;
+        }
+        
+        .toolbar-group:last-child {
+            border-right: none;
+        }
+        
+        .toolbar label {
+            font-size: 12px;
+            color: #666;
+        }
+        
+        .toolbar input[type="number"],
+        .toolbar input[type="text"] {
+            background: #0a0a18;
+            border: 1px solid #2a2a44;
+            color: #fff;
+            padding: 4px 8px;
+            border-radius: 3px;
+            width: 60px;
+            font-size: 12px;
+        }
+        
+        .toolbar input[type="text"] {
+            width: 120px;
+        }
+        
+        /* Canvas Area */
+        .canvas-container {
+            flex: 1;
+            background: #08080f;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+            overflow: auto;
+        }
+        
+        #gameCanvas {
+            background: #000;
+            box-shadow: 0 0 40px rgba(0,0,0,0.8);
+        }
+        
+        /* Info Panel */
+        .info-panel {
+            height: 200px;
+            background: #0d0d1a;
+            border-top: 1px solid #2a2a44;
+            display: flex;
+        }
+        
+        .info-section {
+            flex: 1;
+            padding: 16px;
+            border-right: 1px solid #1a1a2e;
+            overflow: auto;
+        }
+        
+        .info-section:last-child {
+            border-right: none;
+        }
+        
+        .info-title {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .code-block {
+            background: #080810;
+            border: 1px solid #1a1a2e;
+            border-radius: 4px;
+            padding: 12px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 12px;
+            line-height: 1.6;
+            color: #aaa;
+            overflow-x: auto;
+        }
+        
+        .code-keyword { color: #ff79c6; }
+        .code-string { color: #f1fa8c; }
+        .code-number { color: #bd93f9; }
+        .code-comment { color: #6272a4; }
+        .code-function { color: #50fa7b; }
+        
+        /* Property List */
+        .property-list {
+            font-size: 12px;
+        }
+        
+        .property-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 6px 0;
+            border-bottom: 1px solid #1a1a2e;
+        }
+        
+        .property-name {
+            color: #888;
+        }
+        
+        .property-value {
+            color: #ffd700;
+            font-family: monospace;
+        }
+        
+        /* Status Bar */
+        .status-bar {
+            background: #080810;
+            border-top: 1px solid #1a1a2e;
+            padding: 6px 20px;
+            font-size: 11px;
+            color: #666;
+            display: flex;
+            justify-content: space-between;
+        }
+        
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: #0a0a14;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: #2a2a44;
+            border-radius: 4px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: #3a3a55;
+        }
+    </style>
 </head>
 <body>
-<canvas id="gameCanvas"></canvas>
-
-<script>
-/**
- * Minimal RMMV shim for testing L2 UI components in a standalone browser.
- * Provides just enough of the RMMV API for components to render.
- */
-(function () {
-    'use strict';
-
-    var SCREEN_W = 1024, SCREEN_H = 700;
-    var canvas = document.getElementById('gameCanvas');
-    canvas.width = SCREEN_W;
-    canvas.height = SCREEN_H;
-
-    // ── Graphics ──
-    window.Graphics = {
-        boxWidth: SCREEN_W,
-        boxHeight: SCREEN_H,
-        frameCount: 0,
-        _canvas: canvas,
-        _renderer: null,
-    };
-
-    // ── Bitmap (canvas wrapper) ──
-    function Bitmap(w, h) {
-        this._canvas = document.createElement('canvas');
-        this._canvas.width = Math.max(1, w || 1);
-        this._canvas.height = Math.max(1, h || 1);
-        this._context = this._canvas.getContext('2d');
-        this._dirty = true;
-        this.fontSize = 13;
-        this.textColor = '#FFFFFF';
-        this.outlineColor = 'rgba(0,0,0,0.5)';
-        this.outlineWidth = 0;
-        this._loadListeners = [];
-        this._destroyed = false;
-    }
-    Bitmap.prototype.destroy = function () {
-        if (this._destroyed) return;
-        this._destroyed = true;
-        this._context = null;
-        this._canvas.width = 1;
-        this._canvas.height = 1;
-        this._canvas = null;
-        this._loadListeners = null;
-    };
-    Bitmap.prototype.clear = function () {
-        this._context.clearRect(0, 0, this._canvas.width, this._canvas.height);
-        this._dirty = true;
-    };
-    Bitmap.prototype.resize = function (w, h) {
-        this._canvas.width = Math.max(1, w);
-        this._canvas.height = Math.max(1, h);
-        this._dirty = true;
-    };
-    Bitmap.prototype.fillRect = function (x, y, w, h, color) {
-        this._context.fillStyle = color;
-        this._context.fillRect(x, y, w, h);
-        this._dirty = true;
-    };
-    Bitmap.prototype.gradientFillRect = function (x, y, w, h, c1, c2, vertical) {
-        var ctx = this._context;
-        var grad = vertical
-            ? ctx.createLinearGradient(x, y, x, y + h)
-            : ctx.createLinearGradient(x, y, x + w, y);
-        grad.addColorStop(0, c1);
-        grad.addColorStop(1, c2);
-        ctx.fillStyle = grad;
-        ctx.fillRect(x, y, w, h);
-        this._dirty = true;
-    };
-    Bitmap.prototype.drawText = function (text, x, y, maxW, lineH, align) {
-        var ctx = this._context;
-        ctx.save();
-        // 使用支持中文的字体栈
-        ctx.font = this.fontSize + 'px "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", sans-serif';
-        ctx.fillStyle = this.textColor;
-        ctx.textBaseline = 'alphabetic';
-        ctx.imageSmoothingEnabled = false;
+    <header class="header">
+        <h1>
+            <span>⚔️</span>
+            <div>
+                L2 UI Component Library
+                <div class="subtitle">RPG Maker MV MMO - Visual Test Page</div>
+            </div>
+        </h1>
+        <div class="header-controls">
+            <button class="btn" onclick="clearCanvas()">清空画布</button>
+            <button class="btn" onclick="toggleGrid()">显示网格</button>
+            <button class="btn primary" onclick="exportCode()">导出代码</button>
+        </div>
+    </header>
+    
+    <div class="container">
+        <aside class="sidebar">
+            <div class="category">
+                <div class="category-title">基础组件 Base</div>
+                <ul class="component-list">
+                    <li class="component-item active" data-component="typography" onclick="showComponent('typography')">
+                        Typography <span class="component-tag">文字</span>
+                    </li>
+                    <li class="component-item" data-component="button" onclick="showComponent('button')">
+                        Button <span class="component-tag">按钮</span>
+                    </li>
+                    <li class="component-item" data-component="icon" onclick="showComponent('icon')">
+                        Icon <span class="component-tag">图标</span>
+                    </li>
+                </ul>
+            </div>
+            
+            <div class="category">
+                <div class="category-title">布局 Layout</div>
+                <ul class="component-list">
+                    <li class="component-item" data-component="layout" onclick="showComponent('layout')">
+                        Layout <span class="component-tag">Flex</span>
+                    </li>
+                    <li class="component-item" data-component="grid" onclick="showComponent('grid')">
+                        Grid <span class="component-tag">网格</span>
+                    </li>
+                    <li class="component-item" data-component="divider" onclick="showComponent('divider')">
+                        Divider <span class="component-tag">分割线</span>
+                    </li>
+                </ul>
+            </div>
+            
+            <div class="category">
+                <div class="category-title">导航 Navigation</div>
+                <ul class="component-list">
+                    <li class="component-item" data-component="tabs" onclick="showComponent('tabs')">
+                        Tabs <span class="component-tag">标签页</span>
+                    </li>
+                    <li class="component-item" data-component="menu" onclick="showComponent('menu')">
+                        Menu <span class="component-tag">菜单</span>
+                    </li>
+                </ul>
+            </div>
+            
+            <div class="category">
+                <div class="category-title">数据展示 Data</div>
+                <ul class="component-list">
+                    <li class="component-item" data-component="card" onclick="showComponent('card')">
+                        Card <span class="component-tag">卡片</span>
+                    </li>
+                    <li class="component-item" data-component="list" onclick="showComponent('list')">
+                        List <span class="component-tag">列表</span>
+                    </li>
+                    <li class="component-item" data-component="table" onclick="showComponent('table')">
+                        Table <span class="component-tag">表格</span>
+                    </li>
+                    <li class="component-item" data-component="progress" onclick="showComponent('progress')">
+                        Progress <span class="component-tag">进度条</span>
+                    </li>
+                </ul>
+            </div>
+            
+            <div class="category">
+                <div class="category-title">反馈 Feedback</div>
+                <ul class="component-list">
+                    <li class="component-item" data-component="dialog" onclick="showComponent('dialog')">
+                        Dialog <span class="component-tag">对话框</span>
+                    </li>
+                    <li class="component-item" data-component="subwindow" onclick="showComponent('subwindow')">
+                        SubWindow <span class="component-tag">子窗口</span>
+                    </li>
+                </ul>
+            </div>
+            
+            <div class="category">
+                <div class="category-title">输入 Input</div>
+                <ul class="component-list">
+                    <li class="component-item" data-component="input" onclick="showComponent('input')">
+                        Input <span class="component-tag">输入框</span>
+                    </li>
+                    <li class="component-item" data-component="select" onclick="showComponent('select')">
+                        Select <span class="component-tag">选择器</span>
+                    </li>
+                </ul>
+            </div>
+        </aside>
         
-        // 像素对齐
-        var px = Math.round(x);
-        var py = Math.round(y);
-        var h = Math.round(lineH || this.fontSize);
-        var baseline = Math.round(py + h * 0.75);
-        
-        var tx = px;
-        if (align === 'center') tx = px + Math.floor((maxW || 0) / 2);
-        else if (align === 'right') tx = px + Math.round(maxW || 0);
-        
-        ctx.textAlign = align || 'left';
-        ctx.fillText(String(text), tx, baseline, maxW || undefined);
-        ctx.restore();
-        this._dirty = true;
-    };
-    Bitmap.prototype.measureTextWidth = function (text) {
-        this._context.font = this.fontSize + 'px sans-serif';
-        return this._context.measureText(text).width;
-    };
-    Bitmap.prototype.blt = function (src, sx, sy, sw, sh, dx, dy, dw, dh) {
-        if (!src || !src._canvas) return;
-        this._context.drawImage(src._canvas, sx, sy, sw, sh, dx, dy, dw || sw, dh || sh);
-        this._dirty = true;
-    };
-    Bitmap.prototype._setDirty = function () { this._dirty = true; };
-    Bitmap.prototype.isReady = function () { return true; };
-    Bitmap.prototype.addLoadListener = function (fn) { fn(this); };
-    Bitmap.prototype.width = 0;
-    Bitmap.prototype.height = 0;
-    Object.defineProperty(Bitmap.prototype, 'width', {
-        get: function () { return this._canvas.width; },
-        set: function (v) { /* read-only from canvas */ }
-    });
-    Object.defineProperty(Bitmap.prototype, 'height', {
-        get: function () { return this._canvas.height; },
-        set: function (v) { /* read-only from canvas */ }
-    });
-    window.Bitmap = Bitmap;
+        <main class="main">
+            <div class="toolbar">
+                <div class="toolbar-group">
+                    <label>画布尺寸:</label>
+                    <input type="number" id="canvasWidth" value="816" onchange="resizeCanvas()">
+                    <span>×</span>
+                    <input type="number" id="canvasHeight" value="624" onchange="resizeCanvas()">
+                </div>
+                <div class="toolbar-group">
+                    <label>缩放:</label>
+                    <select class="btn" id="zoomLevel" onchange="setZoom()" style="width: 80px;">
+                        <option value="0.5">50%</option>
+                        <option value="0.75">75%</option>
+                        <option value="1" selected>100%</option>
+                        <option value="1.25">125%</option>
+                        <option value="1.5">150%</option>
+                    </select>
+                </div>
+                <div class="toolbar-group">
+                    <label>主题:</label>
+                    <button class="btn" onclick="switchTheme('dark')">暗色</button>
+                    <button class="btn" onclick="switchTheme('light')">亮色</button>
+                </div>
+                <div class="toolbar-group" id="componentControls">
+                    <!-- 动态组件控制 -->
+                </div>
+            </div>
+            
+            <div class="canvas-container" id="canvasContainer">
+                <canvas id="gameCanvas" width="816" height="624"></canvas>
+            </div>
+            
+            <div class="info-panel">
+                <div class="info-section" style="flex: 1.5;">
+                    <div class="info-title">使用代码</div>
+                    <pre class="code-block" id="codeDisplay"><span class="code-comment">// 选择一个组件查看代码示例</span></pre>
+                </div>
+                <div class="info-section">
+                    <div class="info-title">组件属性</div>
+                    <div class="property-list" id="propertyList">
+                        <div class="property-item">
+                            <span class="property-name">选择一个组件</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="info-section">
+                    <div class="info-title">事件日志</div>
+                    <div class="property-list" id="eventLog" style="font-family: monospace; font-size: 11px;">
+                        <div class="property-item" style="color: #666;">
+                            <span>等待交互...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+    
+    <footer class="status-bar">
+        <span id="statusText">就绪</span>
+        <span>FPS: <span id="fps">60</span> | 对象数: <span id="objectCount">0</span></span>
+    </footer>
 
-    // ── ImageManager ──
-    var _emptyBitmap = new Bitmap(1, 1);
-    window.ImageManager = {
-        loadSystem: function () { return _emptyBitmap; },
-        loadFace: function () { return _emptyBitmap; },
-    };
-
-    // ── Window_Base ──
-    function Window_Base() { this.initialize.apply(this, arguments); }
-    Window_Base.prototype = Object.create(Object.prototype);
-    Window_Base.prototype.constructor = Window_Base;
-    Window_Base.prototype.initialize = function (x, y, w, h) {
-        this.x = x || 0;
-        this.y = y || 0;
-        this.width = w || 100;
-        this.height = h || 100;
-        this.opacity = 255;
-        this.backOpacity = 192;
-        this.visible = true;
-        this.parent = null;
-        this.children = [];
-        this.padding = this.standardPadding();
-        this._destroyed = false;
-        this.createContents();
-    };
-    Window_Base.prototype.destroy = function () {
-        if (this._destroyed) return;
-        this._destroyed = true;
-        // 销毁所有子元素
-        for (var i = this.children.length - 1; i >= 0; i--) {
-            if (this.children[i] && this.children[i].destroy) {
-                this.children[i].destroy();
+    <script>
+        // ============================================
+        // Mock RPG Maker MV Environment
+        // ============================================
+        
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Mock Graphics
+        window.Graphics = {
+            boxWidth: 816,
+            boxHeight: 624,
+            _canvas: canvas,
+            _renderer: { view: canvas },
+            frameCount: 0
+        };
+        
+        // Mock Input
+        window.Input = {
+            _keys: {},
+            isTriggered: function(key) { return false; },
+            isPressed: function(key) { return false; },
+            _shouldPreventDefault: function() { return true; },
+            _onKeyDown: function() {},
+            _onKeyUp: function() {}
+        };
+        
+        // Mock TouchInput
+        // In real RMMV, isTriggered() returns true for the entire frame
+        // when a click occurs, not just for the first caller.
+        window.TouchInput = {
+            x: 0,
+            y: 0,
+            _mousePressed: false,
+            _triggered: false,
+            _currentTriggered: false,
+            wheelY: 0,
+            isTriggered: function() {
+                return this._currentTriggered;
+            },
+            isPressed: function() { return this._mousePressed; },
+            // Call at end of each frame to clear per-frame state
+            _endFrame: function() {
+                this._currentTriggered = false;
+                this.wheelY = 0;
+            },
+            // Call at start of each frame to latch trigger state
+            _startFrame: function() {
+                this._currentTriggered = this._triggered;
+                this._triggered = false;
             }
-        }
-        this.children = [];
-        if (this.contents) {
-            this.contents.destroy();
-            this.contents = null;
-        }
-        this.parent = null;
-    };
-    Window_Base.prototype.standardPadding = function () { return 18; };
-    Window_Base.prototype.createContents = function () {
-        var cw = Math.max(1, this.width - this.padding * 2);
-        var ch = Math.max(1, this.height - this.padding * 2);
-        this.contents = new Bitmap(cw, ch);
-    };
-    Window_Base.prototype.contentsWidth = function () {
-        return Math.max(0, this.width - this.padding * 2);
-    };
-    Window_Base.prototype.contentsHeight = function () {
-        return Math.max(0, this.height - this.padding * 2);
-    };
-    Window_Base.prototype.update = function () {
-        for (var i = 0; i < this.children.length; i++) {
-            if (this.children[i] && this.children[i].update) {
-                this.children[i].update();
+        };
+        
+        // Mock SceneManager
+        window.SceneManager = {
+            _scene: null
+        };
+        
+        // Mock ImageManager
+        window.ImageManager = {
+            loadCharacter: function(name) {
+                return { 
+                    isReady: function() { return false; },
+                    addLoadListener: function(fn) {}
+                };
+            },
+            loadSystem: function(name) {
+                return { 
+                    isReady: function() { return false; },
+                    addLoadListener: function(fn) {}
+                };
             }
+        };
+        
+        // Mock AudioManager
+        window.AudioManager = {
+            fadeOutBgm: function() {},
+            stopBgs: function() {},
+            stopMe: function() {}
+        };
+        
+        // Mock $MMO
+        window.$MMO = {
+            _serverUrl: 'ws://localhost:8080',
+            _skillBar: [],
+            _knownSkills: [],
+            _inventory: { items: [] },
+            _friends: [],
+            _partyData: null,
+            _guildData: null,
+            _chatHistory: { world: [], party: [], guild: [], battle: [], system: [], private: [] },
+            _chatChannel: 'world',
+            _chatUnread: {},
+            _statusWindow: null,
+            _skillWindow: null,
+            _systemMenu: null,
+            _inventoryWindow: null,
+            _tradeWindow: null,
+            _friendListWin: null,
+            _guildInfoWin: null,
+            _partyPanel: null,
+            _lastSelf: {
+                name: '测试角色',
+                level: 10,
+                class_name: '战士',
+                hp: 80, max_hp: 100,
+                mp: 45, max_mp: 50,
+                exp: 1250, next_exp: 2000,
+                gold: 3000,
+                atk: 25, def: 15, mat: 10, mdf: 12, agi: 18, luk: 14,
+                face_name: 'Actor1',
+                face_index: 0
+            },
+            charName: '测试角色',
+            charID: 1,
+            _uiDrag: null,
+            makeDraggable: function() {},
+            updateDrag: function() { return false; },
+            registerWindow: function() {},
+            registerBottomUI: function() {},
+            unregisterBottomUI: function() {},
+            _triggerAction: function(action) { 
+                logEvent('Action triggered: ' + action);
+            },
+            _handleDrop: function() {},
+            http: {
+                get: function() { return Promise.resolve({}); },
+                post: function() { return Promise.resolve({}); },
+                del: function() { return Promise.resolve({}); }
+            },
+            send: function(type, data) {
+                logEvent('WS Send: ' + type);
+            },
+            on: function(event, handler) {},
+            off: function(event, handler) {},
+            connect: function() {},
+            disconnect: function() {}
+        };
+        
+        CHANNELS = ['world', 'party', 'guild', 'battle', 'system', 'private'];
+        CHANNELS.forEach(function(ch) { $MMO._chatUnread[ch] = 0; });
+        
+        // Mock PIXI
+        window.PIXI = {
+            filters: {
+                BlurFilter: function(radius) { this.radius = radius; }
+            }
+        };
+        
+        // Mock Scene_Boot
+        window.Scene_Boot = {
+            prototype: { start: function() {} }
+        };
+        
+        // Mock Bitmap
+        function Bitmap(width, height) {
+            this.width = width;
+            this.height = height;
+            this._context = null; // Will be set during render
+            this._setDirty = function() {};
+            this.fontSize = 14;
+            this.textColor = '#ffffff';
+            this.outlineColor = '#000000';
+            this.outlineWidth = 0;
         }
-    };
-    Window_Base.prototype.addChild = function (child) {
-        child.parent = this;
-        this.children.push(child);
-        return child;
-    };
-    Window_Base.prototype.removeChild = function (child) {
-        var idx = this.children.indexOf(child);
-        if (idx >= 0) this.children.splice(idx, 1);
-        child.parent = null;
-    };
-    Window_Base.prototype.drawText = function () {
-        this.contents.drawText.apply(this.contents, arguments);
-    };
-    window.Window_Base = Window_Base;
+        
+        Bitmap.prototype.clear = function() {};
+        
+        Bitmap.prototype.fillRect = function(x, y, w, h, color) {
+            if (this._context) {
+                this._context.fillStyle = color;
+                this._context.fillRect(x, y, w, h);
+            }
+        };
+        
+        Bitmap.prototype.gradientFillRect = function(x, y, w, h, c1, c2, horizontal) {
+            if (!this._context) return;
+            var grad = horizontal ? 
+                this._context.createLinearGradient(x, 0, x + w, 0) :
+                this._context.createLinearGradient(0, y, 0, y + h);
+            grad.addColorStop(0, c1);
+            grad.addColorStop(1, c2);
+            this._context.fillStyle = grad;
+            this._context.fillRect(x, y, w, h);
+        };
+        
+        Bitmap.prototype.drawText = function(text, x, y, maxW, lineH, align) {
+            if (!this._context) return;
+            this._context.font = this.fontSize + 'px "Microsoft YaHei", sans-serif';
+            this._context.fillStyle = this.textColor;
+            this._context.textAlign = align || 'left';
+            this._context.textBaseline = 'middle';
+            
+            if (this.outlineWidth > 0) {
+                this._context.strokeStyle = this.outlineColor;
+                this._context.lineWidth = this.outlineWidth;
+                this._context.strokeText(text, x + maxW/2, y + lineH/2, maxW);
+            }
+            
+            if (align === 'center') {
+                this._context.fillText(text, x + maxW/2, y + lineH/2, maxW);
+            } else if (align === 'right') {
+                this._context.fillText(text, x + maxW, y + lineH/2, maxW);
+            } else {
+                this._context.fillText(text, x, y + lineH/2, maxW);
+            }
+        };
+        
+        Bitmap.prototype.blt = function(src, sx, sy, sw, sh, dx, dy, dw, dh) {
+            if (!this._context) return;
+            this._context.fillStyle = '#2a2a44';
+            this._context.fillRect(dx, dy, dw, dh);
+            this._context.strokeStyle = '#444466';
+            this._context.strokeRect(dx, dy, dw, dh);
+        };
+        
+        // Mock Window_Base
+        // Matches real RMMV rpg_windows.js initialization flow:
+        //   initialize → move → updatePadding → createContents
+        // This ensures subclasses that override standardPadding() get correct padding.
+        function Window_Base(x, y, w, h) {
+            this.initialize(x, y, w, h);
+        }
 
-    // ── Input ──
-    window.Input = {
-        _keys: {},
-        isTriggered: function (key) {
-            var r = !!this._keys[key];
-            this._keys[key] = false;
-            return r;
-        },
-        isPressed: function () { return false; },
-        clear: function () { this._keys = {}; },
-    };
+        Window_Base._iconWidth = 32;
+        Window_Base._iconHeight = 32;
 
-    // ── TouchInput ──
-    window.TouchInput = {
-        x: 0, y: 0,
-        _triggered: false,
-        _rightTriggered: false,
-        wheelY: 0,
-        isTriggered: function () {
-            var r = this._triggered;
-            this._triggered = false;
-            return r;
-        },
-        isPressed: function () { return this._pressing; },
-        _pressing: false,
-        isRightTriggered: function () {
-            var r = this._rightTriggered;
-            this._rightTriggered = false;
-            return r;
-        },
-    };
+        Window_Base.prototype.initialize = function(x, y, w, h) {
+            this.x = x || 0;
+            this.y = y || 0;
+            this.width = w || 0;
+            this.height = h || 0;
+            this.opacity = 0;
+            this.backOpacity = 0;
+            this.visible = true;
+            this.openness = 255;
+            this._opening = false;
+            this._closing = false;
+            this.parent = null;
+            this.children = [];
+            this.updatePadding();
+            this.createContents();
+        };
 
-    // 事件监听管理
-    var _eventListeners = [];
-    function _addEventListener(target, type, handler, options) {
-        target.addEventListener(type, handler, options);
-        _eventListeners.push({ target: target, type: type, handler: handler });
+        Window_Base.prototype.standardPadding = function() { return 18; };
+        Window_Base.prototype.standardFontSize = function() { return 28; };
+        Window_Base.prototype.lineHeight = function() { return 36; };
+        Window_Base.prototype.updatePadding = function() { this.padding = this.standardPadding(); };
+        Window_Base.prototype.updateBackOpacity = function() {};
+        Window_Base.prototype.updateTone = function() {};
+        Window_Base.prototype.loadWindowskin = function() {};
+
+        Window_Base.prototype.createContents = function() {
+            this.contents = new Bitmap(this.contentsWidth(), this.contentsHeight());
+            this.resetFontSettings();
+        };
+
+        Window_Base.prototype.contentsWidth = function() { return Math.max(this.width - this.padding * 2, 0); };
+        Window_Base.prototype.contentsHeight = function() { return Math.max(this.height - this.padding * 2, 0); };
+
+        Window_Base.prototype.resetFontSettings = function() {
+            if (this.contents) {
+                this.contents.fontFace = 'GameFont';
+                this.contents.fontSize = this.standardFontSize();
+                this.resetTextColor();
+            }
+        };
+
+        Window_Base.prototype.resetTextColor = function() {
+            if (this.contents) {
+                this.contents.textColor = '#ffffff';
+            }
+        };
+
+        Window_Base.prototype.update = function() {};
+        Window_Base.prototype.refresh = function() {};
+
+        Window_Base.prototype.addChild = function(child) {
+            child.parent = this;
+            this.children.push(child);
+        };
+
+        Window_Base.prototype.removeChild = function(child) {
+            const idx = this.children.indexOf(child);
+            if (idx >= 0) {
+                this.children.splice(idx, 1);
+                child.parent = null;
+            }
+        };
+
+        Window_Base.prototype.move = function(x, y, w, h) {
+            this.x = x;
+            this.y = y;
+            if (w !== undefined) this.width = w;
+            if (h !== undefined) this.height = h;
+            this.createContents();
+        };
+
+        Window_Base.prototype.open = function() { this.openness = 255; this._opening = false; };
+        Window_Base.prototype.close = function() { this.openness = 0; this._closing = false; };
+        Window_Base.prototype.isOpen = function() { return this.openness >= 255; };
+        Window_Base.prototype.isClosed = function() { return this.openness <= 0; };
+
+        Window_Base.prototype.isInside = function(mx, my) {
+            return mx >= this.x && mx <= this.x + this.width &&
+                   my >= this.y && my <= this.y + this.height;
+        };
+
+        Window_Base.prototype.toLocal = function(mx, my) {
+            return {
+                x: mx - this.x - this.padding,
+                y: my - this.y - this.padding
+            };
+        };
+
+        window.Window_Base = Window_Base;
+    </script>
+    
+    <!-- Load UI Components -->
+    <script src="./mmo-ui.js"></script>
+    <script>
+        // Mock environment text rendering fix:
+        // Real RMMV uses GameFont where textBaseline='alphabetic' + h*0.75 centers well.
+        // In the browser mock we use system fonts (Microsoft YaHei etc.) which have
+        // different ascent/descent metrics. Use textBaseline='middle' + h/2 instead.
+        if (typeof L2_Theme !== 'undefined') {
+            L2_Theme.configureTextContext = function(ctx, fontSize, color) {
+                if (!ctx) return;
+                ctx.font = fontSize + 'px ' + L2_Theme.fontFamily;
+                ctx.fillStyle = color;
+                ctx.textBaseline = 'middle';
+            };
+
+            L2_Theme.drawTextSharp = function(bmp, text, x, y, maxW, lineH, align) {
+                var ctx = bmp._context;
+                if (!ctx) return;
+                var px = Math.round(x);
+                var py = Math.round(y);
+                var h = Math.round(lineH || bmp.fontSize || 14);
+                var centerY = Math.round(py + h / 2);
+                var tx = px;
+                var mw = Math.round(maxW || 0);
+                if (align === 'center') {
+                    tx = px + Math.floor(mw / 2);
+                } else if (align === 'right') {
+                    tx = px + mw;
+                }
+                ctx.textBaseline = 'middle';
+                ctx.textAlign = align || 'left';
+                ctx.fillText(String(text), tx, centerY, maxW || undefined);
+            };
+        }
+
+        // Mock environment parent-chain coordinate fix:
+        // Real RMMV uses PIXI's display tree which automatically chains parent transforms.
+        // In the mock, toLocal/isInside must manually traverse the parent chain so that
+        // nested children (e.g., buttons inside Layout/Grid) compute correct positions.
+        if (typeof L2_Base !== 'undefined') {
+            L2_Base.prototype.toLocal = function(mx, my) {
+                var absX = 0, absY = 0;
+                var node = this;
+                while (node) {
+                    absX += node.x + (node.padding || 0);
+                    absY += node.y + (node.padding || 0);
+                    node = node.parent;
+                }
+                return { x: mx - absX, y: my - absY };
+            };
+
+            L2_Base.prototype.isInside = function(mx, my) {
+                var absX = this.x, absY = this.y;
+                var node = this.parent;
+                while (node) {
+                    absX += node.x + (node.padding || 0);
+                    absY += node.y + (node.padding || 0);
+                    node = node.parent;
+                }
+                return mx >= absX && mx <= absX + this.width &&
+                       my >= absY && my <= absY + this.height;
+            };
+        }
+
+        // Mock environment text input fix:
+        // Real RMMV uses Input._keys populated by the engine's keyboard handler.
+        // In the browser mock, we use a hidden <input> element to capture keyboard
+        // events (including IME for Chinese input) and sync text to L2_Input.
+        if (typeof L2_Input !== 'undefined') {
+            var _hiddenInput = document.createElement('input');
+            _hiddenInput.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none;z-index:-1;';
+            _hiddenInput.setAttribute('autocomplete', 'off');
+            _hiddenInput.setAttribute('autocorrect', 'off');
+            _hiddenInput.setAttribute('autocapitalize', 'off');
+            _hiddenInput.setAttribute('spellcheck', 'false');
+            document.body.appendChild(_hiddenInput);
+
+            var _activeL2Input = null;
+
+            _hiddenInput.addEventListener('keydown', function(e) {
+                if (!_activeL2Input) return;
+                if (e.key === 'Enter') {
+                    var inp = _activeL2Input;
+                    inp._focused = false;
+                    if (inp._onSubmit) inp._onSubmit(inp._text);
+                    inp.markDirty();
+                    _activeL2Input = null;
+                    _hiddenInput.blur();
+                    e.preventDefault();
+                } else if (e.key === 'Escape') {
+                    _activeL2Input._focused = false;
+                    _activeL2Input.markDirty();
+                    _activeL2Input = null;
+                    _hiddenInput.blur();
+                    e.preventDefault();
+                }
+            });
+
+            // Sync on every input event (handles IME, paste, etc.)
+            _hiddenInput.addEventListener('input', function() {
+                if (!_activeL2Input) return;
+                var newText = _hiddenInput.value;
+                if (newText.length > _activeL2Input._maxLength) {
+                    newText = newText.slice(0, _activeL2Input._maxLength);
+                    _hiddenInput.value = newText;
+                }
+                if (newText !== _activeL2Input._text) {
+                    _activeL2Input._text = newText;
+                    if (_activeL2Input._onChange) _activeL2Input._onChange(newText);
+                    _activeL2Input.markDirty();
+                }
+            });
+
+            L2_Input.prototype.update = function() {
+                L2_Base.prototype.update.call(this);
+                if (!this.visible) return;
+
+                // Handle focus via click
+                if (TouchInput.isTriggered()) {
+                    var inside = this.isInside(TouchInput.x, TouchInput.y);
+                    if (inside && !this._focused) {
+                        this.setFocused(true);
+                        _activeL2Input = this;
+                        _hiddenInput.type = this._password ? 'password' : 'text';
+                        _hiddenInput.maxLength = this._maxLength;
+                        _hiddenInput.value = this._text;
+                        _hiddenInput.focus();
+                    } else if (!inside && this._focused) {
+                        this.setFocused(false);
+                        if (_activeL2Input === this) _activeL2Input = null;
+                    }
+                }
+
+                if (!this._focused) return;
+
+                // Keep hidden input focused (canvas click may steal focus)
+                if (_activeL2Input === this && document.activeElement !== _hiddenInput) {
+                    _hiddenInput.focus();
+                }
+
+                // Cursor blink
+                this._cursorBlink = (this._cursorBlink + 1) % 60;
+                if (this._cursorBlink === 0 || this._cursorBlink === 30) this.markDirty();
+            };
+
+            // Fix cursor rendering: don't alternate between "|" and placeholder text.
+            // Instead, always show placeholder dimmed + a thin blinking cursor line.
+            L2_Input.prototype.refresh = function() {
+                var c = this.bmp();
+                c.clear();
+                var cw = this.cw(), ch = this.ch();
+
+                c.fillRect(0, 0, cw, ch, this._focused ? '#0E0E22' : L2_Theme.bgInput);
+                L2_Theme.strokeRoundRect(c, 0, 0, cw, ch, 2,
+                    this._focused ? L2_Theme.borderActive : L2_Theme.borderDark);
+
+                c.fontSize = L2_Theme.fontNormal;
+
+                if (this._text) {
+                    c.textColor = L2_Theme.textWhite;
+                    var display = this._password ? '\u2022'.repeat(this._text.length) : this._text;
+                    c.drawText(display, 6, 0, cw - 12, ch, 'left');
+                    // Blinking cursor line after text
+                    if (this._focused && this._cursorBlink < 30) {
+                        var ctx = c._context;
+                        if (ctx) {
+                            ctx.save();
+                            ctx.font = c.fontSize + 'px "Microsoft YaHei", sans-serif';
+                            var tw = ctx.measureText(display).width;
+                            ctx.restore();
+                            c.fillRect(6 + Math.min(tw + 1, cw - 14), 3, 1, ch - 6, L2_Theme.textWhite);
+                        }
+                    }
+                } else if (this._focused) {
+                    // Focused empty: show placeholder dimmed + blinking cursor line
+                    c.textColor = L2_Theme.textDim;
+                    c.drawText(this._placeholder, 6, 0, cw - 12, ch, 'left');
+                    if (this._cursorBlink < 30) {
+                        c.fillRect(5, 3, 1, ch - 6, L2_Theme.textWhite);
+                    }
+                } else {
+                    // Unfocused empty: just placeholder
+                    c.textColor = L2_Theme.textDim;
+                    c.drawText(this._placeholder, 6, 0, cw - 12, ch, 'left');
+                }
+            };
+        }
+    </script>
+
+    <script>
+        // Catch any global errors
+        window.onerror = function(msg, url, line) {
+            console.error('Global error:', msg, 'at', url, 'line', line);
+            return false;
+        };
+        
+        // Verify UI components loaded after a short delay
+        setTimeout(function() {
+            console.log('Checking UI components...');
+            var components = ['L2_Theme', 'L2_Base', 'L2_Typography', 'L2_Button', 'L2_Layout', 'L2_Grid', 'L2_Card', 'L2_Input', 'L2_Dialog'];
+            var allLoaded = true;
+            components.forEach(function(name) {
+                var loaded = typeof window[name] !== 'undefined';
+                console.log(name + ':', loaded ? 'OK' : 'MISSING');
+                if (!loaded) allLoaded = false;
+            });
+            
+            if (!allLoaded) {
+                console.error('Some components failed to load!');
+                document.getElementById('statusText').textContent = 'Error: Some UI components failed to load. Check console for details.';
+                document.getElementById('statusText').style.color = '#ff6666';
+            } else {
+                console.log('All components loaded successfully!');
+                document.getElementById('statusText').textContent = '所有组件加载成功 - 就绪';
+                document.getElementById('statusText').style.color = '#44ff88';
+            }
+        }, 500);
+    </script>
+    
+    <script>
+        // ============================================
+        // Demo Page Logic
+        // ============================================
+        
+        let currentComponent = 'typography';
+        let uiObjects = [];
+        let showGridLines = false;
+        let animationFrame;
+        let lastTime = performance.now();
+        let frameCount = 0;
+        
+        // Component definitions
+        const componentData = {
+            typography: {
+                title: 'Typography 文字排版',
+                code: `<span class="code-keyword">new</span> <span class="code-function">L2_Typography</span>(<span class="code-number">50</span>, <span class="code-number">50</span>, <span class="code-number">200</span>, {
+    text: <span class="code-string">'标题文字'</span>,
+    level: <span class="code-string">'h1'</span>,
+    color: L2_Theme.textGold,
+    align: <span class="code-string">'left'</span>
+});`,
+                properties: {
+                    'Level': 'h1, h2, h3, body, caption',
+                    'Color': '任意颜色字符串',
+                    'Align': 'left, center, right'
+                },
+                render: function() {
+                    const titles = [
+                        { level: 'h1', text: 'H1 标题', y: 40 },
+                        { level: 'h2', text: 'H2 副标题', y: 80 },
+                        { level: 'h3', text: 'H3 小标题', y: 120 },
+                        { level: 'body', text: '正文文本内容', y: 160 },
+                        { level: 'caption', text: 'Caption 说明文字', y: 200 }
+                    ];
+                    
+                    titles.forEach(t => {
+                        const ty = new L2_Typography(50, t.y, 300, {
+                            text: t.text,
+                            level: t.level,
+                            color: t.level === 'h1' ? L2_Theme.textGold : null
+                        });
+                        addToScene(ty);
+                    });
+                    
+                    // Alignment demo
+                    addToScene(new L2_Typography(400, 40, 200, { text: '左对齐', align: 'left' }));
+                    addToScene(new L2_Typography(400, 80, 200, { text: '居中', align: 'center', color: L2_Theme.textGold }));
+                    addToScene(new L2_Typography(400, 120, 200, { text: '右对齐', align: 'right' }));
+                }
+            },
+            
+            button: {
+                title: 'Button 按钮',
+                code: `<span class="code-keyword">new</span> <span class="code-function">L2_Button</span>(<span class="code-number">100</span>, <span class="code-number">100</span>, <span class="code-number">120</span>, <span class="code-number">32</span>, <span class="code-string">'点击我'</span>, {
+    type: <span class="code-string">'primary'</span>,
+    onClick: <span class="code-keyword">function</span>() {
+        console.log(<span class="code-string">'Clicked!'</span>);
     }
-    function _removeAllListeners() {
-        for (var i = 0; i < _eventListeners.length; i++) {
-            var el = _eventListeners[i];
-            el.target.removeEventListener(el.type, el.handler);
-        }
-        _eventListeners = [];
-    }
+});`,
+                properties: {
+                    'Type': 'primary, default, danger, text',
+                    'Width': '按钮宽度',
+                    'Height': '按钮高度 (默认28)'
+                },
+                render: function() {
+                    const types = ['primary', 'default', 'danger', 'text'];
+                    const labels = ['主要按钮', '默认按钮', '危险按钮', '文字按钮'];
+                    
+                    types.forEach((type, i) => {
+                        const btn = new L2_Button(50, 50 + i * 50, 120, 32, labels[i], {
+                            type: type,
+                            onClick: function() { logEvent('Button clicked: ' + type); }
+                        });
+                        addToScene(btn);
+                    });
+                    
+                    // Different sizes
+                    addToScene(new L2_Button(200, 50, 80, 24, '小按钮', { type: 'primary' }));
+                    addToScene(new L2_Button(200, 100, 150, 36, '大按钮', { type: 'primary' }));
+                }
+            },
+            
+            layout: {
+                title: 'Layout 布局',
+                code: `<span class="code-keyword">var</span> layout = <span class="code-keyword">new</span> <span class="code-function">L2_Layout</span>(<span class="code-number">50</span>, <span class="code-number">50</span>, <span class="code-number">400</span>, <span class="code-number">200</span>, {
+    direction: <span class="code-string">'horizontal'</span>,
+    gap: <span class="code-number">8</span>,
+    align: <span class="code-string">'center'</span>
+});
+layout.addItem(button1);
+layout.addItem(button2);`,
+                properties: {
+                    'Direction': 'horizontal, vertical',
+                    'Gap': '子元素间距',
+                    'Align': 'start, center, end'
+                },
+                render: function() {
+                    // Horizontal layout
+                    const hLayout = new L2_Layout(50, 50, 400, 60, {
+                        direction: 'horizontal',
+                        gap: 8,
+                        align: 'center'
+                    });
+                    
+                    for (let i = 0; i < 4; i++) {
+                        const btn = new L2_Button(0, 0, 80, 32, 'Btn ' + (i+1), { type: 'primary' });
+                        hLayout.addItem(btn);
+                    }
+                    addToScene(hLayout);
+                    
+                    // Vertical layout
+                    const vLayout = new L2_Layout(50, 150, 120, 200, {
+                        direction: 'vertical',
+                        gap: 8,
+                        align: 'start'
+                    });
+                    
+                    for (let i = 0; i < 3; i++) {
+                        const btn = new L2_Button(0, 0, 100, 28, 'Item ' + (i+1), { type: 'default' });
+                        vLayout.addItem(btn);
+                    }
+                    addToScene(vLayout);
+                    
+                    // Auto-wrap demo
+                    const wrapLayout = new L2_Layout(200, 150, 300, 200, {
+                        direction: 'horizontal',
+                        gap: 8,
+                        align: 'start'
+                    });
+                    
+                    for (let i = 0; i < 8; i++) {
+                        const btn = new L2_Button(0, 0, 70, 32, 'Wrap ' + (i+1), { type: 'primary' });
+                        wrapLayout.addItem(btn);
+                    }
+                    addToScene(wrapLayout);
+                }
+            },
+            
+            grid: {
+                title: 'Grid 网格',
+                code: `<span class="code-keyword">var</span> grid = <span class="code-keyword">new</span> <span class="code-function">L2_Grid</span>(<span class="code-number">50</span>, <span class="code-number">50</span>, <span class="code-number">400</span>, <span class="code-number">300</span>, {
+    cols: <span class="code-number">3</span>,
+    rowGap: <span class="code-number">8</span>,
+    colGap: <span class="code-number">8</span>
+});
+grid.addItem(card1);
+grid.addItem(card2);`,
+                properties: {
+                    'Cols': '列数',
+                    'RowGap': '行间距',
+                    'ColGap': '列间距'
+                },
+                render: function() {
+                    const grid = new L2_Grid(50, 50, 400, 300, {
+                        cols: 3,
+                        rowGap: 8,
+                        colGap: 8
+                    });
+                    
+                    for (let i = 0; i < 6; i++) {
+                        const card = new L2_Card(0, 0, 100, 80, {
+                            title: 'Card ' + (i + 1),
+                            body: '内容'
+                        });
+                        grid.addItem(card);
+                    }
+                    addToScene(grid);
+                }
+            },
+            
+            card: {
+                title: 'Card 卡片',
+                code: `<span class="code-keyword">new</span> <span class="code-function">L2_Card</span>(<span class="code-number">100</span>, <span class="code-number">100</span>, <span class="code-number">200</span>, <span class="code-number">120</span>, {
+    title: <span class="code-string">'卡片标题'</span>,
+    body: <span class="code-string">'卡片内容文本'</span>,
+    footer: <span class="code-string">'底部信息'</span>,
+    onClick: <span class="code-keyword">function</span>() {}
+});`,
+                properties: {
+                    'Title': '卡片标题',
+                    'Body': '卡片正文',
+                    'Footer': '底部信息',
+                    'onClick': '点击回调'
+                },
+                render: function() {
+                    addToScene(new L2_Card(50, 50, 200, 120, {
+                        title: '基础卡片',
+                        body: '这是一张普通卡片的内容',
+                        footer: '底部信息'
+                    }));
+                    
+                    addToScene(new L2_Card(280, 50, 200, 120, {
+                        title: '可点击卡片',
+                        body: '点击我有反应',
+                        onClick: function() { logEvent('Card clicked'); }
+                    }));
+                    
+                    addToScene(new L2_Card(50, 200, 200, 100, {
+                        body: '无标题卡片，只有正文内容'
+                    }));
+                }
+            },
+            
+            tabs: {
+                title: 'Tabs 标签页',
+                code: `<span class="code-keyword">new</span> <span class="code-function">L2_Tabs</span>(<span class="code-number">50</span>, <span class="code-number">50</span>, <span class="code-number">400</span>, {
+    tabs: [<span class="code-string">'标签1'</span>, <span class="code-string">'标签2'</span>, <span class="code-string">'标签3'</span>],
+    activeIndex: <span class="code-number">0</span>,
+    onChange: <span class="code-keyword">function</span>(idx, label) {}
+});`,
+                properties: {
+                    'Tabs': '标签数组',
+                    'ActiveIndex': '当前选中索引',
+                    'onChange': '切换回调'
+                },
+                render: function() {
+                    addToScene(new L2_Tabs(50, 50, 400, {
+                        tabs: ['装备', '技能', '任务', '设置'],
+                        activeIndex: 0,
+                        onChange: function(idx, label) {
+                            logEvent('Tab changed to: ' + label + ' (' + idx + ')');
+                        }
+                    }));
+                    
+                    addToScene(new L2_Tabs(50, 120, 300, {
+                        tabs: ['选项一', '选项二'],
+                        activeIndex: 1
+                    }));
+                }
+            },
+            
+            menu: {
+                title: 'Menu 菜单',
+                code: `<span class="code-keyword">new</span> <span class="code-function">L2_Menu</span>(<span class="code-number">50</span>, <span class="code-number">50</span>, <span class="code-number">150</span>, {
+    items: [
+        { label: <span class="code-string">'选项1'</span>, action: <span class="code-keyword">function</span>() {} },
+        { label: <span class="code-string">'选项2'</span>, action: <span class="code-keyword">function</span>() {} }
+    ]
+});`,
+                properties: {
+                    'Items': '菜单项数组',
+                    'ActiveIndex': '当前选中项',
+                    'MaxHeight': '最大高度（超出滚动）'
+                },
+                render: function() {
+                    addToScene(new L2_Menu(50, 50, 150, {
+                        items: [
+                            { label: '角色属性', action: function() { logEvent('Menu: 角色属性'); } },
+                            { label: '背包', action: function() { logEvent('Menu: 背包'); } },
+                            { label: '技能', action: function() { logEvent('Menu: 技能'); } },
+                            { label: '任务', action: function() { logEvent('Menu: 任务'); } },
+                            { label: '设置', action: function() { logEvent('Menu: 设置'); } }
+                        ],
+                        activeIndex: 0
+                    }));
+                    
+                    // Long menu with scroll
+                    const longItems = [];
+                    for (let i = 1; i <= 10; i++) {
+                        longItems.push({ 
+                            label: '滚动项 ' + i, 
+                            action: function(idx) { 
+                                return function() { logEvent('Menu: 滚动项 ' + idx); };
+                            }(i)
+                        });
+                    }
+                    addToScene(new L2_Menu(250, 50, 150, {
+                        items: longItems,
+                        maxHeight: 150
+                    }));
+                }
+            },
+            
+            list: {
+                title: 'List 列表',
+                code: `<span class="code-keyword">new</span> <span class="code-function">L2_List</span>(<span class="code-number">50</span>, <span class="code-number">50</span>, <span class="code-number">250</span>, <span class="code-number">200</span>, {
+    itemHeight: <span class="code-number">24</span>,
+    onSelect: <span class="code-keyword">function</span>(item, index) {}
+});`,
+                properties: {
+                    'ItemHeight': '每项高度',
+                    'OnSelect': '选中回调',
+                    'DrawItem': '自定义绘制函数'
+                },
+                render: function() {
+                    const list = new L2_List(50, 50, 250, 200, {
+                        itemHeight: 28,
+                        onSelect: function(item, idx) {
+                            logEvent('List selected: ' + item.text + ' (#' + idx + ')');
+                        }
+                    });
+                    
+                    const items = [];
+                    for (let i = 1; i <= 20; i++) {
+                        items.push({
+                            text: '列表项 ' + i,
+                            subText: i % 3 === 0 ? '有备注' : '',
+                            color: i % 5 === 0 ? '#ff6666' : null
+                        });
+                    }
+                    list.setItems(items);
+                    addToScene(list);
+                }
+            },
+            
+            table: {
+                title: 'Table 表格',
+                code: `<span class="code-keyword">new</span> <span class="code-function">L2_Table</span>(<span class="code-number">50</span>, <span class="code-number">50</span>, <span class="code-number">400</span>, <span class="code-number">200</span>, {
+    columns: [
+        { key: <span class="code-string">'name'</span>, label: <span class="code-string">'名称'</span>, width: <span class="code-number">150</span> },
+        { key: <span class="code-string">'value'</span>, label: <span class="code-string">'数值'</span> }
+    ]
+});`,
+                properties: {
+                    'Columns': '列定义数组',
+                    'RowHeight': '行高',
+                    'OnRowClick': '行点击回调'
+                },
+                render: function() {
+                    const table = new L2_Table(50, 50, 400, 200, {
+                        columns: [
+                            { key: 'name', label: '道具名称', width: 150 },
+                            { key: 'type', label: '类型', width: 80 },
+                            { key: 'qty', label: '数量' }
+                        ],
+                        rowHeight: 26,
+                        onRowClick: function(row, idx) {
+                            logEvent('Table row clicked: ' + row.name);
+                        }
+                    });
+                    
+                    const rows = [];
+                    const types = ['武器', '防具', '道具'];
+                    for (let i = 1; i <= 15; i++) {
+                        rows.push({
+                            name: '物品 ' + i,
+                            type: types[i % 3],
+                            qty: Math.floor(Math.random() * 99) + 1
+                        });
+                    }
+                    table.setRows(rows);
+                    addToScene(table);
+                }
+            },
+            
+            progress: {
+                title: 'Progress 进度条',
+                code: `<span class="code-comment">// 使用 L2_Theme.drawBar</span>
+L2_Theme.drawBar(c, x, y, width, height, ratio, bgColor, fillColor);`,
+                properties: {
+                    'Ratio': '0.0 - 1.0',
+                    'BgColor': '背景色',
+                    'FillColor': '填充色'
+                },
+                render: function() {
+                    // Manual rendering for progress bars
+                    const container = new L2_Base(50, 50, 400, 200);
+                    container.refresh = function() {
+                        const c = this.bmp();
+                        const cw = this.cw();
+                        
+                        // HP bar
+                        c.fontSize = 12;
+                        c.textColor = L2_Theme.textWhite;
+                        c.drawText('HP', 0, 0, 40, 20, 'left');
+                        L2_Theme.drawBar(c, 50, 2, 300, 16, 0.75, L2_Theme.hpBg, L2_Theme.hpFill);
+                        c.drawText('75/100', 360, 0, 60, 20, 'right');
+                        
+                        // MP bar
+                        c.drawText('MP', 0, 30, 40, 20, 'left');
+                        L2_Theme.drawBar(c, 50, 32, 300, 14, 0.45, L2_Theme.mpBg, L2_Theme.mpFill);
+                        c.drawText('45/100', 360, 30, 60, 20, 'right');
+                        
+                        // EXP bar
+                        c.drawText('EXP', 0, 60, 40, 20, 'left');
+                        L2_Theme.drawBar(c, 50, 62, 300, 10, 0.6, '#1a1a00', '#CCCC00');
+                        
+                        // Custom bars
+                        c.textColor = L2_Theme.textGold;
+                        c.drawText('自定义进度条', 0, 100, 200, 20, 'left');
+                        L2_Theme.drawBar(c, 0, 125, 200, 20, 0.3, '#222240', '#4488ff');
+                        L2_Theme.drawBar(c, 0, 155, 200, 20, 0.7, '#222240', '#44ff88');
+                    };
+                    addToScene(container);
+                }
+            },
+            
+            dialog: {
+                title: 'Dialog 对话框',
+                code: `<span class="code-keyword">new</span> <span class="code-function">L2_Dialog</span>({
+    title: <span class="code-string">'确认'</span>,
+    content: <span class="code-string">'确定要删除吗？'</span>,
+    buttons: [
+        { text: <span class="code-string">'确定'</span>, type: <span class="code-string">'primary'</span>, onClick: fn },
+        { text: <span class="code-string">'取消'</span>, type: <span class="code-string">'default'</span>, onClick: fn }
+    ]
+});`,
+                properties: {
+                    'Title': '对话框标题',
+                    'Content': '内容文本',
+                    'Buttons': '按钮数组',
+                    'OnClose': '关闭回调'
+                },
+                render: function() {
+                    const controls = document.getElementById('componentControls');
+                    controls.innerHTML = `
+                        <button class="btn" onclick="showAlert()">Alert</button>
+                        <button class="btn" onclick="showConfirm()">Confirm</button>
+                        <button class="btn" onclick="showCustom()">Custom</button>
+                    `;
+                    
+                    // Show a demo dialog
+                    showCustom();
+                }
+            },
+            
+            subwindow: {
+                title: 'SubWindow 子窗口',
+                code: `<span class="code-keyword">new</span> <span class="code-function">L2_SubWindow</span>(<span class="code-number">50</span>, <span class="code-number">50</span>, <span class="code-number">300</span>, <span class="code-number">200</span>, {
+    title: <span class="code-string">'窗口标题'</span>,
+    closable: <span class="code-keyword">true</span>,
+    draggable: <span class="code-keyword">true</span>
+});`,
+                properties: {
+                    'Title': '窗口标题',
+                    'Closable': '可关闭',
+                    'Draggable': '可拖拽'
+                },
+                render: function() {
+                    addToScene(new L2_SubWindow(50, 50, 300, 200, {
+                        title: '可拖拽窗口',
+                        closable: true,
+                        draggable: true
+                    }));
+                    
+                    addToScene(new L2_SubWindow(400, 100, 250, 150, {
+                        title: '另一个窗口',
+                        closable: true,
+                        draggable: true
+                    }));
+                }
+            },
+            
+            input: {
+                title: 'Input 输入框',
+                code: `<span class="code-keyword">new</span> <span class="code-function">L2_Input</span>(<span class="code-number">100</span>, <span class="code-number">100</span>, <span class="code-number">200</span>, {
+    placeholder: <span class="code-string">'请输入...'</span>,
+    maxLength: <span class="code-number">20</span>,
+    onChange: <span class="code-keyword">function</span>(text) {}
+});`,
+                properties: {
+                    'Placeholder': '占位文本',
+                    'MaxLength': '最大长度',
+                    'Password': '是否为密码输入'
+                },
+                render: function() {
+                    addToScene(new L2_Input(50, 50, 200, {
+                        placeholder: '请输入文本...',
+                        onChange: function(text) {
+                            logEvent('Input changed: ' + text);
+                        }
+                    }));
+                    
+                    addToScene(new L2_Input(50, 100, 200, {
+                        placeholder: '密码输入',
+                        password: true
+                    }));
+                    
+                    addToScene(new L2_Input(50, 150, 200, {
+                        placeholder: '最多10个字符',
+                        maxLength: 10
+                    }));
+                }
+            },
+            
+            select: {
+                title: 'Select 选择器',
+                code: `<span class="code-keyword">new</span> <span class="code-function">L2_Select</span>(<span class="code-number">100</span>, <span class="code-number">100</span>, <span class="code-number">150</span>, {
+    options: [
+        { label: <span class="code-string">'选项1'</span>, value: <span class="code-number">1</span> },
+        { label: <span class="code-string">'选项2'</span>, value: <span class="code-number">2</span> }
+    ]
+});`,
+                properties: {
+                    'Options': '选项数组',
+                    'Selected': '默认选中索引',
+                    'Placeholder': '占位文本'
+                },
+                render: function() {
+                    addToScene(new L2_Select(50, 50, 150, {
+                        options: [
+                            { label: '战士', value: 1 },
+                            { label: '法师', value: 2 },
+                            { label: '刺客', value: 3 },
+                            { label: '牧师', value: 4 }
+                        ],
+                        selected: 0,
+                        placeholder: '选择职业'
+                    }));
+                    
+                    addToScene(new L2_Select(50, 100, 150, {
+                        options: [
+                            { label: '简单', value: 'easy' },
+                            { label: '普通', value: 'normal' },
+                            { label: '困难', value: 'hard' }
+                        ],
+                        selected: 1
+                    }));
+                }
+            },
+            
+            icon: {
+                title: 'Icon 图标',
+                code: `<span class="code-keyword">new</span> <span class="code-function">L2_Icon</span>(<span class="code-number">100</span>, <span class="code-number">100</span>, <span class="code-number">32</span>, <span class="code-number">32</span>, {
+    iconIndex: <span class="code-number">1</span>,
+    color: <span class="code-string">'#ffffff'</span>
+});`,
+                properties: {
+                    'IconIndex': '图标索引',
+                    'Color': '颜色覆盖'
+                },
+                render: function() {
+                    addToScene(new L2_Icon(50, 50, 32, 32, { iconIndex: 1 }));
+                    addToScene(new L2_Icon(100, 50, 32, 32, { iconIndex: 2, color: L2_Theme.textGold }));
+                    addToScene(new L2_Icon(150, 50, 32, 32, { iconIndex: 3, color: '#ff6666' }));
+                    addToScene(new L2_Icon(200, 50, 48, 48, { iconIndex: 4, color: L2_Theme.textBlue }));
+                    
+                    // Icon with label
+                    addToScene(new L2_Typography(50, 100, 100, { text: 'HP Potion', level: 'caption' }));
+                    addToScene(new L2_Icon(50, 120, 32, 32, { iconIndex: 5, color: '#ff4444' }));
+                    
+                    addToScene(new L2_Typography(150, 100, 100, { text: 'MP Potion', level: 'caption' }));
+                    addToScene(new L2_Icon(150, 120, 32, 32, { iconIndex: 6, color: '#4444ff' }));
+                }
+            },
+            
+            divider: {
+                title: 'Divider 分割线',
+                code: `<span class="code-keyword">new</span> <span class="code-function">L2_Divider</span>(<span class="code-number">50</span>, <span class="code-number">100</span>, <span class="code-number">300</span>);
 
-    _addEventListener(canvas, 'mousemove', function (e) {
-        TouchInput.x = e.offsetX;
-        TouchInput.y = e.offsetY;
-    });
-    _addEventListener(canvas, 'mousedown', function (e) {
-        if (e.button === 0) { TouchInput._triggered = true; TouchInput._pressing = true; }
-        if (e.button === 2) TouchInput._rightTriggered = true;
-    });
-    _addEventListener(canvas, 'mouseup', function () { TouchInput._pressing = false; });
-    _addEventListener(canvas, 'wheel', function (e) {
-        TouchInput.wheelY = e.deltaY > 0 ? 1 : e.deltaY < 0 ? -1 : 0;
-    });
-    _addEventListener(canvas, 'contextmenu', function (e) { e.preventDefault(); });
-    _addEventListener(document, 'keydown', function (e) {
-        if (e.key === 'Escape') Input._keys['cancel'] = true;
-        if (e.key === 'Enter') Input._keys['ok'] = true;
-        // Forward to any focused L2_Input
-        if (window._l2FocusedInput && window._l2FocusedInput._handleKeyDown) {
-            window._l2FocusedInput._handleKeyDown(e);
-        }
-    });
+<span class="code-comment">// 带文本的分割线</span>
+<span class="code-keyword">new</span> <span class="code-function">L2_Divider</span>(<span class="code-number">50</span>, <span class="code-number">200</span>, <span class="code-number">300</span>, { text: <span class="code-string">'或'</span> });
 
-    // 全局清理函数（需要在第二个 script 中注册组件列表）
-    window._allL2Components = null;
-    window._cleanupTestPage = function () {
-        _removeAllListeners();
-        // 销毁所有组件
-        if (window._allL2Components) {
-            for (var i = window._allL2Components.length - 1; i >= 0; i--) {
-                var comp = window._allL2Components[i];
-                if (comp && comp.destroy) {
-                    comp.destroy();
-                } else if (comp && comp.parent) {
-                    comp.parent.removeChild(comp);
+<span class="code-comment">// 垂直分割线</span>
+<span class="code-keyword">new</span> <span class="code-function">L2_Divider</span>(<span class="code-number">200</span>, <span class="code-number">50</span>, <span class="code-number">150</span>, { vertical: <span class="code-keyword">true</span> });`,
+                properties: {
+                    'Length': '线条长度',
+                    'Vertical': '是否为垂直',
+                    'Text': '中间文本',
+                    'Color': '颜色'
+                },
+                render: function() {
+                    // Horizontal
+                    addToScene(new L2_Divider(50, 80, 300));
+                    addToScene(new L2_Typography(50, 60, 100, { text: '普通分割线', level: 'caption' }));
+                    
+                    // With text
+                    addToScene(new L2_Divider(50, 180, 300, { text: '或' }));
+                    addToScene(new L2_Typography(50, 140, 150, { text: '带文本的分割线', level: 'caption' }));
+                    
+                    // Vertical
+                    addToScene(new L2_Divider(400, 50, 150, { vertical: true }));
+                    addToScene(new L2_Typography(420, 60, 100, { text: '垂直分割线', level: 'caption' }));
                 }
             }
-            window._allL2Components = [];
+        };
+        
+        // Helper functions
+        function addToScene(obj) {
+            uiObjects.push(obj);
         }
-    };
+        
+        function clearCanvas() {
+            uiObjects = [];
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            logEvent('Canvas cleared');
+        }
+        
+        function renderScene() {
+            // Frame lifecycle: latch input state for this frame
+            TouchInput._startFrame();
+            Graphics.frameCount++;
 
-    // ── SceneManager ──
-    window.SceneManager = {
-        _scene: null,
-    };
+            // Bring-to-front: when clicking, move the clicked object to top of render order
+            if (TouchInput.isTriggered() && uiObjects.length > 1) {
+                var mx = TouchInput.x, my = TouchInput.y;
+                for (var zi = uiObjects.length - 1; zi >= 0; zi--) {
+                    var zobj = uiObjects[zi];
+                    if (!zobj.visible) continue;
+                    if (mx >= zobj.x && mx <= zobj.x + zobj.width &&
+                        my >= zobj.y && my <= zobj.y + zobj.height) {
+                        if (zi < uiObjects.length - 1) {
+                            uiObjects.splice(zi, 1);
+                            uiObjects.push(zobj);
+                        }
+                        break;
+                    }
+                }
+            }
 
-    // ── PluginManager ──
-    window.PluginManager = {
-        parameters: function () { return {}; },
-    };
+            // Clear canvas
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // ── StorageManager ──
-    window.StorageManager = {
-        save: function () {},
-        load: function () { return null; },
-    };
-})();
-</script>
+            // Draw grid if enabled
+            if (showGridLines) {
+                drawGrid();
+            }
 
-<!-- Load built UI library -->
-<script src="../mmo-ui.js"></script>
+            // Recursive render function: renders an object and all its children
+            function renderObject(obj, parentX, parentY) {
+                if (!obj.visible || !obj.refresh) return;
 
-<script>
-/**
- * Test Scene: creates one instance of each L2 component for visual verification.
- */
-(function () {
-    'use strict';
+                // Absolute position on canvas (children coords are relative to parent content area)
+                var absX = parentX + obj.x;
+                var absY = parentY + obj.y;
 
-    var scene = { children: [], addChild: function (c) { this.children.push(c); c.parent = this; } };
-    SceneManager._scene = scene;
+                ctx.save();
+                ctx.beginPath();
+                ctx.rect(absX, absY, obj.width, obj.height);
+                ctx.clip();
+                ctx.translate(absX + (obj.padding || 0), absY + (obj.padding || 0));
 
-    var scrollX = 0, scrollY = 0;
-    window._allL2Components = [];
+                // Set Bitmap _context for drawing
+                if (obj.contents) {
+                    obj.contents._context = ctx;
+                }
 
-    function add(comp) {
-        scene.addChild(comp);
-        window._allL2Components.push(comp);
-        return comp;
-    }
+                // Force dirty before update so L2_Base.update will call refresh() once
+                if (obj.markDirty) {
+                    obj.markDirty();
+                }
 
-    // ═══ COLUMN 1: 布局 + 基础组件 + 导航 ═══
-    var col1X = 20, yy = 20;
+                // update() internally calls refresh() when dirty — single draw per frame
+                if (obj.update) {
+                    obj.update();
+                }
 
-    // Section label helper
-    function sectionLabel(text, x, y) {
-        var lbl = new L2_Typography(x, y, 200, { text: text, level: 'h2' });
-        return add(lbl);
-    }
+                ctx.restore();
 
-    // ── Layout ──
-    sectionLabel('布局组件', col1X, yy);
-    yy += 30;
+                // Recursively render children (e.g., Layout/Grid items)
+                if (obj.children && obj.children.length > 0) {
+                    var childBaseX = absX + (obj.padding || 0);
+                    var childBaseY = absY + (obj.padding || 0);
+                    for (var i = 0; i < obj.children.length; i++) {
+                        renderObject(obj.children[i], childBaseX, childBaseY);
+                    }
+                }
+            }
 
-    add(new L2_Divider(col1X, yy, 220, { text: '分隔线 Divider' }));
-    yy += 24;
-
-    add(new L2_Space(8, 8));
-    var layoutH = new L2_Layout(col1X, yy, 220, 50, { direction: 'horizontal', gap: 6 });
-    add(layoutH);
-    // Add buttons as children to show layout concept
-    yy += 58;
-
-    // ── Base ──
-    sectionLabel('基础组件', col1X, yy);
-    yy += 30;
-
-    add(new L2_Button(col1X, yy, '默认按钮', {}));
-    add(new L2_Button(col1X + 85, yy, '主要按钮', { type: 'primary' }));
-    yy += 36;
-    add(new L2_Button(col1X, yy, '成功', { type: 'success' }));
-    add(new L2_Button(col1X + 65, yy, '危险', { type: 'danger' }));
-    add(new L2_Button(col1X + 130, yy, '文本按钮', { type: 'text' }));
-    yy += 36;
-
-    add(new L2_Icon(col1X, yy, 64));
-    add(new L2_Icon(col1X + 40, yy, 79));
-    add(new L2_Icon(col1X + 80, yy, 128));
-    add(new L2_Link(col1X + 120, yy + 8, '点击链接', { onClick: function () { L2_Message.info('链接被点击'); } }));
-    yy += 40;
-
-    add(new L2_Typography(col1X, yy, 220, { text: 'H1 大标题 微软雅黑', level: 'h1' }));
-    yy += 26;
-    add(new L2_Typography(col1X, yy, 220, { text: 'H3 小标题 清晰锐利', level: 'h3' }));
-    yy += 22;
-    add(new L2_Typography(col1X, yy, 220, { text: '正文：中文渲染优化测试', level: 'body' }));
-    yy += 24;
-
-    // ── Navigation ──
-    sectionLabel('导航组件', col1X, yy);
-    yy += 30;
-
-    add(new L2_Tabs(col1X, yy, 220, { tabs: ['物品', '装备', '技能'], activeIndex: 0 }));
-    yy += 36;
-
-    add(new L2_Menu(col1X, yy, 100, { items: ['仓库', '商店', '邮件', '设置'], activeIndex: 1 }));
-    yy += 110;
-
-    add(new L2_Pagination(col1X, yy, { total: 50, pageSize: 10, current: 2 }));
-    yy += 34;
-
-    add(new L2_Steps(col1X, yy, 220, { steps: ['选择', '确认', '完成'], current: 1 }));
-    yy += 40;
-
-    add(new L2_Breadcrumb(col1X, yy, { items: ['首页', '商城', '武器'] }));
-    yy += 28;
-
-    // ═══ COLUMN 2: Input ═══
-    var col2X = 270;
-    yy = 20;
-
-    sectionLabel('Input', col2X, yy);
-    yy += 30;
-
-    add(new L2_Input(col2X, yy, 200, { placeholder: '请输入文本...' }));
-    yy += 36;
-
-    add(new L2_Input(col2X, yy, 200, { placeholder: '密码', password: true }));
-    yy += 36;
-
-    add(new L2_InputNumber(col2X, yy, { value: 10, min: 0, max: 100, step: 5 }));
-    yy += 36;
-
-    add(new L2_Select(col2X, yy, 200, {
-        options: [
-            { label: '战士', value: 1 },
-            { label: '法师', value: 2 },
-            { label: '弓手', value: 3 },
-            { label: '牧师', value: 4 },
-        ],
-        selected: 0,
-    }));
-    yy += 36;
-
-    add(new L2_Checkbox(col2X, yy, { label: '自动战斗', checked: true }));
-    add(new L2_Checkbox(col2X + 110, yy, { label: '显示伤害' }));
-    yy += 28;
-
-    add(new L2_Radio(col2X, yy, {
-        items: ['简单', '普通', '困难'],
-        selected: 1,
-        direction: 'horizontal',
-    }));
-    yy += 30;
-
-    add(new L2_Switch(col2X, yy, { on: true, label: '音效' }));
-    add(new L2_Switch(col2X + 100, yy, { on: false, label: '音乐' }));
-    yy += 30;
-
-    add(new L2_Slider(col2X, yy, 200, { value: 60, min: 0, max: 100 }));
-    yy += 36;
-
-    add(new L2_Textarea(col2X, yy, 200, 70, { placeholder: '请输入多行文本...' }));
-    yy += 80;
-
-    // ── Data Display ──
-    sectionLabel('Data Display', col2X, yy);
-    yy += 30;
-
-    add(new L2_Progress(col2X, yy, 200, { value: 0.75, label: 'HP', fillColor: L2_Theme.hpFill, bgColor: L2_Theme.hpBg }));
-    yy += 22;
-    add(new L2_Progress(col2X, yy, 200, { value: 0.45, label: 'MP', fillColor: L2_Theme.mpFill, bgColor: L2_Theme.mpBg }));
-    yy += 22;
-    add(new L2_Progress(col2X, yy, 200, { value: 0.3, label: 'EXP', fillColor: L2_Theme.expFill, bgColor: L2_Theme.expBg }));
-    yy += 28;
-
-    add(new L2_Tag(col2X, yy, '战士', {}));
-    add(new L2_Tag(col2X + 55, yy, 'Lv.50', { bgColor: L2_Theme.primaryColor }));
-    add(new L2_Tag(col2X + 120, yy, '关闭', { closable: true, onClose: function () { L2_Message.info('Tag关闭'); } }));
-    yy += 30;
-
-    add(new L2_Badge(col2X, yy, { count: 5 }));
-    add(new L2_Badge(col2X + 30, yy, { count: 120 }));
-    add(new L2_Badge(col2X + 72, yy, { dot: true }));
-    yy += 30;
-
-    add(new L2_Avatar(col2X, yy, { size: 36, text: 'A', bgColor: '#4488FF' }));
-    add(new L2_Avatar(col2X + 44, yy, { size: 36, text: 'B', bgColor: '#44FF88', shape: 'square' }));
-    add(new L2_Avatar(col2X + 88, yy, { size: 36, text: 'C', bgColor: '#FF4444' }));
-    yy += 44;
-
-    add(new L2_Statistic(col2X, yy, { title: '攻击力', value: 1250, prefix: '', suffix: '' }));
-    add(new L2_Statistic(col2X + 130, yy, { title: '胜率', value: '72%', trend: 'up' }));
-    yy += 60;
-
-    // ═══ COLUMN 3: Data (continued) + Windows + Feedback ═══
-    var col3X = 510;
-    yy = 20;
-
-    sectionLabel('List & Table', col3X, yy);
-    yy += 30;
-
-    add(new L2_List(col3X, yy, 200, 100, {
-        items: ['火焰剑', '冰霜盾', '治愈药水', '传送石', '复活卷轴', '经验书', '暗影斗篷'],
-        selectedIndex: 1,
-    }));
-    yy += 108;
-
-    add(new L2_Table(col3X, yy, 220, 100, {
-        columns: [
-            { key: 'name', title: '名称', width: 80 },
-            { key: 'lv', title: '等级', width: 40 },
-            { key: 'class', title: '职业', width: 60 },
-        ],
-        rows: [
-            { name: 'Alice', lv: 50, class: '战士' },
-            { name: 'Bob', lv: 45, class: '法师' },
-            { name: 'Carol', lv: 48, class: '弓手' },
-            { name: 'Dave', lv: 42, class: '牧师' },
-        ],
-    }));
-    yy += 108;
-
-    // ── Collapse ──
-    add(new L2_Collapse(col3X, yy, 220, {
-        items: [
-            { title: '基本信息', content: '角色名: Alice\n等级: 50\n职业: 战士', expanded: true },
-            { title: '装备属性', content: '攻击力: +120\n防御力: +80\n暴击率: 15%' },
-            { title: '技能列表', content: '火焰斩, 冰霜打击, 治愈术' },
-        ],
-    }));
-    yy += 120;
-
-    // ── Tree ──
-    sectionLabel('Tree', col3X, yy);
-    yy += 28;
-    add(new L2_Tree(col3X, yy, 220, 110, {
-        data: [
-            { label: '背包', expanded: true, children: [
-                { label: '武器', children: [{ label: '火焰剑' }, { label: '冰霜弓' }] },
-                { label: '防具', children: [{ label: '钢铁盔甲' }] },
-            ]},
-            { label: '仓库', children: [{ label: '材料' }, { label: '宝石' }] },
-        ],
-    }));
-    yy += 118;
-
-    // ── Card ──
-    add(new L2_Card(col3X, yy, 220, 80, { title: '任务卡', body: '击败10个史莱姆\n奖励: 500金币, 200经验' }));
-    yy += 88;
-
-    // ═══ COLUMN 4: Feedback + Misc ═══
-    var col4X = 770;
-    yy = 20;
-
-    sectionLabel('Feedback', col4X, yy);
-    yy += 30;
-
-    // Alerts
-    add(new L2_Alert(col4X, yy, 230, { type: 'info', message: '信息提示' }));
-    yy += 38;
-    add(new L2_Alert(col4X, yy, 230, { type: 'success', message: '操作成功' }));
-    yy += 38;
-    add(new L2_Alert(col4X, yy, 230, { type: 'warning', title: '警告', message: '库存不足' }));
-    yy += 58;
-    add(new L2_Alert(col4X, yy, 230, { type: 'error', message: '连接失败', closable: true }));
-    yy += 42;
-
-    // Empty
-    add(new L2_Empty(col4X, yy, 230, { text: '暂无数据' }));
-    yy += 58;
-
-    // Loading
-    add(new L2_Loading(col4X, yy, { text: '加载中...' }));
-    yy += 40;
-
-    // Buttons to trigger feedback
-    sectionLabel('Interactive', col4X, yy);
-    yy += 30;
-
-    add(new L2_Button(col4X, yy, '弹窗Dialog', {
-        type: 'primary',
-        onClick: function () {
-            L2_Dialog.confirm('确认操作', '你确定要删除这个物品吗？\n此操作不可撤销。', function () {
-                L2_Message.success('已删除');
+            // Update and render all UI objects
+            uiObjects.forEach(function(obj) {
+                renderObject(obj, 0, 0);
             });
+            
+            // Update FPS
+            frameCount++;
+            const now = performance.now();
+            if (now - lastTime >= 1000) {
+                document.getElementById('fps').textContent = frameCount;
+                frameCount = 0;
+                lastTime = now;
+            }
+            
+            document.getElementById('objectCount').textContent = uiObjects.length;
+
+            // Frame lifecycle: clear per-frame input state
+            TouchInput._endFrame();
+
+            animationFrame = requestAnimationFrame(renderScene);
         }
-    }));
-    yy += 34;
-
-    add(new L2_Button(col4X, yy, 'Message消息', {
-        type: 'success',
-        onClick: function () {
-            L2_Message.info('这是一条信息');
-            setTimeout(function () { L2_Message.success('操作成功！'); }, 300);
-            setTimeout(function () { L2_Message.warning('注意！'); }, 600);
-            setTimeout(function () { L2_Message.error('发生错误'); }, 900);
-        }
-    }));
-    yy += 34;
-
-    add(new L2_Button(col4X, yy, 'Notification', {
-        onClick: function () {
-            L2_Notification.info('系统通知', '你获得了一件传奇装备！');
-        }
-    }));
-    yy += 34;
-
-    add(new L2_Button(col4X, yy, 'Popconfirm', {
-        type: 'danger',
-        onClick: function () {
-            add(new L2_Popconfirm(col4X + 60, yy + 14, {
-                text: '确认删除？',
-                onOk: function () { L2_Message.success('已删除'); },
-            }));
-        }
-    }));
-    yy += 34;
-
-    // Drawer button
-    var testDrawer = new L2_Drawer({ title: '抽屉面板', width: 260 });
-    add(testDrawer);
-    var drawerContent = new L2_Typography(10, testDrawer.contentY(), 240, { text: '抽屉内容区域', level: 'body' });
-    testDrawer.addContent(drawerContent);
-
-    add(new L2_Button(col4X, yy, '打开Drawer', {
-        onClick: function () { testDrawer.open(); }
-    }));
-    yy += 34;
-
-    // Tooltip test area
-    var tooltip = new L2_Tooltip();
-    add(tooltip);
-    add(new L2_Button(col4X, yy, '悬停Tooltip', {
-        _tooltipRef: tooltip,
-        type: 'text',
-    }));
-    yy += 34;
-
-    // ── SubWindow ──
-    var subWin = new L2_SubWindow(380, 420, 240, 160, { title: '子窗口 (可拖拽)' });
-    subWin.drawContent = function (bmp, cw, ch) {
-        var cy = this.contentY();
-        bmp.fontSize = L2_Theme.fontSmall;
-        bmp.textColor = L2_Theme.textWhite;
-        bmp.drawText('这是一个可拖拽的子窗口。', 8, cy, cw - 16, 20, 'left');
-        bmp.drawText('点击 X 关闭，拖拽标题栏移动。', 8, cy + 22, cw - 16, 20, 'left');
-        L2_Theme.drawBar(bmp, 8, cy + 52, cw - 16, 12, 0.6, L2_Theme.hpBg, L2_Theme.hpFill);
-    };
-    subWin.refresh();
-    add(subWin);
-
-    // ════════════════════════════════════════════════════════
-    //  Render Loop
-    // ════════════════════════════════════════════════════════
-    var mainCtx = canvas.getContext('2d');
-
-    function renderComponent(comp) {
-        if (!comp.visible) return;
-        // Render the component's contents bitmap
-        if (comp.contents && comp.contents._canvas) {
-            var dx = comp.x + (comp.padding || 0);
-            var dy = comp.y + (comp.padding || 0);
-            mainCtx.drawImage(comp.contents._canvas, dx, dy);
-        }
-        // Render children
-        if (comp.children) {
-            for (var i = 0; i < comp.children.length; i++) {
-                renderComponent(comp.children[i]);
+        
+        function drawGrid() {
+            ctx.strokeStyle = '#1a1a2e';
+            ctx.lineWidth = 1;
+            const gridSize = 20;
+            
+            for (let x = 0; x <= canvas.width; x += gridSize) {
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, canvas.height);
+                ctx.stroke();
+            }
+            
+            for (let y = 0; y <= canvas.height; y += gridSize) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(canvas.width, y);
+                ctx.stroke();
             }
         }
-    }
-
-    function gameLoop() {
-        Graphics.frameCount++;
-
-        // Update all components
-        for (var i = 0; i < window._allL2Components.length; i++) {
-            if (window._allL2Components[i].update) window._allL2Components[i].update();
-        }
-
-        // Handle tooltip for hover buttons
-        for (var j = 0; j < window._allL2Components.length; j++) {
-            var c = window._allL2Components[j];
-            if (c._tooltipRef && c.isInside && c.isInside(TouchInput.x, TouchInput.y)) {
-                c._tooltipRef.show('这是一个提示信息\nTooltip Content');
+        
+        // Mouse handling
+        canvas.addEventListener('mousemove', function(e) {
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            TouchInput.x = Math.floor((e.clientX - rect.left) * scaleX);
+            TouchInput.y = Math.floor((e.clientY - rect.top) * scaleY);
+        });
+        
+        canvas.addEventListener('mousedown', function(e) {
+            TouchInput._mousePressed = true;
+            TouchInput._triggered = true;
+            // Prevent canvas from stealing focus from hidden input (for IME support)
+            e.preventDefault();
+        });
+        
+        canvas.addEventListener('mouseup', function() {
+            TouchInput._mousePressed = false;
+        });
+        
+        canvas.addEventListener('mouseleave', function() {
+            TouchInput._mousePressed = false;
+        });
+        
+        canvas.addEventListener('wheel', function(e) {
+            TouchInput.wheelY = e.deltaY > 0 ? 1 : -1;
+            e.preventDefault();
+        }, { passive: false });
+        
+        // Component switching
+        function showComponent(name) {
+            currentComponent = name;
+            
+            // Update sidebar
+            document.querySelectorAll('.component-item').forEach(function(item) {
+                item.classList.remove('active');
+            });
+            document.querySelector('[data-component="' + name + '"]').classList.add('active');
+            
+            // Clear and render new component
+            clearCanvas();
+            document.getElementById('componentControls').innerHTML = '';
+            
+            const data = componentData[name];
+            if (data) {
+                document.getElementById('codeDisplay').innerHTML = data.code;
+                
+                // Update properties
+                let propHtml = '';
+                for (let key in data.properties) {
+                    propHtml += '<div class="property-item">' +
+                        '<span class="property-name">' + key + '</span>' +
+                        '<span class="property-value">' + data.properties[key] + '</span>' +
+                    '</div>';
+                }
+                document.getElementById('propertyList').innerHTML = propHtml;
+                
+                document.getElementById('statusText').textContent = '当前: ' + data.title;
+                
+                // Render component
+                data.render();
             }
         }
-
-        // Clear & render
-        mainCtx.clearRect(0, 0, SCREEN_W, SCREEN_H);
-        mainCtx.fillStyle = '#0D0D1A';
-        mainCtx.fillRect(0, 0, SCREEN_W, SCREEN_H);
-
-        // Draw grid bg for visual reference
-        mainCtx.strokeStyle = 'rgba(255,255,255,0.03)';
-        for (var gx = 0; gx < SCREEN_W; gx += 50) {
-            mainCtx.beginPath(); mainCtx.moveTo(gx, 0); mainCtx.lineTo(gx, SCREEN_H); mainCtx.stroke();
+        
+        // Toolbar functions
+        function resizeCanvas() {
+            const w = parseInt(document.getElementById('canvasWidth').value) || 816;
+            const h = parseInt(document.getElementById('canvasHeight').value) || 624;
+            canvas.width = w;
+            canvas.height = h;
+            Graphics.boxWidth = w;
+            Graphics.boxHeight = h;
+            showComponent(currentComponent);
         }
-        for (var gy = 0; gy < SCREEN_H; gy += 50) {
-            mainCtx.beginPath(); mainCtx.moveTo(0, gy); mainCtx.lineTo(SCREEN_W, gy); mainCtx.stroke();
+        
+        function setZoom() {
+            const zoom = document.getElementById('zoomLevel').value;
+            canvas.style.transform = 'scale(' + zoom + ')';
         }
-
-        for (var k = 0; k < window._allL2Components.length; k++) {
-            renderComponent(window._allL2Components[k]);
+        
+        function toggleGrid() {
+            showGridLines = !showGridLines;
         }
-
-        // Reset per-frame input
-        TouchInput.wheelY = 0;
-
-        requestAnimationFrame(gameLoop);
-    }
-
-    gameLoop();
-})();
-</script>
+        
+        function clearCanvasToolbar() {
+            showComponent(currentComponent);
+        }
+        
+        function switchTheme(theme) {
+            logEvent('Theme switched to: ' + theme);
+        }
+        
+        function exportCode() {
+            const data = componentData[currentComponent];
+            if (data) {
+                const text = data.code.replace(/<[^>]+>/g, '');
+                navigator.clipboard.writeText(text).then(function() {
+                    logEvent('Code copied to clipboard');
+                });
+            }
+        }
+        
+        // Dialog helpers
+        function showAlert() {
+            clearCanvas();
+            const dlg = L2_Dialog.alert('提示', '这是一个警告对话框！', function() {
+                logEvent('Alert confirmed');
+            });
+            addToScene(dlg);
+        }
+        
+        function showConfirm() {
+            clearCanvas();
+            const dlg = L2_Dialog.confirm('确认', '确定要执行此操作吗？', function() {
+                logEvent('Confirmed!');
+            }, function() {
+                logEvent('Cancelled!');
+            });
+            addToScene(dlg);
+        }
+        
+        function showCustom() {
+            clearCanvas();
+            const dlg = new L2_Dialog({
+                title: '自定义对话框',
+                content: '这是一个带有自定义按钮的对话框示例。\n\n你可以在这里添加多行文本内容。',
+                width: 400,
+                buttons: [
+                    { text: '保存', type: 'primary', onClick: function() { logEvent('Save clicked'); dlg.close(); } },
+                    { text: '取消', type: 'default', onClick: function() { dlg.close(); } },
+                    { text: '删除', type: 'danger', onClick: function() { logEvent('Delete clicked'); dlg.close(); } }
+                ],
+                onClose: function() {
+                    logEvent('Dialog closed');
+                }
+            });
+            addToScene(dlg);
+        }
+        
+        // Event logging
+        function logEvent(message) {
+            const log = document.getElementById('eventLog');
+            const time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+            const entry = document.createElement('div');
+            entry.className = 'property-item';
+            entry.innerHTML = '<span style="color: #4488ff;">[' + time + ']</span> <span>' + message + '</span>';
+            log.insertBefore(entry, log.firstChild);
+            
+            // Keep only last 20 entries
+            while (log.children.length > 20) {
+                log.removeChild(log.lastChild);
+            }
+        }
+        
+        // Initialize
+        window.addEventListener('load', function() {
+            renderScene();
+            showComponent('typography');
+        });
+    </script>
 </body>
 </html>
