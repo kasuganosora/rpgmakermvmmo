@@ -57,6 +57,7 @@ const (
 	CmdPlaySE           = 250
 	CmdStopSE           = 251
 	CmdPlayME           = 249
+	CmdWaitForMoveRoute = 209
 	CmdShowPicture      = 231
 	CmdMovePicture      = 232
 	CmdRotatePicture    = 233
@@ -348,26 +349,93 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 			e.sendEffect(s, cmd)
 
 		case CmdSetMoveRoute:
-			// Move route — forward to client for rendering.
+			// Forward to client for rendering.
 			e.sendEffect(s, cmd)
-			// Skip any continuation lines (code 505).
+			// Skip continuation lines (505).
 			for i+1 < len(cmds) && cmds[i+1] != nil && cmds[i+1].Code == CmdMoveRouteCont {
 				i++
+			}
+			// If the move route has wait=true, estimate duration and wait.
+			if len(cmd.Parameters) > 1 {
+				if mr, ok := cmd.Parameters[1].(map[string]interface{}); ok {
+					if w, ok := mr["wait"]; ok && asBool(w) {
+						frames := estimateMoveRouteFrames(mr)
+						e.waitFrames(ctx, frames)
+					}
+				}
 			}
 
 		case CmdMoveRouteCont:
 			// Already consumed by CmdSetMoveRoute — skip.
 
-		case CmdFadeout, CmdFadein, CmdTintScreen, CmdFlashScreen, CmdShakeScreen, CmdScreenEffect:
-			// Screen effects — forward to client.
+		case CmdWaitForMoveRoute:
+			// Wait for the last move route to complete.
+			// Use a generous default since we don't track client state.
+			e.waitFrames(ctx, 60)
+
+		case CmdFadeout:
+			// Fadeout always waits for completion in RMMV.
+			e.sendEffect(s, cmd)
+			frames := paramInt(cmd.Parameters, 0)
+			if frames <= 0 {
+				frames = 30
+			}
+			e.waitFrames(ctx, frames)
+
+		case CmdFadein:
+			// Fadein always waits for completion in RMMV.
+			e.sendEffect(s, cmd)
+			frames := paramInt(cmd.Parameters, 0)
+			if frames <= 0 {
+				frames = 30
+			}
+			e.waitFrames(ctx, frames)
+
+		case CmdTintScreen:
+			e.sendEffect(s, cmd)
+			// Wait if params[2] is true.
+			if len(cmd.Parameters) > 2 && asBool(cmd.Parameters[2]) {
+				frames := paramInt(cmd.Parameters, 1)
+				if frames > 0 {
+					e.waitFrames(ctx, frames)
+				}
+			}
+
+		case CmdFlashScreen:
+			e.sendEffect(s, cmd)
+			// Wait if params[2] is true.
+			if len(cmd.Parameters) > 2 && asBool(cmd.Parameters[2]) {
+				frames := paramInt(cmd.Parameters, 1)
+				if frames > 0 {
+					e.waitFrames(ctx, frames)
+				}
+			}
+
+		case CmdShakeScreen:
+			e.sendEffect(s, cmd)
+			// Wait if params[3] is true.
+			if len(cmd.Parameters) > 3 && asBool(cmd.Parameters[3]) {
+				frames := paramInt(cmd.Parameters, 2)
+				if frames > 0 {
+					e.waitFrames(ctx, frames)
+				}
+			}
+
+		case CmdScreenEffect:
 			e.sendEffect(s, cmd)
 
 		case CmdPlayBGM, CmdStopBGM, CmdPlayBGS, CmdStopBGS, CmdPlaySE, CmdStopSE, CmdPlayME:
 			// Audio — forward to client.
 			e.sendEffect(s, cmd)
 
-		case CmdShowPicture, CmdMovePicture, CmdRotatePicture, CmdTintPicture, CmdErasePicture:
-			// Picture commands — forward to client for rendering.
+		case CmdShowPicture:
+			// Resolve variable-based coordinates before forwarding.
+			e.sendShowPicture(s, cmd.Parameters, opts)
+
+		case CmdMovePicture:
+			e.sendMovePicture(ctx, s, cmd.Parameters, opts)
+
+		case CmdRotatePicture, CmdTintPicture, CmdErasePicture:
 			e.sendEffect(s, cmd)
 
 		case CmdShowAnimation, CmdShowBalloon:
@@ -1197,4 +1265,134 @@ func paramList(params []interface{}, idx int) []string {
 		}
 	}
 	return result
+}
+
+// estimateMoveRouteFrames estimates how many frames a move route will take.
+// Each move/turn command ~16 frames at normal speed, wait commands add their duration.
+func estimateMoveRouteFrames(mr map[string]interface{}) int {
+	listRaw, ok := mr["list"]
+	if !ok {
+		return 30
+	}
+	list, ok := listRaw.([]interface{})
+	if !ok || len(list) == 0 {
+		return 30
+	}
+	frames := 0
+	for _, item := range list {
+		cmd, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		codeRaw, _ := cmd["code"]
+		code := 0
+		if f, ok := codeRaw.(float64); ok {
+			code = int(f)
+		}
+		switch {
+		case code >= 1 && code <= 14:
+			// Move/jump commands: ~16 frames each at normal speed.
+			frames += 16
+		case code == 15:
+			// Wait command: params[0] = frames to wait.
+			if params, ok := cmd["parameters"].([]interface{}); ok && len(params) > 0 {
+				if f, ok := params[0].(float64); ok {
+					frames += int(f)
+				}
+			}
+		case code >= 16 && code <= 44:
+			// Turn/speed/other commands: near instant.
+			frames += 2
+		}
+	}
+	if frames < 10 {
+		frames = 10
+	}
+	return frames
+}
+
+// asBool converts an interface{} to bool (handles JSON booleans, numbers, strings).
+func asBool(v interface{}) bool {
+	switch val := v.(type) {
+	case bool:
+		return val
+	case float64:
+		return val != 0
+	case int:
+		return val != 0
+	case string:
+		return val == "true" || val == "1"
+	}
+	return false
+}
+
+// waitFrames waits for N frames (at 60fps) or until context is cancelled.
+func (e *Executor) waitFrames(ctx context.Context, frames int) {
+	if frames <= 0 {
+		return
+	}
+	wait := time.Duration(frames) * time.Second / 60
+	select {
+	case <-time.After(wait):
+	case <-ctx.Done():
+	}
+}
+
+// sendShowPicture resolves variable-based coordinates and forwards Show Picture.
+// RMMV params: [pictureId, name, origin, directDesignation, x, y, scaleX, scaleY, opacity, blendMode]
+// If params[3] == 1, x/y come from game variables instead of direct values.
+func (e *Executor) sendShowPicture(s *player.PlayerSession, params []interface{}, opts *ExecuteOpts) {
+	resolved := make([]interface{}, len(params))
+	copy(resolved, params)
+
+	designation := paramInt(params, 3)
+	if designation == 1 && opts != nil && opts.GameState != nil {
+		// Variable-based: params[4] = varID for X, params[5] = varID for Y
+		varX := paramInt(params, 4)
+		varY := paramInt(params, 5)
+		if len(resolved) > 4 {
+			resolved[4] = float64(opts.GameState.GetVariable(varX))
+		}
+		if len(resolved) > 5 {
+			resolved[5] = float64(opts.GameState.GetVariable(varY))
+		}
+		// Mark as direct designation so client doesn't try to resolve again.
+		if len(resolved) > 3 {
+			resolved[3] = float64(0)
+		}
+	}
+
+	e.sendEffect(s, &resource.EventCommand{Code: CmdShowPicture, Parameters: resolved})
+}
+
+// sendMovePicture resolves variable coordinates and handles wait.
+// RMMV params: [pictureId, origin, directDesignation, x, y, scaleX, scaleY, opacity, blendMode, duration, wait]
+func (e *Executor) sendMovePicture(ctx context.Context, s *player.PlayerSession, params []interface{}, opts *ExecuteOpts) {
+	resolved := make([]interface{}, len(params))
+	copy(resolved, params)
+
+	designation := paramInt(params, 2)
+	if designation == 1 && opts != nil && opts.GameState != nil {
+		varX := paramInt(params, 3)
+		varY := paramInt(params, 4)
+		if len(resolved) > 3 {
+			resolved[3] = float64(opts.GameState.GetVariable(varX))
+		}
+		if len(resolved) > 4 {
+			resolved[4] = float64(opts.GameState.GetVariable(varY))
+		}
+		if len(resolved) > 2 {
+			resolved[2] = float64(0)
+		}
+	}
+
+	e.sendEffect(s, &resource.EventCommand{Code: CmdMovePicture, Parameters: resolved})
+
+	// Wait if params[10] is true.
+	if len(params) > 10 && asBool(params[10]) {
+		frames := paramInt(params, 9)
+		if frames > 0 {
+			e.waitFrames(ctx, frames)
+		}
+	}
 }
