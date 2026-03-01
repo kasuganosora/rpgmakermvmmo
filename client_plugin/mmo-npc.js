@@ -350,17 +350,20 @@
         $MMO._npcDialogPending = true;
         var face = data.face || '';
         var faceIndex = data.face_index || 0;
+        var background = data.background != null ? data.background : 0;
+        var positionType = data.position_type != null ? data.position_type : 2;
         var lines = data.lines || [];
 
         // Ensure we're on Scene_Map before showing dialog
         if (!(SceneManager._scene instanceof Scene_Map)) {
             console.warn('[MMO-NPC] Received npc_dialog but not on Scene_Map, queueing');
-            // Queue the dialog for when we enter the map
             $MMO._queuedDialog = data;
             return;
         }
 
         $gameMessage.setFaceImage(face, faceIndex);
+        $gameMessage.setBackground(background);
+        $gameMessage.setPositionType(positionType);
         for (var i = 0; i < lines.length; i++) {
             $gameMessage.add(lines[i]);
         }
@@ -381,9 +384,27 @@
             $MMO._npcDialogActive = true;
             $MMO._npcDialogPending = true;
             $gameMessage.setFaceImage(data.face || '', data.face_index || 0);
+            $gameMessage.setBackground(data.background != null ? data.background : 0);
+            $gameMessage.setPositionType(data.position_type != null ? data.position_type : 2);
             var lines = data.lines || [];
             for (var i = 0; i < lines.length; i++) {
                 $gameMessage.add(lines[i]);
+            }
+            // If queued data also has choices (npc_dialog_choices), set them up too.
+            if (data.choices && data.choices.length > 0) {
+                if (!$gameMessage.hasText()) $gameMessage.add('');
+                var cd = data.choice_default || 0;
+                var cc = data.choice_cancel != null ? data.choice_cancel : -1;
+                $gameMessage.setChoices(data.choices, cd, cc);
+                if ($gameMessage.setChoicePositionType) {
+                    $gameMessage.setChoicePositionType(data.choice_position != null ? data.choice_position : 2);
+                }
+                if ($gameMessage.setChoiceBackground) {
+                    $gameMessage.setChoiceBackground(data.choice_background || 0);
+                }
+                $gameMessage.setChoiceCallback(function (index) {
+                    $MMO.send('npc_choice_reply', { choice_index: index });
+                });
             }
         }
     };
@@ -395,8 +416,14 @@
         $MMO._npcDialogActive = true;
         var face = data.face || '';
         var faceIndex = data.face_index || 0;
+        var background = data.background != null ? data.background : 0;
+        var positionType = data.position_type != null ? data.position_type : 2;
         var lines = data.lines || [];
         var choices = data.choices || [];
+        var choiceDefault = data.choice_default || 0;
+        var choiceCancel = data.choice_cancel != null ? data.choice_cancel : -1;
+        var choicePosition = data.choice_position != null ? data.choice_position : 2;
+        var choiceBg = data.choice_background || 0;
 
         if (!(SceneManager._scene instanceof Scene_Map)) {
             $MMO._queuedDialog = data;
@@ -404,13 +431,21 @@
         }
 
         $gameMessage.setFaceImage(face, faceIndex);
+        $gameMessage.setBackground(background);
+        $gameMessage.setPositionType(positionType);
         for (var i = 0; i < lines.length; i++) {
             $gameMessage.add(lines[i]);
         }
         if (!$gameMessage.hasText()) {
             $gameMessage.add('');
         }
-        $gameMessage.setChoices(choices, 0, -1);
+        $gameMessage.setChoices(choices, choiceDefault, choiceCancel);
+        if ($gameMessage.setChoicePositionType) {
+            $gameMessage.setChoicePositionType(choicePosition);
+        }
+        if ($gameMessage.setChoiceBackground) {
+            $gameMessage.setChoiceBackground(choiceBg);
+        }
         $gameMessage.setChoiceCallback(function (index) {
             $MMO.send('npc_choice_reply', { choice_index: index });
         });
@@ -420,14 +455,22 @@
         if (!data || !data.choices) return;
         $MMO._npcDialogActive = true;
         var choices = data.choices;
+        var choiceDefault = data.default_type || 0;
+        var choiceCancel = data.cancel_type != null ? data.cancel_type : -1;
+        var choicePosition = data.position_type != null ? data.position_type : 2;
+        var choiceBg = data.background || 0;
 
         // RMMV requires at least one text line to trigger the message window.
-        // If no text is currently pending, add an empty line so the choice
-        // window actually appears.
         if (!$gameMessage.hasText()) {
             $gameMessage.add('');
         }
-        $gameMessage.setChoices(choices, 0, -1);
+        $gameMessage.setChoices(choices, choiceDefault, choiceCancel);
+        if ($gameMessage.setChoicePositionType) {
+            $gameMessage.setChoicePositionType(choicePosition);
+        }
+        if ($gameMessage.setChoiceBackground) {
+            $gameMessage.setChoiceBackground(choiceBg);
+        }
         $gameMessage.setChoiceCallback(function (index) {
             $MMO.send('npc_choice_reply', { choice_index: index });
         });

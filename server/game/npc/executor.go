@@ -26,9 +26,15 @@ const (
 	CmdWhenCancel       = 403 // choice cancel branch
 	CmdBranchEnd        = 404 // end of choice/conditional block
 	CmdConditionalStart = 111
+	CmdLoop             = 112
+	CmdBreakLoop        = 113
+	CmdExitEvent        = 115
 	CmdCallCommonEvent  = 117
+	CmdLabel            = 118
+	CmdJumpToLabel      = 119
 	CmdElseBranch       = 411
 	CmdConditionalEnd   = 412
+	CmdRepeatAbove      = 413
 	CmdChangeSwitches   = 121
 	CmdChangeVars       = 122
 	CmdChangeSelfSwitch = 123
@@ -180,6 +186,8 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 			var lines []string
 			face := paramStr(cmd.Parameters, 0)
 			faceIndex := paramInt(cmd.Parameters, 1)
+			background := paramInt(cmd.Parameters, 2)   // 0=window, 1=dim, 2=transparent
+			positionType := paramInt(cmd.Parameters, 3)  // 0=top, 1=middle, 2=bottom
 			for i+1 < len(cmds) && cmds[i+1] != nil && cmds[i+1].Code == CmdShowTextLine {
 				i++
 				lines = append(lines, paramStr(cmds[i].Parameters, 0))
@@ -191,7 +199,17 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 				choicesCmd := cmds[i]
 				choices := paramList(choicesCmd.Parameters, 0)
 				cancelType := paramInt(choicesCmd.Parameters, 1)
-				e.sendDialogWithChoices(s, face, faceIndex, lines, choices)
+				choiceDefault := paramInt(choicesCmd.Parameters, 2)
+				choicePosition := 2 // default=right
+				if len(choicesCmd.Parameters) > 3 {
+					choicePosition = paramInt(choicesCmd.Parameters, 3)
+				}
+				choiceBg := 0 // default=window
+				if len(choicesCmd.Parameters) > 4 {
+					choiceBg = paramInt(choicesCmd.Parameters, 4)
+				}
+				e.sendDialogWithChoices(s, face, faceIndex, background, positionType, lines,
+					choices, choiceDefault, cancelType, choicePosition, choiceBg)
 
 				choiceIdx := e.waitForChoice(ctx, s)
 				if choiceIdx < 0 {
@@ -199,7 +217,7 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 				}
 				i = e.skipToChoiceBranch(cmds, i, choiceIdx, cancelType)
 			} else {
-				e.sendDialog(s, face, faceIndex, lines)
+				e.sendDialog(s, face, faceIndex, background, positionType, lines)
 				if !e.waitForDialogAck(ctx, s) {
 					return true
 				}
@@ -208,7 +226,16 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 		case CmdShowChoices:
 			choices := paramList(cmd.Parameters, 0)
 			cancelType := paramInt(cmd.Parameters, 1) // -1=disallow, 0-N=branch index
-			e.sendChoices(s, choices)
+			choiceDefault := paramInt(cmd.Parameters, 2)
+			choicePosition := 2
+			if len(cmd.Parameters) > 3 {
+				choicePosition = paramInt(cmd.Parameters, 3)
+			}
+			choiceBg := 0
+			if len(cmd.Parameters) > 4 {
+				choiceBg = paramInt(cmd.Parameters, 4)
+			}
+			e.sendChoices(s, choices, choiceDefault, cancelType, choicePosition, choiceBg)
 
 			// Wait for player's choice reply.
 			choiceIdx := e.waitForChoice(ctx, s)
@@ -241,6 +268,33 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 
 		case CmdConditionalEnd:
 			// Normal flow — continue.
+
+		case CmdLoop:
+			// Loop start marker. Nothing to do here; the loop body follows.
+			// RepeatAbove (413) jumps back to the command after this Loop.
+
+		case CmdRepeatAbove:
+			// Jump back to the matching Loop (112) at the same indent.
+			i = e.jumpToLoopStart(cmds, i, cmd.Indent)
+
+		case CmdBreakLoop:
+			// Exit the current loop: skip to the command after RepeatAbove (413).
+			i = e.skipPastLoopEnd(cmds, i, cmd.Indent)
+
+		case CmdExitEvent:
+			// Stop event execution entirely.
+			return true
+
+		case CmdLabel:
+			// Label marker — labels are targets for JumpToLabel, no action needed.
+
+		case CmdJumpToLabel:
+			labelName := paramStr(cmd.Parameters, 0)
+			jumped := e.jumpToLabel(cmds, labelName)
+			if jumped >= 0 {
+				i = jumped
+			}
+			// If label not found, continue (RMMV behavior).
 
 		case CmdCallCommonEvent:
 			ceID := paramInt(cmd.Parameters, 0)
@@ -419,28 +473,40 @@ func (e *Executor) ExecuteEventByID(ctx context.Context, s *player.PlayerSession
 
 // ---- dialog helpers ----
 
-func (e *Executor) sendDialog(s *player.PlayerSession, faceName string, faceIndex int, lines []string) {
+func (e *Executor) sendDialog(s *player.PlayerSession, faceName string, faceIndex, background, positionType int, lines []string) {
 	payload, _ := json.Marshal(map[string]interface{}{
-		"face":       faceName,
-		"face_index": faceIndex,
-		"lines":      lines,
+		"face":          faceName,
+		"face_index":    faceIndex,
+		"background":    background,
+		"position_type": positionType,
+		"lines":         lines,
 	})
 	s.Send(&player.Packet{Type: "npc_dialog", Payload: payload})
 }
 
-func (e *Executor) sendChoices(s *player.PlayerSession, choices []string) {
+func (e *Executor) sendChoices(s *player.PlayerSession, choices []string, defaultType, cancelType, positionType, background int) {
 	payload, _ := json.Marshal(map[string]interface{}{
-		"choices": choices,
+		"choices":       choices,
+		"default_type":  defaultType,
+		"cancel_type":   cancelType,
+		"position_type": positionType,
+		"background":    background,
 	})
 	s.Send(&player.Packet{Type: "npc_choices", Payload: payload})
 }
 
-func (e *Executor) sendDialogWithChoices(s *player.PlayerSession, faceName string, faceIndex int, lines []string, choices []string) {
+func (e *Executor) sendDialogWithChoices(s *player.PlayerSession, faceName string, faceIndex, background, positionType int, lines []string, choices []string, choiceDefault, choiceCancel, choicePosition, choiceBg int) {
 	payload, _ := json.Marshal(map[string]interface{}{
-		"face":       faceName,
-		"face_index": faceIndex,
-		"lines":      lines,
-		"choices":    choices,
+		"face":             faceName,
+		"face_index":       faceIndex,
+		"background":       background,
+		"position_type":    positionType,
+		"lines":            lines,
+		"choices":          choices,
+		"choice_default":   choiceDefault,
+		"choice_cancel":    choiceCancel,
+		"choice_position":  choicePosition,
+		"choice_background": choiceBg,
 	})
 	s.Send(&player.Packet{Type: "npc_dialog_choices", Payload: payload})
 }
@@ -567,6 +633,56 @@ func (e *Executor) skipToConditionalEnd(cmds []*resource.EventCommand, startIdx,
 		}
 	}
 	return len(cmds) - 1
+}
+
+// jumpToLoopStart scans backward from RepeatAbove (413) to find the matching
+// Loop (112) at the same indent. Returns the index of the Loop command so the
+// next iteration starts at the command after it.
+func (e *Executor) jumpToLoopStart(cmds []*resource.EventCommand, startIdx, indent int) int {
+	for j := startIdx - 1; j >= 0; j-- {
+		c := cmds[j]
+		if c == nil {
+			continue
+		}
+		if c.Code == CmdLoop && c.Indent == indent {
+			return j // will be incremented by the for-loop, starting at Loop+1
+		}
+	}
+	// Loop start not found — stay at current position (shouldn't happen).
+	return startIdx
+}
+
+// skipPastLoopEnd scans forward from BreakLoop (113) to find the matching
+// RepeatAbove (413) at the same indent, then returns that index so execution
+// continues after the loop.
+func (e *Executor) skipPastLoopEnd(cmds []*resource.EventCommand, startIdx, indent int) int {
+	for j := startIdx + 1; j < len(cmds); j++ {
+		c := cmds[j]
+		if c == nil {
+			continue
+		}
+		if c.Code == CmdRepeatAbove && c.Indent == indent {
+			return j // for-loop increments i, so next command is after RepeatAbove
+		}
+	}
+	return len(cmds) - 1
+}
+
+// jumpToLabel scans the entire command list for a Label (118) with the given name.
+// Returns the label's index, or -1 if not found.
+func (e *Executor) jumpToLabel(cmds []*resource.EventCommand, labelName string) int {
+	for j := 0; j < len(cmds); j++ {
+		c := cmds[j]
+		if c == nil {
+			continue
+		}
+		if c.Code == CmdLabel && len(c.Parameters) > 0 {
+			if paramStr(c.Parameters, 0) == labelName {
+				return j
+			}
+		}
+	}
+	return -1
 }
 
 // ---- conditional evaluation ----
