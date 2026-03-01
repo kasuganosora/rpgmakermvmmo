@@ -638,41 +638,26 @@ func (e *Executor) sendDialogEnd(s *player.PlayerSession) {
 
 // ---- dialog/choice waiting ----
 
-const dialogAckTimeout = 60 * time.Second
-const choiceTimeout = 5 * time.Minute
-
-// waitForDialogAck blocks until the client acknowledges the dialog or context expires.
-// Returns false on timeout/cancel/session closed.
+// waitForDialogAck blocks until the client acknowledges the dialog.
+// Only aborts on disconnect (s.Done) or context cancellation — no fixed timeout.
 func (e *Executor) waitForDialogAck(ctx context.Context, s *player.PlayerSession) bool {
-	timer := time.NewTimer(dialogAckTimeout)
-	defer timer.Stop()
 	select {
 	case <-s.DialogAckCh:
 		return true
 	case <-s.Done:
-		// Session closed (player disconnected)
-		return false
-	case <-timer.C:
-		e.logger.Warn("dialog ack timeout", zap.Int64("char_id", s.CharID))
 		return false
 	case <-ctx.Done():
 		return false
 	}
 }
 
-// waitForChoice blocks until the player sends a choice reply or context expires.
-// Returns -1 on timeout/cancel/session closed.
+// waitForChoice blocks until the player sends a choice reply.
+// Only aborts on disconnect (s.Done) or context cancellation — no fixed timeout.
 func (e *Executor) waitForChoice(ctx context.Context, s *player.PlayerSession) int {
-	timer := time.NewTimer(choiceTimeout)
-	defer timer.Stop()
 	select {
 	case idx := <-s.ChoiceCh:
 		return idx
 	case <-s.Done:
-		// Session closed (player disconnected)
-		return -1
-	case <-timer.C:
-		e.logger.Warn("choice timeout", zap.Int64("char_id", s.CharID))
 		return -1
 	case <-ctx.Done():
 		return -1
