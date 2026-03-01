@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -193,6 +194,8 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 				i++
 				lines = append(lines, paramStr(cmds[i].Parameters, 0))
 			}
+			// Resolve text escape codes (\N[n], \V[n], \P[n]) server-side.
+			lines = e.resolveDialogLines(lines, s, opts)
 
 			// RMMV: if text is immediately followed by choices, show together.
 			if i+1 < len(cmds) && cmds[i+1] != nil && cmds[i+1].Code == CmdShowChoices {
@@ -209,6 +212,7 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 				if len(choicesCmd.Parameters) > 4 {
 					choiceBg = paramInt(choicesCmd.Parameters, 4)
 				}
+				choices = e.resolveChoices(choices, s, opts)
 				e.sendDialogWithChoices(s, face, faceIndex, background, positionType, lines,
 					choices, choiceDefault, cancelType, choicePosition, choiceBg)
 
@@ -226,6 +230,7 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 
 		case CmdShowChoices:
 			choices := paramList(cmd.Parameters, 0)
+			choices = e.resolveChoices(choices, s, opts)
 			cancelType := paramInt(cmd.Parameters, 1) // -1=disallow, 0-N=branch index
 			choiceDefault := paramInt(cmd.Parameters, 2)
 			choicePosition := 2
@@ -349,8 +354,8 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 			e.sendEffect(s, cmd)
 
 		case CmdSetMoveRoute:
-			// Forward to client for rendering.
-			e.sendEffect(s, cmd)
+			// Resolve charId=0 ("this event") to actual event ID before forwarding.
+			e.sendMoveRoute(s, cmd, opts)
 			// Skip continuation lines (505).
 			for i+1 < len(cmds) && cmds[i+1] != nil && cmds[i+1].Code == CmdMoveRouteCont {
 				i++
@@ -439,8 +444,16 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 			e.sendEffect(s, cmd)
 
 		case CmdShowAnimation, CmdShowBalloon:
-			// Show Animation / Balloon Icon — forward to client.
-			e.sendEffect(s, cmd)
+			// Show Animation / Balloon Icon — resolve charId=0 to event ID.
+			charID := paramInt(cmd.Parameters, 0)
+			if charID == 0 && opts != nil && opts.EventID > 0 {
+				resolved := make([]interface{}, len(cmd.Parameters))
+				copy(resolved, cmd.Parameters)
+				resolved[0] = float64(opts.EventID)
+				e.sendEffect(s, &resource.EventCommand{Code: cmd.Code, Parameters: resolved})
+			} else {
+				e.sendEffect(s, cmd)
+			}
 
 		case CmdEraseEvent:
 			// Erase Event — forward to client (make event temporarily invisible).
@@ -477,7 +490,9 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 			e.sendEffect(s, cmd)
 
 		case CmdChangeName:
-			// Change Actor Name — forward to client.
+			// Change Actor Name — if setting actor 1 or 101 name, this is the
+			// protagonist name change. The player's CharName is already set at
+			// character creation, so just forward to client.
 			e.sendEffect(s, cmd)
 
 		case CmdChangeClass:
@@ -1363,6 +1378,95 @@ func (e *Executor) sendShowPicture(s *player.PlayerSession, params []interface{}
 	}
 
 	e.sendEffect(s, &resource.EventCommand{Code: CmdShowPicture, Parameters: resolved})
+}
+
+// sendMoveRoute resolves charId=0 ("this event") to the actual event ID
+// before forwarding the move route to the client.
+func (e *Executor) sendMoveRoute(s *player.PlayerSession, cmd *resource.EventCommand, opts *ExecuteOpts) {
+	charID := paramInt(cmd.Parameters, 0)
+	if charID == 0 && opts != nil && opts.EventID > 0 {
+		// Replace "this event" with the actual event ID so the client
+		// can find the correct NPC sprite.
+		resolved := make([]interface{}, len(cmd.Parameters))
+		copy(resolved, cmd.Parameters)
+		resolved[0] = float64(opts.EventID)
+		e.sendEffect(s, &resource.EventCommand{Code: CmdSetMoveRoute, Parameters: resolved})
+		return
+	}
+	e.sendEffect(s, cmd)
+}
+
+// ---- text escape code resolution ----
+
+// textCodeRe matches RMMV text escape codes: \N[n], \V[n], \P[n] (case-insensitive).
+// Also matches \C[n], \I[n], etc. but we only resolve N, V, P server-side.
+var textCodeRe = regexp.MustCompile(`(?i)\\([NVP])\[(\d+)\]`)
+
+// resolveTextCodes replaces RMMV text escape codes in dialog text:
+//   - \N[n] → Actor name (Actor 1 = player name in MMO)
+//   - \V[n] → Game variable value
+//   - \P[n] → Party member name (in MMO, P[1] = player)
+func (e *Executor) resolveTextCodes(text string, s *player.PlayerSession, opts *ExecuteOpts) string {
+	return textCodeRe.ReplaceAllStringFunc(text, func(match string) string {
+		sub := textCodeRe.FindStringSubmatch(match)
+		if len(sub) < 3 {
+			return match
+		}
+		code := strings.ToUpper(sub[1])
+		id, err := strconv.Atoi(sub[2])
+		if err != nil {
+			return match
+		}
+
+		switch code {
+		case "N":
+			// \N[n] = Actor name. In MMO, Actor 1 maps to the player.
+			// Also, any actor whose name matches the "protagonist placeholder"
+			// pattern should resolve to player name.
+			if id == 1 || id == 101 {
+				// Primary protagonist actor IDs → player's character name.
+				return s.CharName
+			}
+			// Try to look up from resource data.
+			if e.res != nil && id > 0 && id < len(e.res.Actors) && e.res.Actors[id] != nil {
+				return e.res.Actors[id].Name
+			}
+			return match
+
+		case "V":
+			// \V[n] = Game variable value.
+			if opts != nil && opts.GameState != nil {
+				return strconv.Itoa(opts.GameState.GetVariable(id))
+			}
+			return "0"
+
+		case "P":
+			// \P[n] = Party member name. In MMO, party member 1 = player.
+			if id == 1 {
+				return s.CharName
+			}
+			return match
+		}
+		return match
+	})
+}
+
+// resolveDialogLines applies text escape code resolution to all dialog lines.
+func (e *Executor) resolveDialogLines(lines []string, s *player.PlayerSession, opts *ExecuteOpts) []string {
+	resolved := make([]string, len(lines))
+	for i, line := range lines {
+		resolved[i] = e.resolveTextCodes(line, s, opts)
+	}
+	return resolved
+}
+
+// resolveChoices applies text escape code resolution to choice labels.
+func (e *Executor) resolveChoices(choices []string, s *player.PlayerSession, opts *ExecuteOpts) []string {
+	resolved := make([]string, len(choices))
+	for i, choice := range choices {
+		resolved[i] = e.resolveTextCodes(choice, s, opts)
+	}
+	return resolved
 }
 
 // sendMovePicture resolves variable coordinates and handles wait.

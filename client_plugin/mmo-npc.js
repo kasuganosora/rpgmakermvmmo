@@ -557,46 +557,57 @@
         // --- Move Route (code 205) ---
         case 205:
             // params: [0]=character_id (-1=player, 0=this_event, N=event_id), [1]=moveRoute
+            // Server resolves charId=0 to actual event_id before sending.
             var charId = paramInt(p, 0);
             var moveRoute = p[1];
-            if (charId === -1 && moveRoute && $gamePlayer) {
+            if (!moveRoute) break;
+            if (charId === -1 && $gamePlayer) {
                 // Force move route on the player character.
                 $gamePlayer.forceMoveRoute(moveRoute);
+            } else if (charId > 0) {
+                // NPC move route: find the NPC sprite and apply to its character.
+                var npcSprite = NPCManager.get(charId);
+                if (npcSprite && npcSprite._character) {
+                    npcSprite._character.forceMoveRoute(moveRoute);
+                } else if (MMO_CONFIG.debug) {
+                    console.warn('[MMO-NPC] Move route: NPC sprite not found for event_id=' + charId);
+                }
             }
             break;
 
         // --- Pictures ---
         case 231: // Show Picture
             // params: [pictureId, name, origin, directDesignation?, x, y, scaleX, scaleY, opacity, blendMode]
-            // RMMV: params[3] = 0 means constant x/y at [4],[5]; params[3]=1 means variable-based
-            var picId = paramInt(p, 0);
-            var picName = (p[1] || '').toString();
-            var picOrigin = paramInt(p, 2);
-            var picX = paramInt(p, 4);
-            var picY = paramInt(p, 5);
-            var picScaleX = paramInt(p, 6) || 100;
-            var picScaleY = paramInt(p, 7) || 100;
-            var picOpacity = paramInt(p, 8) != null ? paramInt(p, 8) : 255;
-            var picBlend = paramInt(p, 9);
+            // Server already resolves variable-based coordinates (designation=1→0).
             if ($gameScreen) {
-                $gameScreen.showPicture(picId, picName, picOrigin, picX, picY,
-                    picScaleX, picScaleY, picOpacity, picBlend);
+                $gameScreen.showPicture(
+                    paramInt(p, 0),             // pictureId
+                    (p[1] || '').toString(),     // name
+                    paramInt(p, 2),             // origin
+                    paramInt(p, 4),             // x
+                    paramInt(p, 5),             // y
+                    p[6] != null ? paramInt(p, 6) : 100,   // scaleX
+                    p[7] != null ? paramInt(p, 7) : 100,   // scaleY
+                    p[8] != null ? paramInt(p, 8) : 255,   // opacity
+                    paramInt(p, 9)              // blendMode
+                );
             }
             break;
         case 232: // Move Picture
             // params: [pictureId, origin, directDesignation?, x, y, scaleX, scaleY, opacity, blendMode, duration, wait]
-            var mpId = paramInt(p, 0);
-            var mpOrigin = paramInt(p, 1);
-            var mpX = paramInt(p, 3);
-            var mpY = paramInt(p, 4);
-            var mpScaleX = paramInt(p, 5) || 100;
-            var mpScaleY = paramInt(p, 6) || 100;
-            var mpOpacity = paramInt(p, 7) != null ? paramInt(p, 7) : 255;
-            var mpBlend = paramInt(p, 8);
-            var mpDuration = paramInt(p, 9) || 1;
+            // Server already resolves variable-based coordinates.
             if ($gameScreen) {
-                $gameScreen.movePicture(mpId, mpOrigin, mpX, mpY,
-                    mpScaleX, mpScaleY, mpOpacity, mpBlend, mpDuration);
+                $gameScreen.movePicture(
+                    paramInt(p, 0),             // pictureId
+                    paramInt(p, 1),             // origin
+                    paramInt(p, 3),             // x
+                    paramInt(p, 4),             // y
+                    p[5] != null ? paramInt(p, 5) : 100,   // scaleX
+                    p[6] != null ? paramInt(p, 6) : 100,   // scaleY
+                    p[7] != null ? paramInt(p, 7) : 255,   // opacity
+                    paramInt(p, 8),             // blendMode
+                    paramInt(p, 9) || 1         // duration
+                );
             }
             break;
         case 233: // Rotate Picture
@@ -617,16 +628,26 @@
 
         // --- Show Animation / Balloon ---
         case 212: // Show Animation — [charId, animationId, wait]
-            if ($gamePlayer && $gameMap) {
-                var animChar = paramInt(p, 0) === -1 ? $gamePlayer : ($gameMap.event(paramInt(p, 0)) || $gamePlayer);
-                animChar.requestAnimation(paramInt(p, 1));
+            var animCharId = paramInt(p, 0);
+            var animTarget = null;
+            if (animCharId === -1 && $gamePlayer) {
+                animTarget = $gamePlayer;
+            } else if (animCharId > 0) {
+                var animNpc = NPCManager.get(animCharId);
+                if (animNpc) animTarget = animNpc._character;
             }
+            if (animTarget) animTarget.requestAnimation(paramInt(p, 1));
             break;
         case 213: // Show Balloon Icon — [charId, balloonId, wait]
-            if ($gamePlayer && $gameMap) {
-                var balloonChar = paramInt(p, 0) === -1 ? $gamePlayer : ($gameMap.event(paramInt(p, 0)) || $gamePlayer);
-                balloonChar.requestBalloon(paramInt(p, 1));
+            var balloonCharId = paramInt(p, 0);
+            var balloonTarget = null;
+            if (balloonCharId === -1 && $gamePlayer) {
+                balloonTarget = $gamePlayer;
+            } else if (balloonCharId > 0) {
+                var balloonNpc = NPCManager.get(balloonCharId);
+                if (balloonNpc) balloonTarget = balloonNpc._character;
             }
+            if (balloonTarget) balloonTarget.requestBalloon(paramInt(p, 1));
             break;
 
         // --- Erase Event ---
