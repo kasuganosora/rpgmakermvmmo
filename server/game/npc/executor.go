@@ -307,10 +307,10 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 			e.callCommonEvent(ctx, s, ceID, opts, depth)
 
 		case CmdChangeSwitches:
-			e.applySwitches(cmd.Parameters, opts)
+			e.applySwitches(s, cmd.Parameters, opts)
 
 		case CmdChangeVars:
-			e.applyVariables(cmd.Parameters, opts)
+			e.applyVariables(s, cmd.Parameters, opts)
 
 		case CmdChangeSelfSwitch:
 			e.applySelfSwitch(cmd.Parameters, opts)
@@ -342,12 +342,50 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 				}
 			}
 
-		case CmdScript, CmdScriptCont:
-			// Script execution placeholder — skip for now.
+		case CmdScript:
+			// Concatenate code 355 + following 655 continuation lines.
+			script := paramStr(cmd.Parameters, 0)
+			for i+1 < len(cmds) && cmds[i+1] != nil && cmds[i+1].Code == CmdScriptCont {
+				i++
+				script += "\n" + paramStr(cmds[i].Parameters, 0)
+			}
+			// Forward only individual lines that are safe visual/audio commands.
+			// Multi-line blocks can mix safe ($gameScreen.startTint) with unsafe
+			// calls (SetMapDarkness, $gameVariables.setValue), so we filter per-line.
+			var safeLines []string
+			for _, line := range strings.Split(script, "\n") {
+				trimmed := strings.TrimSpace(line)
+				if trimmed == "" {
+					continue
+				}
+				if strings.HasPrefix(trimmed, "$gameScreen.") ||
+					strings.HasPrefix(trimmed, "AudioManager.") {
+					safeLines = append(safeLines, trimmed)
+				}
+			}
+			if len(safeLines) > 0 {
+				e.sendEffect(s, &resource.EventCommand{
+					Code:       CmdScript,
+					Parameters: []interface{}{strings.Join(safeLines, "\n")},
+				})
+			}
+
+		case CmdScriptCont:
+			// Handled above as part of CmdScript; skip if encountered standalone.
 
 		case CmdPluginCommand:
 			// Check for TE_CALL_ORIGIN_EVENT (TemplateEvent.js callback to original event).
 			if e.handleTECallOriginEvent(ctx, s, cmd, opts, depth) {
+				continue
+			}
+			// Filter out standing portrait commands — they rely on complex client-side
+			// state ($gameActors._equips, toneArray, etc.) and cause visual glitches
+			// (nude portrait, wrong timing) when forwarded from the server.
+			if pluginStr := paramStr(cmd.Parameters, 0); strings.HasPrefix(pluginStr, "CallStand") ||
+				strings.HasPrefix(pluginStr, "CallCutin") ||
+				strings.HasPrefix(pluginStr, "EraceStand") ||
+				strings.HasPrefix(pluginStr, "EraceCutin") ||
+				strings.HasPrefix(pluginStr, "CallAM") {
 				continue
 			}
 			// Other plugin commands — forward to client for execution.
@@ -839,7 +877,7 @@ func (e *Executor) evaluateCondition(params []interface{}, opts *ExecuteOpts) bo
 
 // applySwitches handles RMMV ChangeSwitches (code 121).
 // Parameters: [0]=startID, [1]=endID, [2]=value (0=ON, 1=OFF)
-func (e *Executor) applySwitches(params []interface{}, opts *ExecuteOpts) {
+func (e *Executor) applySwitches(s *player.PlayerSession, params []interface{}, opts *ExecuteOpts) {
 	if opts == nil || opts.GameState == nil {
 		return
 	}
@@ -848,6 +886,8 @@ func (e *Executor) applySwitches(params []interface{}, opts *ExecuteOpts) {
 	val := paramInt(params, 2) == 0 // 0=ON
 	for id := startID; id <= endID; id++ {
 		opts.GameState.SetSwitch(id, val)
+		// Sync to client so parallel CEs read correct values.
+		e.sendSwitchChange(s, id, val)
 	}
 }
 
@@ -855,7 +895,7 @@ func (e *Executor) applySwitches(params []interface{}, opts *ExecuteOpts) {
 // Parameters: [0]=startID, [1]=endID, [2]=operation(0=set,1=add,2=sub,3=mul,4=div,5=mod),
 //
 //	[3]=operandType(0=const,1=var,2=random), [4]=operand or min, [5]=max (for random)
-func (e *Executor) applyVariables(params []interface{}, opts *ExecuteOpts) {
+func (e *Executor) applyVariables(s *player.PlayerSession, params []interface{}, opts *ExecuteOpts) {
 	if opts == nil || opts.GameState == nil {
 		return
 	}
@@ -890,7 +930,21 @@ func (e *Executor) applyVariables(params []interface{}, opts *ExecuteOpts) {
 			}
 		}
 		opts.GameState.SetVariable(id, current)
+		// Sync to client so parallel CEs read correct values.
+		e.sendVarChange(s, id, current)
 	}
+}
+
+// sendVarChange notifies the client of a variable change.
+func (e *Executor) sendVarChange(s *player.PlayerSession, id, value int) {
+	payload, _ := json.Marshal(map[string]interface{}{"id": id, "value": value})
+	s.Send(&player.Packet{Type: "var_change", Payload: payload})
+}
+
+// sendSwitchChange notifies the client of a switch change.
+func (e *Executor) sendSwitchChange(s *player.PlayerSession, id int, value bool) {
+	payload, _ := json.Marshal(map[string]interface{}{"id": id, "value": value})
+	s.Send(&player.Packet{Type: "switch_change", Payload: payload})
 }
 
 // applySelfSwitch handles RMMV ChangeSelfSwitch (code 123).

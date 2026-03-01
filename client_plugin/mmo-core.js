@@ -237,6 +237,43 @@
         // Store for late-loading HUD.
         $MMO._lastSelf = s;
 
+        // Sync player variables from server → client.
+        // Client-side parallel CEs need correct variable/switch values to
+        // compute visual effects like day/night screen tint.
+        if (data.variables && $gameVariables) {
+            var vars = data.variables;
+            for (var k in vars) {
+                if (vars.hasOwnProperty(k)) {
+                    $gameVariables._data[parseInt(k, 10)] = vars[k];
+                }
+            }
+        }
+        if (data.switches && $gameSwitches) {
+            var sw = data.switches;
+            for (var k in sw) {
+                if (sw.hasOwnProperty(k)) {
+                    $gameSwitches._data[parseInt(k, 10)] = sw[k];
+                }
+            }
+        }
+
+        // Sync equipped items to $gameActors so client-side rendering plugins
+        // (CallCutin.js, CallStand.js) see the correct equipment state.
+        // Each entry: {slot_index, item_id, kind} where kind 2=weapon, 3=armor.
+        if (data.equips && $gameActors) {
+            var actor = $gameActors.actor(1);
+            if (actor && actor._equips) {
+                for (var i = 0; i < data.equips.length; i++) {
+                    var eq = data.equips[i];
+                    var slot = eq.slot_index;
+                    if (slot >= 0 && slot < actor._equips.length) {
+                        var isWeapon = (eq.kind === 2);
+                        actor._equips[slot].setEquip(isWeapon, eq.item_id);
+                    }
+                }
+            }
+        }
+
         // Play map BGM/BGS from server data. Supplements RMMV's built-in
         // $gameMap.autoplay() to ensure correct audio even when client-side
         // map data loading hasn't completed yet.
@@ -260,6 +297,18 @@
             // Without this, same-map re-entry (re-login to same map) would
             // leave the player sprite stale from the previous session.
             $gamePlayer.refresh();
+        }
+    });
+
+    // Incremental variable/switch sync from server during gameplay.
+    $MMO.on('var_change', function (data) {
+        if ($gameVariables && data && data.id != null) {
+            $gameVariables._data[data.id] = data.value || 0;
+        }
+    });
+    $MMO.on('switch_change', function (data) {
+        if ($gameSwitches && data && data.id != null) {
+            $gameSwitches._data[data.id] = !!data.value;
         }
     });
 

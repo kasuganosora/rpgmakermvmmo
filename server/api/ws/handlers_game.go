@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"time"
 
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/battle"
@@ -435,6 +436,7 @@ func (gh *GameHandlers) EnterMapRoom(s *player.PlayerSession, mapID, x, y, dir i
 	var char model.Character
 	gold := int64(0)
 	atk, def, mat, mdf, agi, luk := 0, 0, 0, 0, 0, 0
+	var equippedItems []map[string]interface{} // slot_index → item info for client
 	if err := gh.db.First(&char, s.CharID).Error; err == nil {
 		gold = char.Gold
 		// Compute combat stats (base + class + equipment).
@@ -464,6 +466,12 @@ func (gh *GameHandlers) EnterMapRoom(s *player.PlayerSession, mapID, x, y, dir i
 				if es != nil {
 					equips = append(equips, es)
 				}
+				// Build equipped items list for client to sync $gameActors._equips.
+				equippedItems = append(equippedItems, map[string]interface{}{
+					"slot_index": inv.SlotIndex,
+					"item_id":    inv.ItemID,
+					"kind":       inv.Kind, // 2=weapon, 3=armor
+				})
 			}
 		}
 		stats := player.CalcStats(&char, gh.res, equips)
@@ -473,6 +481,9 @@ func (gh *GameHandlers) EnterMapRoom(s *player.PlayerSession, mapID, x, y, dir i
 		mdf = stats.Mdf
 		agi = stats.Agi
 		luk = stats.Luk
+	}
+	if equippedItems == nil {
+		equippedItems = []map[string]interface{}{}
 	}
 
 	// Load character skills from DB and resolve display data from resources.
@@ -510,6 +521,46 @@ func (gh *GameHandlers) EnterMapRoom(s *player.PlayerSession, mapID, x, y, dir i
 		}
 	}
 
+	// Include player variables/switches so client-side parallel CEs work correctly.
+	var varsSnap map[int]int
+	var switchSnap map[int]bool
+	if ps, err := gh.wm.PlayerStateManager().GetOrLoad(s.CharID); err == nil {
+		// Compute var[206] (time period) from var[204] (hour) server-side.
+		// CE 32 normally does this, but it requires autorun events on the map.
+		// New/starting maps (e.g. Map 20) may lack autoruns, so we compute inline.
+		hour := ps.GetVariable(204)
+		var period int
+		switch {
+		case hour < 5:
+			period = 6 // midnight
+		case hour < 7:
+			period = 1 // dawn
+		case hour < 9:
+			period = 2 // early morning
+		case hour < 17:
+			period = 3 // daytime
+		case hour < 19:
+			period = 4 // dusk
+		case hour < 22:
+			period = 5 // evening
+		default:
+			period = 6 // midnight
+		}
+		ps.SetVariable(206, period)
+
+		varsSnap = ps.VariablesSnapshot()
+		switchSnap = ps.SwitchesSnapshot()
+	}
+	// Convert to string keys for JSON (JSON requires string keys).
+	jsonVars := make(map[string]int, len(varsSnap))
+	for k, v := range varsSnap {
+		jsonVars[strconv.Itoa(k)] = v
+	}
+	jsonSwitches := make(map[string]bool, len(switchSnap))
+	for k, v := range switchSnap {
+		jsonSwitches[strconv.Itoa(k)] = v
+	}
+
 	initPayload, _ := json.Marshal(map[string]interface{}{
 		"self": map[string]interface{}{
 			"char_id":    s.CharID,
@@ -545,6 +596,9 @@ func (gh *GameHandlers) EnterMapRoom(s *player.PlayerSession, mapID, x, y, dir i
 		"drops":       []interface{}{},
 		"passability": room.PassabilitySnapshot(),
 		"audio":       mapAudio,
+		"variables":   jsonVars,
+		"switches":    jsonSwitches,
+		"equips":      equippedItems,
 	})
 	s.Send(&player.Packet{Type: "map_init", Payload: initPayload})
 

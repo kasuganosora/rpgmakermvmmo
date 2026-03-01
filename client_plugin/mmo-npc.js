@@ -719,6 +719,22 @@
             SceneManager.goto(Scene_Title);
             break;
 
+        // --- Script (code 355) ---
+        case 355:
+            // Server forwards concatenated script blocks for client evaluation.
+            // Handles visual commands like $gameScreen.startTint().
+            var scriptText = (p[0] || '').toString();
+            if (scriptText) {
+                try {
+                    eval(scriptText);
+                } catch (ex) {
+                    if (MMO_CONFIG.debug) {
+                        console.warn('[MMO-NPC] Script eval error:', ex.message, scriptText.substring(0, 100));
+                    }
+                }
+            }
+            break;
+
         // --- Plugin Command (code 356) ---
         case 356:
             // params: [0]="PluginName arg1 arg2 ..."

@@ -128,6 +128,33 @@ func (h *CharacterHandler) Create(c *gin.Context) {
 		}
 	}
 
+	// Initialize essential game variables for a new character.
+	// Mirrors the original game's CE 1 + EV156 new-game initialization:
+	//   var[204] = 18 (hour = 6 PM) → CE 32 computes var[206] = 4 (dusk)
+	// Without this, var[204] defaults to 0 (midnight) → darkness overlay.
+	initVars := []model.CharVariable{
+		{CharID: char.ID, VariableID: 204, Value: 18}, // hour = 6 PM
+	}
+	for _, v := range initVars {
+		h.db.Create(&v)
+	}
+
+	// Initialize starting equipment (mirrors CE 1 plugin commands):
+	//   EquipChange Cloth 5      → armor 5  in slot 1  (school uniform)
+	//   EquipChange Leg 300      → armor 300 in slot 7  (stockings)
+	//   EquipChange Special5 82  → armor 82  in slot 12 (underwear)
+	// Without this, CallCutin.js sees _equips[1]._itemId < 5 → nude portrait.
+	// Slot indices match Actor 1's equipSlotEx: [1,3,4,5,7,7,9,10,16,17,18,19,20,21]
+	// etypeId 3→idx 1, etypeId 10→idx 7, etypeId 20→idx 12.
+	initEquips := []model.Inventory{
+		{CharID: char.ID, ItemID: 5, Kind: model.ItemKindArmor, Qty: 1, Equipped: true, SlotIndex: 1},
+		{CharID: char.ID, ItemID: 300, Kind: model.ItemKindArmor, Qty: 1, Equipped: true, SlotIndex: 7},
+		{CharID: char.ID, ItemID: 82, Kind: model.ItemKindArmor, Qty: 1, Equipped: true, SlotIndex: 12},
+	}
+	for _, eq := range initEquips {
+		h.db.Create(&eq)
+	}
+
 	c.JSON(http.StatusCreated, char)
 }
 
