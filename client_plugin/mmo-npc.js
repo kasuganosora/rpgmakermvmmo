@@ -479,6 +479,12 @@
     $MMO.on('npc_dialog_end', function () {
         $MMO._npcDialogActive = false;
         $MMO._npcDialogPending = false;
+        // Force-close any open message/choice windows to prevent the player
+        // from getting stuck if a server-side timeout fires while the choice
+        // window is still open.
+        if ($gameMessage && $gameMessage.isBusy()) {
+            $gameMessage.clear();
+        }
     });
 
     // Hook terminateMessage to send dialog acknowledgment to server.
@@ -548,10 +554,13 @@
             AudioManager.stopSe();
             break;
 
-        // --- Show/Hide animation (code 211) ---
-        case 211: // Change Screen Color Tone / show-hide
-            // In RMMV code 211 is "Change Transparency" for events.
-            // params: [0]=character_id, [1]=opacity or transparency flag
+        // --- Change Transparency (code 211) ---
+        case 211:
+            // RMMV code 211: params[0]=0 → transparent ON (invisible),
+            //                params[0]=1 → transparent OFF (visible).
+            if ($gamePlayer) {
+                $gamePlayer.setTransparent(paramInt(p, 0) === 0);
+            }
             break;
 
         // --- Move Route (code 205) ---

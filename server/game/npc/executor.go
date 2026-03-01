@@ -639,7 +639,7 @@ func (e *Executor) sendDialogEnd(s *player.PlayerSession) {
 // ---- dialog/choice waiting ----
 
 const dialogAckTimeout = 60 * time.Second
-const choiceTimeout = 30 * time.Second
+const choiceTimeout = 5 * time.Minute
 
 // waitForDialogAck blocks until the client acknowledges the dialog or context expires.
 // Returns false on timeout/cancel/session closed.

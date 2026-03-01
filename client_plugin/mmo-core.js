@@ -221,11 +221,11 @@
     // On map_init, transfer the player to the correct map and position from server.
     // Handles: initial login, re-login, and server-side map transfers.
     //
-    // IMPORTANT: Always force setTransparent(false) here. Many RMMV games set
-    // $dataSystem.optTransparent = true which makes $gamePlayer invisible on init.
-    // Normally an autorun event clears this, but in MMO mode autorun events are
-    // suppressed (server handles event logic). This single line prevents player
-    // invisibility regardless of the game's transparency setting.
+    // Player transparency: respect $dataSystem.optTransparent instead of forcing
+    // visible. The server forwards code 211 (Change Transparency) when an event
+    // explicitly changes visibility — e.g. Map 2 event 156 params=[1] (visible).
+    // This preserves the original game's behavior of keeping the player invisible
+    // during intro/difficulty selection on Map 20 (optTransparent=true).
     $MMO.on('map_init', function (data) {
         if (!data || !data.self) return;
         var s = data.self;
@@ -283,9 +283,6 @@
         }
 
         if ($gamePlayer && $gameMap) {
-            // Force player visible — handles $dataSystem.optTransparent = true.
-            $gamePlayer.setTransparent(false);
-
             if ($gameMap.mapId() !== mapId) {
                 $gamePlayer.reserveTransfer(mapId, x, y, dir, 0);
             } else {
@@ -326,15 +323,13 @@
     // Override Game_Player.refresh so the walk sprite comes from the MMO
     // server instead of $gameParty.leader(). Without this, reserveTransfer →
     // performTransfer → refresh() would reset the sprite to the default actor.
-    //
-    // Also forces setTransparent(false) to ensure visibility even if refresh
-    // is called during initialization before map_init arrives.
+    // Does NOT touch transparency — let $dataSystem.optTransparent and server
+    // code 211 control visibility.
     var _GamePlayer_refresh = Game_Player.prototype.refresh;
     Game_Player.prototype.refresh = function () {
         var s = $MMO._lastSelf;
         if (s && s.walk_name) {
             this.setImage(s.walk_name, s.walk_index || 0);
-            this.setTransparent(false);
         } else {
             _GamePlayer_refresh.call(this);
         }
@@ -342,7 +337,7 @@
 
     // Handle pong response.
     $MMO.on('pong', function (payload) {
-        if ($MMO._debug) console.log('[MMO] Pong, latency:', Date.now() - (payload.ts || 0), 'ms');
+        if ($MMO._debug) console.log('[MMO] Pong, latency:', Date.now() - (payload.client_ts || 0), 'ms');
     });
 
     // Handle move_reject: server rejected a player_move due to passability or
