@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/player"
 	"go.uber.org/zap"
@@ -43,8 +44,14 @@ func (e *Executor) applyVariables(s *player.PlayerSession, params []interface{},
 	for id := startID; id <= endID; id++ {
 		current := opts.GameState.GetVariable(id)
 		val := operandVal
-		if operandType == 1 {
+		switch operandType {
+		case 1: // 变量引用
 			val = opts.GameState.GetVariable(operandVal)
+		case 2: // 随机（params[4]=最小值, params[5]=最大值）
+			max := paramInt(params, 5)
+			if max >= val {
+				val = val + rand.Intn(max-val+1)
+			}
 		}
 		switch op {
 		case 0: // 设置
@@ -100,10 +107,17 @@ const maxStackQty = 9999
 
 // applyGold 处理 RMMV 金币变更指令（代码 125）。
 // 参数格式：[0]=操作(0=增加,1=减少), [1]=操作数类型(0=常量,1=变量), [2]=操作数。
+// 使用 RMMV operateValue 模式：operandType=1 时从游戏变量读取实际值。
 // 通过 InventoryStore 接口访问数据库，支持测试 mock。
-func (e *Executor) applyGold(ctx context.Context, s *player.PlayerSession, params []interface{}) error {
+func (e *Executor) applyGold(ctx context.Context, s *player.PlayerSession, params []interface{}, opts *ExecuteOpts) error {
 	op := paramInt(params, 0)
-	amount := int64(paramInt(params, 2))
+	operandType := paramInt(params, 1)
+	operand := paramInt(params, 2)
+	// RMMV operateValue：operandType=1 时从变量读取
+	if operandType == 1 && opts != nil && opts.GameState != nil {
+		operand = opts.GameState.GetVariable(operand)
+	}
+	amount := int64(operand)
 	if op == 1 {
 		amount = -amount
 	}
@@ -133,12 +147,18 @@ func (e *Executor) applyGold(ctx context.Context, s *player.PlayerSession, param
 }
 
 // applyItems 处理 RMMV 物品变更指令（代码 126）。
-// 参数格式：[0]=物品ID, [1]=操作(0=增加,1=减少), [2]=操作数类型, [3]=数量。
+// 参数格式：[0]=物品ID, [1]=操作(0=增加,1=减少), [2]=操作数类型(0=常量,1=变量), [3]=操作数。
+// 使用 RMMV operateValue 模式：operandType=1 时从游戏变量读取实际值。
 // 通过 InventoryStore 接口访问数据库，支持测试 mock。
-func (e *Executor) applyItems(ctx context.Context, s *player.PlayerSession, params []interface{}) error {
+func (e *Executor) applyItems(ctx context.Context, s *player.PlayerSession, params []interface{}, opts *ExecuteOpts) error {
 	itemID := paramInt(params, 0)
 	op := paramInt(params, 1)
+	operandType := paramInt(params, 2)
 	qty := paramInt(params, 3)
+	// RMMV operateValue：operandType=1 时从变量读取
+	if operandType == 1 && opts != nil && opts.GameState != nil {
+		qty = opts.GameState.GetVariable(qty)
+	}
 	if itemID <= 0 {
 		return fmt.Errorf("invalid item_id: %d", itemID)
 	}

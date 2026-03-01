@@ -21,6 +21,7 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 		e.logger.Warn("common event call depth exceeded", zap.Int("depth", depth))
 		return false
 	}
+	battleResult := map[int]int{} // indent → 战斗结果 (0=胜利, 1=逃跑, 2=败北)
 	for i := 0; i < len(cmds); i++ {
 		// 检查上下文取消
 		select {
@@ -75,8 +76,8 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 					choices, choiceDefault, cancelType, choicePosition, choiceBg)
 
 				choiceIdx := e.waitForChoice(ctx, s)
-				if choiceIdx < 0 {
-					return true
+				if choiceIdx == -1 {
+					return true // 连接断开或上下文取消
 				}
 				i = e.skipToChoiceBranch(cmds, i, choiceIdx, cancelType)
 			} else {
@@ -104,8 +105,8 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 
 			// 等待玩家选择
 			choiceIdx := e.waitForChoice(ctx, s)
-			if choiceIdx < 0 {
-				return true
+			if choiceIdx == -1 {
+				return true // 连接断开或上下文取消
 			}
 
 			// 跳转到匹配的 When 分支（代码 402）或取消分支（代码 403）
@@ -173,14 +174,19 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 			e.applySelfSwitch(cmd.Parameters, opts)
 
 		case CmdChangeGold:
-			if err := e.applyGold(ctx, s, cmd.Parameters); err != nil {
+			if err := e.applyGold(ctx, s, cmd.Parameters, opts); err != nil {
 				e.logger.Warn("ChangeGold failed", zap.Int64("char_id", s.CharID), zap.Error(err))
 			}
 
 		case CmdChangeItems:
-			if err := e.applyItems(ctx, s, cmd.Parameters); err != nil {
+			if err := e.applyItems(ctx, s, cmd.Parameters, opts); err != nil {
 				e.logger.Warn("ChangeItems failed", zap.Int64("char_id", s.CharID), zap.Error(err))
 			}
+
+		case CmdChangeWeapons, CmdChangeArmors:
+			// 武器/防具变更 — 参数格式同物品变更，转发给客户端
+			// TODO: 服务端库存追踪（当前仅追踪普通物品）
+			e.sendEffect(s, cmd)
 
 		case CmdTransfer:
 			e.transferPlayer(s, cmd.Parameters, opts)
@@ -267,22 +273,14 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 			e.waitFrames(ctx, 60)
 
 		case CmdFadeout:
-			// RMMV 中淡出总是等待完成
+			// RMMV 中淡出总是等待 fadeSpeed()=24 帧
 			e.sendEffect(s, cmd)
-			frames := paramInt(cmd.Parameters, 0)
-			if frames <= 0 {
-				frames = 30
-			}
-			e.waitFrames(ctx, frames)
+			e.waitFrames(ctx, 24)
 
 		case CmdFadein:
-			// RMMV 中淡入总是等待完成
+			// RMMV 中淡入总是等待 fadeSpeed()=24 帧
 			e.sendEffect(s, cmd)
-			frames := paramInt(cmd.Parameters, 0)
-			if frames <= 0 {
-				frames = 30
-			}
-			e.waitFrames(ctx, frames)
+			e.waitFrames(ctx, 24)
 
 		case CmdTintScreen:
 			e.sendEffect(s, cmd)
@@ -314,7 +312,7 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 				}
 			}
 
-		case CmdScreenEffect:
+		case CmdChangeTransparency:
 			e.sendEffect(s, cmd)
 
 		case CmdPlayBGM, CmdStopBGM, CmdPlayBGS, CmdStopBGS, CmdPlaySE, CmdStopSE, CmdPlayME:
@@ -389,11 +387,36 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 			e.sendEffect(s, cmd)
 
 		case CmdBattleProcessing:
-			e.processBattle(ctx, s, cmd.Parameters, opts)
+			battleResult[cmd.Indent] = e.processBattle(ctx, s, cmd.Parameters, opts)
+
+		case CmdBattleWin:
+			// 战斗胜利分支：结果不为 0 时跳过内部指令
+			if battleResult[cmd.Indent] != 0 {
+				i = e.skipBranchContent(cmds, i)
+			}
+
+		case CmdBattleEscape:
+			// 战斗逃跑分支：结果不为 1 时跳过内部指令
+			if battleResult[cmd.Indent] != 1 {
+				i = e.skipBranchContent(cmds, i)
+			}
+
+		case CmdBattleLose:
+			// 战斗败北分支：结果不为 2 时跳过内部指令
+			if battleResult[cmd.Indent] != 2 {
+				i = e.skipBranchContent(cmds, i)
+			}
 
 		case CmdShopProcessing:
-			// 商店 — 暂时转发给客户端处理
+			// 商店 — 聚合续行商品（605）后转发给客户端处理
+			// RMMV command302 会消费后续所有 605 指令作为额外商品
+			for i+1 < len(cmds) && cmds[i+1] != nil && cmds[i+1].Code == CmdShopItem {
+				i++
+			}
 			e.sendEffect(s, cmd)
+
+		case CmdShopItem:
+			// 已由 CmdShopProcessing 消费，单独出现时跳过
 
 		case CmdGameOver:
 			e.sendEffect(s, cmd)

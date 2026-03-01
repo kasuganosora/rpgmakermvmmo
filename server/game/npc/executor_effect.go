@@ -168,31 +168,33 @@ func (e *Executor) sendMoveRoute(s *player.PlayerSession, cmd *resource.EventCom
 }
 
 // sendMovePicture 解析变量坐标并转发移动图片指令，支持等待完成。
-// RMMV 参数：[图片ID, 原点, 指定方式, X, Y, 缩放X, 缩放Y, 不透明度, 混合模式, 持续帧数, 是否等待]。
+// RMMV 参数：[0]=图片ID, [1]=保留, [2]=原点, [3]=指定方式(0=直接,1=变量),
+// [4]=X/变量ID, [5]=Y/变量ID, [6]=缩放X, [7]=缩放Y, [8]=不透明度, [9]=混合模式,
+// [10]=持续帧数, [11]=是否等待。
 func (e *Executor) sendMovePicture(ctx context.Context, s *player.PlayerSession, params []interface{}, opts *ExecuteOpts) {
 	resolved := make([]interface{}, len(params))
 	copy(resolved, params)
 
-	designation := paramInt(params, 2)
+	designation := paramInt(params, 3)
 	if designation == 1 && opts != nil && opts.GameState != nil {
-		varX := paramInt(params, 3)
-		varY := paramInt(params, 4)
-		if len(resolved) > 3 {
-			resolved[3] = float64(opts.GameState.GetVariable(varX))
-		}
+		varX := paramInt(params, 4)
+		varY := paramInt(params, 5)
 		if len(resolved) > 4 {
-			resolved[4] = float64(opts.GameState.GetVariable(varY))
+			resolved[4] = float64(opts.GameState.GetVariable(varX))
 		}
-		if len(resolved) > 2 {
-			resolved[2] = float64(0)
+		if len(resolved) > 5 {
+			resolved[5] = float64(opts.GameState.GetVariable(varY))
+		}
+		if len(resolved) > 3 {
+			resolved[3] = float64(0)
 		}
 	}
 
 	e.sendEffect(s, &resource.EventCommand{Code: CmdMovePicture, Parameters: resolved})
 
-	// params[10]=true 时等待动画完成
-	if len(params) > 10 && asBool(params[10]) {
-		frames := paramInt(params, 9)
+	// params[11]=true 时等待动画完成
+	if len(params) > 11 && asBool(params[11]) {
+		frames := paramInt(params, 10)
 		if frames > 0 {
 			e.waitFrames(ctx, frames)
 		}

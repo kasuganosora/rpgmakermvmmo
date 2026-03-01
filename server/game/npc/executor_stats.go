@@ -3,6 +3,7 @@ package npc
 
 import (
 	"context"
+	"math"
 
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/player"
 	"github.com/kasuganosora/rpgmakermvmmo/server/resource"
@@ -24,7 +25,7 @@ func (e *Executor) applyChangeHP(ctx context.Context, s *player.PlayerSession, p
 	if s.HP > s.MaxHP {
 		s.HP = s.MaxHP
 	}
-	if s.HP < 0 {
+	if s.HP <= 0 {
 		if allowDeath {
 			s.HP = 0
 		} else {
@@ -136,7 +137,7 @@ func (e *Executor) applyChangeClass(ctx context.Context, s *player.PlayerSession
 			if oldMHP > 0 && newMHP > 0 {
 				ratio := float64(s.HP) / float64(oldMHP)
 				s.MaxHP = newMHP
-				s.HP = int(ratio * float64(newMHP))
+				s.HP = int(math.Ceil(ratio * float64(newMHP)))
 				if s.HP < 1 {
 					s.HP = 1
 				}
@@ -144,7 +145,7 @@ func (e *Executor) applyChangeClass(ctx context.Context, s *player.PlayerSession
 			if oldMMP > 0 && newMMP > 0 {
 				ratio := float64(s.MP) / float64(oldMMP)
 				s.MaxMP = newMMP
-				s.MP = int(ratio * float64(newMMP))
+				s.MP = int(math.Ceil(ratio * float64(newMMP)))
 				if s.MP < 0 {
 					s.MP = 0
 				}
@@ -180,8 +181,9 @@ func classParam(cls *resource.Class, paramIdx, level int) int {
 // processBattle 处理 RMMV 战斗处理指令（代码 301）。
 // 参数格式：[0]=敌群ID类型(0=直接指定,1=变量引用,2=随机), [1]=敌群ID/变量ID,
 // [2]=允许逃跑, [3]=允许战败。
+// 返回战斗结果：0=胜利, 1=逃跑, 2=败北。未配置战斗处理器时返回 0（默认胜利）。
 // 优先调用 BattleFn 回调创建服务端战斗；未配置时退回客户端处理。
-func (e *Executor) processBattle(ctx context.Context, s *player.PlayerSession, params []interface{}, opts *ExecuteOpts) {
+func (e *Executor) processBattle(ctx context.Context, s *player.PlayerSession, params []interface{}, opts *ExecuteOpts) int {
 	troopType := paramInt(params, 0)
 	troopID := paramInt(params, 1)
 
@@ -198,13 +200,14 @@ func (e *Executor) processBattle(ctx context.Context, s *player.PlayerSession, p
 	canLose := paramInt(params, 3) != 0
 
 	if opts != nil && opts.BattleFn != nil {
-		opts.BattleFn(ctx, s, troopID, canEscape, canLose)
-	} else {
-		// 未配置战斗处理器，退回客户端处理
-		e.logger.Warn("no BattleFn configured, sending battle to client",
-			zap.Int("troop_id", troopID))
-		e.sendEffect(s, &resource.EventCommand{Code: CmdBattleProcessing, Parameters: params})
+		return opts.BattleFn(ctx, s, troopID, canEscape, canLose)
 	}
+
+	// 未配置战斗处理器，退回客户端处理
+	e.logger.Warn("no BattleFn configured, sending battle to client",
+		zap.Int("troop_id", troopID))
+	e.sendEffect(s, &resource.EventCommand{Code: CmdBattleProcessing, Parameters: params})
+	return 0 // 默认胜利
 }
 
 // resolveOperand 从参数中读取常量或变量引用的整数值。

@@ -1676,6 +1676,216 @@ func TestExecute_Comment_Ignored(t *testing.T) {
 // ShowPicture 变量坐标解析测试
 // ========================================================================
 
+// ========================================================================
+// Battle result branches (601/602/603) 战斗结果分支测试
+// ========================================================================
+
+// TestExecute_BattleBranch_Win 测试战斗胜利分支执行。
+func TestExecute_BattleBranch_Win(t *testing.T) {
+	gs := newMockGameState()
+
+	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	s := testSession(1)
+
+	page := &resource.EventPage{
+		List: []*resource.EventCommand{
+			{Code: CmdBattleProcessing, Indent: 0, Parameters: []interface{}{
+				float64(0), float64(1), float64(0), float64(0),
+			}},
+			{Code: CmdBattleWin, Indent: 0},
+			// 胜利分支：var[1] = 10
+			{Code: CmdChangeVars, Indent: 1, Parameters: []interface{}{
+				float64(1), float64(1), float64(0), float64(0), float64(10),
+			}},
+			{Code: CmdBattleEscape, Indent: 0},
+			// 逃跑分支：var[1] = 20
+			{Code: CmdChangeVars, Indent: 1, Parameters: []interface{}{
+				float64(1), float64(1), float64(0), float64(0), float64(20),
+			}},
+			{Code: CmdBattleLose, Indent: 0},
+			// 败北分支：var[1] = 30
+			{Code: CmdChangeVars, Indent: 1, Parameters: []interface{}{
+				float64(1), float64(1), float64(0), float64(0), float64(30),
+			}},
+			{Code: CmdEnd, Indent: 0},
+		},
+	}
+
+	opts := &ExecuteOpts{
+		GameState: gs,
+		BattleFn: func(ctx context.Context, s *player.PlayerSession, troopID int, canEscape, canLose bool) int {
+			return 0 // 胜利
+		},
+	}
+
+	exec.Execute(context.Background(), s, page, opts)
+
+	assert.Equal(t, 10, gs.variables[1], "Win branch should set var[1]=10")
+}
+
+// TestExecute_BattleBranch_Escape 测试战斗逃跑分支执行。
+func TestExecute_BattleBranch_Escape(t *testing.T) {
+	gs := newMockGameState()
+
+	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	s := testSession(1)
+
+	page := &resource.EventPage{
+		List: []*resource.EventCommand{
+			{Code: CmdBattleProcessing, Indent: 0, Parameters: []interface{}{
+				float64(0), float64(1), float64(1), float64(0),
+			}},
+			{Code: CmdBattleWin, Indent: 0},
+			{Code: CmdChangeVars, Indent: 1, Parameters: []interface{}{
+				float64(1), float64(1), float64(0), float64(0), float64(10),
+			}},
+			{Code: CmdBattleEscape, Indent: 0},
+			{Code: CmdChangeVars, Indent: 1, Parameters: []interface{}{
+				float64(1), float64(1), float64(0), float64(0), float64(20),
+			}},
+			{Code: CmdBattleLose, Indent: 0},
+			{Code: CmdChangeVars, Indent: 1, Parameters: []interface{}{
+				float64(1), float64(1), float64(0), float64(0), float64(30),
+			}},
+			{Code: CmdEnd, Indent: 0},
+		},
+	}
+
+	opts := &ExecuteOpts{
+		GameState: gs,
+		BattleFn: func(ctx context.Context, s *player.PlayerSession, troopID int, canEscape, canLose bool) int {
+			return 1 // 逃跑
+		},
+	}
+
+	exec.Execute(context.Background(), s, page, opts)
+
+	assert.Equal(t, 20, gs.variables[1], "Escape branch should set var[1]=20")
+}
+
+// TestExecute_BattleBranch_Lose 测试战斗败北分支执行。
+func TestExecute_BattleBranch_Lose(t *testing.T) {
+	gs := newMockGameState()
+
+	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	s := testSession(1)
+
+	page := &resource.EventPage{
+		List: []*resource.EventCommand{
+			{Code: CmdBattleProcessing, Indent: 0, Parameters: []interface{}{
+				float64(0), float64(1), float64(0), float64(1),
+			}},
+			{Code: CmdBattleWin, Indent: 0},
+			{Code: CmdChangeVars, Indent: 1, Parameters: []interface{}{
+				float64(1), float64(1), float64(0), float64(0), float64(10),
+			}},
+			{Code: CmdBattleEscape, Indent: 0},
+			{Code: CmdChangeVars, Indent: 1, Parameters: []interface{}{
+				float64(1), float64(1), float64(0), float64(0), float64(20),
+			}},
+			{Code: CmdBattleLose, Indent: 0},
+			{Code: CmdChangeVars, Indent: 1, Parameters: []interface{}{
+				float64(1), float64(1), float64(0), float64(0), float64(30),
+			}},
+			{Code: CmdEnd, Indent: 0},
+		},
+	}
+
+	opts := &ExecuteOpts{
+		GameState: gs,
+		BattleFn: func(ctx context.Context, s *player.PlayerSession, troopID int, canEscape, canLose bool) int {
+			return 2 // 败北
+		},
+	}
+
+	exec.Execute(context.Background(), s, page, opts)
+
+	assert.Equal(t, 30, gs.variables[1], "Lose branch should set var[1]=30")
+}
+
+// ========================================================================
+// ChangeVariables Random operand 随机操作数测试
+// ========================================================================
+
+// TestExecute_ChangeVariables_Random 测试变量变更随机操作数（operandType=2）。
+func TestExecute_ChangeVariables_Random(t *testing.T) {
+	gs := newMockGameState()
+
+	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	s := testSession(1)
+
+	page := &resource.EventPage{
+		List: []*resource.EventCommand{
+			// op=0(设置), operandType=2(随机), min=10, max=20
+			{Code: CmdChangeVars, Indent: 0, Parameters: []interface{}{
+				float64(1), float64(1), float64(0), float64(2), float64(10), float64(20),
+			}},
+			{Code: CmdEnd, Indent: 0},
+		},
+	}
+
+	exec.Execute(context.Background(), s, page, &ExecuteOpts{GameState: gs})
+
+	val := gs.variables[1]
+	assert.True(t, val >= 10 && val <= 20, "Random variable should be in range [10, 20], got %d", val)
+}
+
+// ========================================================================
+// ChangeGold/ChangeItems with variable operand 金币/物品变量操作数测试
+// ========================================================================
+
+// TestExecute_ChangeGold_VariableOperand 测试金币变更使用变量操作数。
+func TestExecute_ChangeGold_VariableOperand(t *testing.T) {
+	gs := newMockGameState()
+	gs.variables[5] = 75
+
+	store := newMockInventoryStore()
+	store.gold[1] = 100
+
+	exec := New(store, &resource.ResourceLoader{}, nopLogger())
+	s := testSession(1)
+
+	page := &resource.EventPage{
+		List: []*resource.EventCommand{
+			// ChangeGold: [op=0(增加), operandType=1(变量), operand=5(var[5])]
+			{Code: CmdChangeGold, Indent: 0, Parameters: []interface{}{
+				float64(0), float64(1), float64(5),
+			}},
+			{Code: CmdEnd, Indent: 0},
+		},
+	}
+
+	exec.Execute(context.Background(), s, page, &ExecuteOpts{GameState: gs})
+
+	assert.Equal(t, int64(175), store.gold[1], "Gold should increase by var[5]=75: 100+75=175")
+}
+
+// TestExecute_ChangeItems_VariableOperand 测试物品变更使用变量操作数。
+func TestExecute_ChangeItems_VariableOperand(t *testing.T) {
+	gs := newMockGameState()
+	gs.variables[3] = 5
+
+	store := newMockInventoryStore()
+
+	exec := New(store, &resource.ResourceLoader{}, nopLogger())
+	s := testSession(1)
+
+	page := &resource.EventPage{
+		List: []*resource.EventCommand{
+			// ChangeItems: [itemID=10, op=0(增加), operandType=1(变量), operand=3(var[3])]
+			{Code: CmdChangeItems, Indent: 0, Parameters: []interface{}{
+				float64(10), float64(0), float64(1), float64(3),
+			}},
+			{Code: CmdEnd, Indent: 0},
+		},
+	}
+
+	exec.Execute(context.Background(), s, page, &ExecuteOpts{GameState: gs})
+
+	qty, _ := store.GetItem(context.Background(), 1, 10)
+	assert.Equal(t, 5, qty, "Should add var[3]=5 of item 10")
+}
+
 // TestExecute_ShowPicture_VariableCoords 测试显示图片时变量坐标解析。
 func TestExecute_ShowPicture_VariableCoords(t *testing.T) {
 	gs := newMockGameState()

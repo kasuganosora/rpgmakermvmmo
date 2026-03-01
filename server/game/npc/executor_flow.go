@@ -124,6 +124,19 @@ func (e *Executor) skipPastLoopEnd(cmds []*resource.EventCommand, startIdx, _ in
 	return len(cmds) - 1
 }
 
+// skipBranchContent 跳过当前分支的内部指令（缩进大于当前指令的所有后续指令）。
+// 匹配 RMMV Game_Interpreter.skipBranch 的行为：
+// while (_list[_index+1].indent > _indent) { _index++; }
+// 返回最后一条被跳过指令的索引，for 循环的 i++ 将定位到下一条同级指令。
+func (e *Executor) skipBranchContent(cmds []*resource.EventCommand, startIdx int) int {
+	indent := cmds[startIdx].Indent
+	j := startIdx
+	for j+1 < len(cmds) && cmds[j+1] != nil && cmds[j+1].Indent > indent {
+		j++
+	}
+	return j
+}
+
 // jumpToLabel 在整个指令列表中查找名称匹配的 Label（118）指令。
 // 返回 Label 的索引位置，未找到返回 -1（RMMV 行为：标签不存在时继续执行）。
 func (e *Executor) jumpToLabel(cmds []*resource.EventCommand, labelName string) int {

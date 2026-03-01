@@ -37,6 +37,8 @@ const (
 	CmdChangeSelfSwitch = 123
 	CmdChangeGold       = 125
 	CmdChangeItems      = 126
+	CmdChangeWeapons    = 127
+	CmdChangeArmors     = 128
 	CmdTransfer         = 201
 	CmdWait             = 230
 	CmdSetMoveRoute     = 205
@@ -46,7 +48,7 @@ const (
 	CmdTintScreen       = 223
 	CmdFlashScreen      = 224
 	CmdShakeScreen      = 225
-	CmdScreenEffect     = 211 // 显示/隐藏动画
+	CmdChangeTransparency = 211 // 透明状态变更
 	CmdPlayBGM          = 241
 	CmdStopBGM          = 242
 	CmdPlayBGS          = 245
@@ -77,6 +79,10 @@ const (
 	CmdChangeActorImage = 322
 	CmdBattleProcessing = 301
 	CmdShopProcessing   = 302
+	CmdShopItem         = 605 // 商店续行商品
+	CmdBattleWin        = 601 // 战斗胜利分支
+	CmdBattleEscape     = 602 // 战斗逃跑分支
+	CmdBattleLose       = 603 // 战斗败北分支
 	CmdGameOver         = 353
 	CmdReturnToTitle    = 354
 	CmdComment          = 108
