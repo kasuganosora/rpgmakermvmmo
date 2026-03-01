@@ -160,6 +160,28 @@ func (ps *PlayerGameState) SetVariable(id int, val int) {
 	}
 }
 
+// SwitchesSnapshot returns a copy of all set switches.
+func (ps *PlayerGameState) SwitchesSnapshot() map[int]bool {
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+	cp := make(map[int]bool, len(ps.switches))
+	for k, v := range ps.switches {
+		cp[k] = v
+	}
+	return cp
+}
+
+// VariablesSnapshot returns a copy of all set variables.
+func (ps *PlayerGameState) VariablesSnapshot() map[int]int {
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+	cp := make(map[int]int, len(ps.variables))
+	for k, v := range ps.variables {
+		cp[k] = v
+	}
+	return cp
+}
+
 // GetSelfSwitch returns the value of a per-player self-switch.
 func (ps *PlayerGameState) GetSelfSwitch(mapID, eventID int, ch string) bool {
 	ps.mu.RLock()

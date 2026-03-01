@@ -36,15 +36,17 @@ import (
 
 // TestServer wraps a real HTTP server with all MMO subsystems wired together.
 type TestServer struct {
-	DB     *gorm.DB
-	Cache  cache.Cache
-	PubSub cache.PubSub
-	SM     *player.SessionManager
-	WM     *world.WorldManager
-	Server *httptest.Server
-	URL    string // http://127.0.0.1:<port>
-	WSURL  string // ws://127.0.0.1:<port>/ws
-	Sec    config.SecurityConfig
+	DB        *gorm.DB
+	Cache     cache.Cache
+	PubSub    cache.PubSub
+	SM        *player.SessionManager
+	WM        *world.WorldManager
+	Res       *resource.ResourceLoader
+	BattleMgr *apows.BattleSessionManager
+	Server    *httptest.Server
+	URL       string // http://127.0.0.1:<port>
+	WSURL     string // ws://127.0.0.1:<port>/ws
+	Sec       config.SecurityConfig
 }
 
 // NewTestServer creates a fully wired MMO server for integration testing.
@@ -192,10 +194,173 @@ func NewTestServer(t *testing.T) *TestServer {
 		PubSub: pubsub,
 		SM:     sm,
 		WM:     wm,
+		Res:    res,
 		Server: server,
 		URL:    url,
 		WSURL:  wsURL,
 		Sec:    sec,
+	}
+}
+
+// NewTestServerWithResources creates a test server that loads real RMMV data
+// from the given dataPath (e.g., projectb/www/data).
+func NewTestServerWithResources(t *testing.T, dataPath string) *TestServer {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+
+	db := testutil.SetupTestDB(t)
+	c, pubsub := testutil.SetupTestCache(t)
+	logger := zap.NewNop()
+
+	sec := config.SecurityConfig{
+		JWTSecret:      "integration-test-secret",
+		JWTTTLH:        72 * time.Hour,
+		RateLimitRPS:   1000,
+		RateLimitBurst: 2000,
+		AllowedOrigins: []string{},
+	}
+
+	sm := player.NewSessionManager(logger)
+
+	// Load real RMMV resources.
+	res := resource.NewLoader(dataPath, "")
+	err := res.Load()
+	require.NoError(t, err, "Failed to load RMMV resources from %s", dataPath)
+
+	gameState := world.NewGameState(nil, logger)
+	wm := world.NewWorldManager(res, gameState, world.NewGlobalWhitelist(), nil, logger)
+
+	skillSvc := gskill.NewSkillService(c, res, wm, db, logger)
+	chatH := chat.NewHandler(c, pubsub, sm, wm, config.GameConfig{
+		ChatNearbyRange:     10,
+		GlobalChatCooldownS: 180,
+	}, logger)
+	tradeSvc := trade.NewService(db, c, sm, logger)
+	partyMgr := party.NewManager(logger)
+	questSvc := quest.NewService(db, nil, logger)
+	_ = questSvc
+
+	sched := scheduler.New(logger)
+
+	// WS Router
+	wsRouter := apows.NewRouter(logger)
+	gh := apows.NewGameHandlers(db, wm, sm, res, logger)
+	gh.RegisterHandlers(wsRouter)
+
+	bh := apows.NewBattleHandlers(db, wm, res, logger)
+	bh.RegisterHandlers(wsRouter)
+
+	sh := apows.NewSkillItemHandlers(db, res, wm, skillSvc, logger)
+	sh.RegisterHandlers(wsRouter)
+
+	npcH := apows.NewNPCHandlers(db, res, wm, logger)
+	npcH.SetTransferFunc(gh.EnterMapRoom)
+	npcH.RegisterHandlers(wsRouter)
+	gh.SetAutorunFunc(npcH.ExecuteAutoruns)
+
+	tradeH := apows.NewTradeHandlers(db, tradeSvc, sm, logger)
+	tradeH.RegisterHandlers(wsRouter)
+
+	partyH := apows.NewPartyHandlers(partyMgr, sm, logger)
+	partyH.RegisterHandlers(wsRouter)
+
+	templateEventH := apows.NewTemplateEventHandlers(db, wm, sm, logger)
+	templateEventH.RegisterHandlers(wsRouter)
+
+	// Battle session manager
+	battleMgr := apows.NewBattleSessionManager(res, partyMgr, logger)
+	battleMgr.RegisterHandlers(wsRouter)
+
+	// Debug handlers
+	debugH := apows.NewDebugHandlers(wm, sm, res, db, logger)
+	debugH.SetTransferFunc(gh.EnterMapRoom)
+	debugH.SetBattleFn(battleMgr.RunBattle)
+	debugH.RegisterHandlers(wsRouter)
+
+	wsRouter.On("chat_send", chatH.HandleSend)
+
+	// Gin HTTP Server
+	r := gin.New()
+	r.Use(mw.TraceID(), mw.Recovery(logger))
+	r.Use(mw.RateLimit(rate.Limit(sec.RateLimitRPS), sec.RateLimitBurst))
+
+	r.GET("/health", func(ctx *gin.Context) {
+		ctx.JSON(200, gin.H{"status": "ok"})
+	})
+
+	authH := apirest.NewAuthHandler(db, c, sec)
+	charH := apirest.NewCharacterHandler(db, nil, config.GameConfig{StartMapID: 1, StartX: 5, StartY: 5})
+	invH := apirest.NewInventoryHandler(db)
+	socialH := apirest.NewSocialHandler(db, sm)
+	guildH := apirest.NewGuildHandler(db)
+	mailH := apirest.NewMailHandler(db)
+	rankH := apirest.NewRankingHandler(db, c, logger)
+	shopH := apirest.NewShopHandler(db, res, nil)
+	adminH := apirest.NewAdminHandler(db, sm, wm, sched, logger)
+	_ = rankH
+	_ = adminH
+
+	api := r.Group("/api")
+	{
+		authG := api.Group("/auth")
+		authG.POST("/login", authH.Login)
+		authG.POST("/logout", mw.Auth(sec, c), authH.Logout)
+		authG.POST("/refresh", mw.Auth(sec, c), authH.Refresh)
+
+		charsG := api.Group("/characters")
+		charsG.Use(mw.Auth(sec, c))
+		charsG.GET("", charH.List)
+		charsG.POST("", charH.Create)
+		charsG.DELETE("/:id", charH.Delete)
+		charsG.GET("/:id/inventory", invH.List)
+		charsG.GET("/:id/mail", mailH.List)
+		charsG.POST("/:id/mail/:mail_id/claim", mailH.Claim)
+
+		socialG := api.Group("/social")
+		socialG.Use(mw.Auth(sec, c))
+		socialG.GET("/friends", socialH.ListFriends)
+		socialG.POST("/friends/request", socialH.SendFriendRequest)
+		socialG.POST("/friends/accept/:id", socialH.AcceptFriendRequest)
+		socialG.DELETE("/friends/:id", socialH.DeleteFriend)
+		socialG.POST("/block/:id", socialH.BlockPlayer)
+
+		guildsG := api.Group("/guilds")
+		guildsG.Use(mw.Auth(sec, c))
+		guildsG.POST("", guildH.Create)
+		guildsG.GET("/:id", guildH.Detail)
+		guildsG.POST("/:id/join", guildH.Join)
+		guildsG.DELETE("/:id/members/:cid", guildH.KickMember)
+		guildsG.PUT("/:id/notice", guildH.UpdateNotice)
+
+		shopG := api.Group("/shop")
+		shopG.Use(mw.Auth(sec, c))
+		shopG.GET("/:id", shopH.Detail)
+		shopG.POST("/:id/buy", shopH.Buy)
+		shopG.POST("/:id/sell", shopH.Sell)
+
+		rankG := api.Group("/ranking")
+		rankG.GET("/exp", rankH.TopExp)
+	}
+
+	wsH := apows.NewHandler(db, c, sec, sm, wm, partyMgr, tradeSvc, wsRouter, logger)
+	r.GET("/ws", wsH.ServeWS)
+
+	server := httptest.NewServer(r)
+	url := server.URL
+	wsURL := "ws" + url[len("http"):] + "/ws"
+
+	return &TestServer{
+		DB:        db,
+		Cache:     c,
+		PubSub:    pubsub,
+		SM:        sm,
+		WM:        wm,
+		Res:       res,
+		BattleMgr: battleMgr,
+		Server:    server,
+		URL:       url,
+		WSURL:     wsURL,
+		Sec:       sec,
 	}
 }
 
@@ -318,10 +483,17 @@ func (ts *TestServer) CreateCharacter(t *testing.T, token, name string, classID 
 // --- WebSocket client ---
 
 // WSClient wraps a gorilla/websocket connection for integration testing.
+// Uses a background readLoop to avoid gorilla/websocket's SetReadDeadline bug.
 type WSClient struct {
-	Conn *websocket.Conn
-	t    *testing.T
-	seq  uint64
+	Conn   *websocket.Conn
+	t      *testing.T
+	seq    uint64
+	readCh chan readResult // buffered channel from readLoop
+}
+
+type readResult struct {
+	data []byte
+	err  error
 }
 
 // ConnectWS dials the test server's WS endpoint with the given JWT token.
@@ -334,7 +506,20 @@ func (ts *TestServer) ConnectWS(t *testing.T, token string) *WSClient {
 		resp.Body.Close()
 	}
 	require.NoError(t, err, "WS dial failed")
-	return &WSClient{Conn: conn, t: t}
+	wc := &WSClient{Conn: conn, t: t, readCh: make(chan readResult, 256)}
+	go wc.readLoop()
+	return wc
+}
+
+// readLoop continuously reads from the websocket in a dedicated goroutine.
+func (wc *WSClient) readLoop() {
+	for {
+		_, data, err := wc.Conn.ReadMessage()
+		wc.readCh <- readResult{data, err}
+		if err != nil {
+			return
+		}
+	}
 }
 
 // Send writes a JSON message packet to the WebSocket.
@@ -356,21 +541,43 @@ func (wc *WSClient) Send(msgType string, payload interface{}) {
 // Recv reads one message from the WebSocket with a timeout.
 func (wc *WSClient) Recv(timeout time.Duration) map[string]interface{} {
 	wc.t.Helper()
-	_ = wc.Conn.SetReadDeadline(time.Now().Add(timeout))
-	_, data, err := wc.Conn.ReadMessage()
+	pkt, err := wc.RecvAny(timeout)
 	require.NoError(wc.t, err, "WS recv failed")
-
-	var pkt map[string]interface{}
-	require.NoError(wc.t, json.Unmarshal(data, &pkt))
-	// Decode the nested payload if it's a string
-	if payloadStr, ok := pkt["payload"].(string); ok {
-		var nested interface{}
-		if json.Unmarshal([]byte(payloadStr), &nested) == nil {
-			pkt["payload"] = nested
-		}
-	}
 	return pkt
 }
+
+// RecvAny reads one message from the WebSocket with a timeout, returning an error
+// instead of failing the test on timeout/read failure.
+// Reads from the background readLoop channel to avoid gorilla/websocket's
+// SetReadDeadline bug which permanently corrupts the connection after a timeout.
+func (wc *WSClient) RecvAny(timeout time.Duration) (map[string]interface{}, error) {
+	select {
+	case res := <-wc.readCh:
+		if res.err != nil {
+			return nil, res.err
+		}
+		var pkt map[string]interface{}
+		if err := json.Unmarshal(res.data, &pkt); err != nil {
+			return nil, err
+		}
+		if payloadStr, ok := pkt["payload"].(string); ok {
+			var nested interface{}
+			if json.Unmarshal([]byte(payloadStr), &nested) == nil {
+				pkt["payload"] = nested
+			}
+		}
+		return pkt, nil
+	case <-time.After(timeout):
+		return nil, &timeoutError{}
+	}
+}
+
+// timeoutError implements net.Error for timeout detection in callers.
+type timeoutError struct{}
+
+func (e *timeoutError) Error() string   { return "read timeout" }
+func (e *timeoutError) Timeout() bool   { return true }
+func (e *timeoutError) Temporary() bool { return true }
 
 // RecvType reads messages until one with the given type is found (within timeout).
 func (wc *WSClient) RecvType(msgType string, timeout time.Duration) map[string]interface{} {
@@ -381,13 +588,10 @@ func (wc *WSClient) RecvType(msgType string, timeout time.Duration) map[string]i
 		if remaining <= 0 {
 			break
 		}
-		_ = wc.Conn.SetReadDeadline(time.Now().Add(remaining))
-		_, data, err := wc.Conn.ReadMessage()
+		pkt, err := wc.RecvAny(remaining)
 		if err != nil {
 			wc.t.Fatalf("WS recv failed while waiting for %q: %v", msgType, err)
 		}
-		var pkt map[string]interface{}
-		require.NoError(wc.t, json.Unmarshal(data, &pkt))
 		if pkt["type"] == msgType {
 			return pkt
 		}
@@ -449,4 +653,58 @@ var testCounter uint64
 func UniqueID(prefix string) string {
 	n := atomic.AddUint64(&testCounter, 1)
 	return fmt.Sprintf("%s_%d_%d", prefix, time.Now().UnixNano()%100000, n)
+}
+
+// --- Debug helpers ---
+
+// DebugSetSwitch sends a debug_set_switch WS message and waits for debug_ok.
+func (wc *WSClient) DebugSetSwitch(t *testing.T, switchID int, value bool) {
+	t.Helper()
+	wc.Send("debug_set_switch", map[string]interface{}{"switch_id": switchID, "value": value})
+	wc.RecvType("debug_ok", 5*time.Second)
+}
+
+// DebugSetVariable sends a debug_set_variable WS message and waits for debug_ok.
+func (wc *WSClient) DebugSetVariable(t *testing.T, variableID int, value int) {
+	t.Helper()
+	wc.Send("debug_set_variable", map[string]interface{}{"variable_id": variableID, "value": value})
+	wc.RecvType("debug_ok", 5*time.Second)
+}
+
+// DebugGetState sends debug_get_state and returns the payload map.
+func (wc *WSClient) DebugGetState(t *testing.T) map[string]interface{} {
+	t.Helper()
+	wc.Send("debug_get_state", map[string]interface{}{})
+	pkt := wc.RecvType("debug_state", 5*time.Second)
+	return PayloadMap(t, pkt)
+}
+
+// DebugTeleport sends a debug_teleport WS message and waits for debug_ok.
+func (wc *WSClient) DebugTeleport(t *testing.T, mapID, x, y, dir int) {
+	t.Helper()
+	wc.Send("debug_teleport", map[string]interface{}{"map_id": mapID, "x": x, "y": y, "dir": dir})
+	wc.RecvType("debug_ok", 5*time.Second)
+}
+
+// DebugSetStats sends a debug_set_stats WS message and waits for debug_ok.
+func (wc *WSClient) DebugSetStats(t *testing.T, stats map[string]interface{}) {
+	t.Helper()
+	wc.Send("debug_set_stats", stats)
+	wc.RecvType("debug_ok", 5*time.Second)
+}
+
+// SetPosition directly sets a player's position on the server.
+func (ts *TestServer) SetPosition(t *testing.T, charID int64, x, y, dir int) {
+	t.Helper()
+	sess := ts.SM.Get(charID)
+	require.NotNil(t, sess, "session not found for charID %d", charID)
+	sess.SetPosition(x, y, dir)
+}
+
+// SetVariable directly sets a player variable on the server.
+func (ts *TestServer) SetVariable(t *testing.T, charID int64, variableID, value int) {
+	t.Helper()
+	ps, err := ts.WM.PlayerStateManager().GetOrLoad(charID)
+	require.NoError(t, err, "failed to load player state for charID %d", charID)
+	ps.SetVariable(variableID, value)
 }

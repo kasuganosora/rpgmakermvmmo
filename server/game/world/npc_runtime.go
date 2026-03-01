@@ -229,21 +229,14 @@ func (room *MapRoom) GetNPC(eventID int) *NPCRuntime {
 	return nil
 }
 
-// isFunctionalMarker checks if the given image name is a functional marker
-// (not a real NPC character). These should be hidden from players.
+// isFunctionalMarker checks if the given image name is an editor-only marker
+// that should be hidden from players. Only matches specific known markers.
+// NOTE: RMMV's "!" prefix (e.g., !Flame, !Door, !Chest) means "object character"
+// (single sprite, no direction) — these are legitimate visual elements, NOT markers.
 func isFunctionalMarker(name string) bool {
-	// Common functional marker patterns
-	markers := []string{
-		"item", "arrow", "mark", "sign", "label", "tag",
-		"!", // RMMV default marker prefix for objects like "!Chest", "!Door"
-	}
 	lower := strings.ToLower(name)
-	for _, m := range markers {
-		if strings.Contains(lower, m) {
-			return true
-		}
-	}
-	return false
+	// Only hide the RPG Maker editor marker character sheet.
+	return lower == "event_mark"
 }
 
 // NPCSnapshot returns a snapshot of all NPCs suitable for map_init.
@@ -265,8 +258,9 @@ func (room *MapRoom) NPCSnapshot() []map[string]interface{} {
 			// If TileID > 0, this event uses a tile graphic (not a character sprite).
 			if img.TileID > 0 {
 				walkName = ""
+				snap["tile_id"] = img.TileID
 			}
-			// Hide functional markers (arrows, item labels, etc.)
+			// Hide editor-only markers.
 			if isFunctionalMarker(walkName) {
 				walkName = ""
 			}
@@ -524,8 +518,9 @@ func (room *MapRoom) NPCSnapshotForPlayer(state GameStateReader) []map[string]in
 			// If TileID > 0, this event uses a tile graphic (not a character sprite).
 			if img.TileID > 0 {
 				walkName = ""
+				snap["tile_id"] = img.TileID
 			}
-			// Hide functional markers (arrows, item labels, etc.)
+			// Hide editor-only markers.
 			if isFunctionalMarker(walkName) {
 				walkName = ""
 			}

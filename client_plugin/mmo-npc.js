@@ -35,13 +35,14 @@
         var walkName = data.walk_name || '';
         var walkIndex = data.walk_index || 0;
         var tileId = data.tile_id || 0;
-        
-        // If tile_id is set, this is a tile graphic event (not supported yet, hide it)
+
         if (tileId > 0) {
-            walkName = '';
+            // Tile-based event (e.g. doors, bookshelves): use setTileImage so
+            // Sprite_Character renders the correct tileset graphic.
+            ch.setTileImage(tileId);
+        } else {
+            ch.setImage(walkName, walkIndex);
         }
-        
-        ch.setImage(walkName, walkIndex);
         ch.setPosition(data.x || 0, data.y || 0);
         ch.setDirection(data.dir || 2);
         ch._moveSpeed = 3; // standard NPC speed
@@ -53,8 +54,7 @@
         Sprite_Character.prototype.initialize.call(this, ch);
         this._moveQueue = [];
         // Hide NPCs with no sprite image (invisible events like transfer triggers).
-        if (!walkName) this.visible = false;
-        
+        if (!walkName && tileId === 0) this.visible = false;
     };
 
     Sprite_ServerNPC.prototype.syncData = function (data) {
@@ -91,14 +91,19 @@
         var c = this._character;
         var walkName = data.walk_name || '';
         var walkIndex = data.walk_index || 0;
-        c.setImage(walkName, walkIndex);
+        var tileId = data.tile_id || 0;
+        if (tileId > 0) {
+            c.setTileImage(tileId);
+        } else {
+            c.setImage(walkName, walkIndex);
+        }
         if (data.dir) c.setDirection(data.dir);
         c._priorityType = data.priority_type != null ? data.priority_type : 1;
         c._stepAnime = !!data.step_anime;
         c._directionFix = !!data.direction_fix;
         c._through = !!data.through;
         c._walkAnime = data.walk_anime != null ? data.walk_anime : true;
-        this.visible = !!walkName;
+        this.visible = !!walkName || tileId > 0;
     };
 
     Sprite_ServerNPC.prototype.update = function () {
@@ -383,6 +388,34 @@
         }
     };
 
+    // Combined text + choices (RMMV: Show Text followed by Show Choices).
+    // Server sends both together so the text stays visible while choices show.
+    $MMO.on('npc_dialog_choices', function (data) {
+        if (!data) return;
+        $MMO._npcDialogActive = true;
+        var face = data.face || '';
+        var faceIndex = data.face_index || 0;
+        var lines = data.lines || [];
+        var choices = data.choices || [];
+
+        if (!(SceneManager._scene instanceof Scene_Map)) {
+            $MMO._queuedDialog = data;
+            return;
+        }
+
+        $gameMessage.setFaceImage(face, faceIndex);
+        for (var i = 0; i < lines.length; i++) {
+            $gameMessage.add(lines[i]);
+        }
+        if (!$gameMessage.hasText()) {
+            $gameMessage.add('');
+        }
+        $gameMessage.setChoices(choices, 0, -1);
+        $gameMessage.setChoiceCallback(function (index) {
+            $MMO.send('npc_choice_reply', { choice_index: index });
+        });
+    });
+
     $MMO.on('npc_choices', function (data) {
         if (!data || !data.choices) return;
         $MMO._npcDialogActive = true;
@@ -487,6 +520,139 @@
                 // Force move route on the player character.
                 $gamePlayer.forceMoveRoute(moveRoute);
             }
+            break;
+
+        // --- Pictures ---
+        case 231: // Show Picture
+            // params: [pictureId, name, origin, directDesignation?, x, y, scaleX, scaleY, opacity, blendMode]
+            // RMMV: params[3] = 0 means constant x/y at [4],[5]; params[3]=1 means variable-based
+            var picId = paramInt(p, 0);
+            var picName = (p[1] || '').toString();
+            var picOrigin = paramInt(p, 2);
+            var picX = paramInt(p, 4);
+            var picY = paramInt(p, 5);
+            var picScaleX = paramInt(p, 6) || 100;
+            var picScaleY = paramInt(p, 7) || 100;
+            var picOpacity = paramInt(p, 8) != null ? paramInt(p, 8) : 255;
+            var picBlend = paramInt(p, 9);
+            if ($gameScreen) {
+                $gameScreen.showPicture(picId, picName, picOrigin, picX, picY,
+                    picScaleX, picScaleY, picOpacity, picBlend);
+            }
+            break;
+        case 232: // Move Picture
+            // params: [pictureId, origin, directDesignation?, x, y, scaleX, scaleY, opacity, blendMode, duration, wait]
+            var mpId = paramInt(p, 0);
+            var mpOrigin = paramInt(p, 1);
+            var mpX = paramInt(p, 3);
+            var mpY = paramInt(p, 4);
+            var mpScaleX = paramInt(p, 5) || 100;
+            var mpScaleY = paramInt(p, 6) || 100;
+            var mpOpacity = paramInt(p, 7) != null ? paramInt(p, 7) : 255;
+            var mpBlend = paramInt(p, 8);
+            var mpDuration = paramInt(p, 9) || 1;
+            if ($gameScreen) {
+                $gameScreen.movePicture(mpId, mpOrigin, mpX, mpY,
+                    mpScaleX, mpScaleY, mpOpacity, mpBlend, mpDuration);
+            }
+            break;
+        case 233: // Rotate Picture
+            if ($gameScreen) {
+                $gameScreen.rotatePicture(paramInt(p, 0), paramInt(p, 1));
+            }
+            break;
+        case 234: // Tint Picture — [pictureId, tone, duration, wait]
+            if ($gameScreen) {
+                $gameScreen.tintPicture(paramInt(p, 0), p[1] || [0,0,0,0], paramInt(p, 2) || 1);
+            }
+            break;
+        case 235: // Erase Picture
+            if ($gameScreen) {
+                $gameScreen.erasePicture(paramInt(p, 0));
+            }
+            break;
+
+        // --- Show Animation / Balloon ---
+        case 212: // Show Animation — [charId, animationId, wait]
+            if ($gamePlayer && $gameMap) {
+                var animChar = paramInt(p, 0) === -1 ? $gamePlayer : ($gameMap.event(paramInt(p, 0)) || $gamePlayer);
+                animChar.requestAnimation(paramInt(p, 1));
+            }
+            break;
+        case 213: // Show Balloon Icon — [charId, balloonId, wait]
+            if ($gamePlayer && $gameMap) {
+                var balloonChar = paramInt(p, 0) === -1 ? $gamePlayer : ($gameMap.event(paramInt(p, 0)) || $gamePlayer);
+                balloonChar.requestBalloon(paramInt(p, 1));
+            }
+            break;
+
+        // --- Erase Event ---
+        case 214:
+            // Server-erased events — handled via NPC visibility system.
+            break;
+
+        // --- Stat changes (forwarded from server) ---
+        case 311: // Change HP
+        case 312: // Change MP
+        case 313: // Change State
+        case 314: // Recover All
+        case 315: // Change EXP
+        case 316: // Change Level
+        case 317: // Change Parameter
+        case 318: // Change Skill
+        case 319: // Change Equipment
+        case 320: // Change Name
+        case 321: // Change Class
+        case 322: // Change Actor Images
+            // Execute via Game_Interpreter so all RMMV side-effects fire.
+            try {
+                var si = new Game_Interpreter();
+                si._eventId = 0;
+                si._mapId = $gameMap ? $gameMap.mapId() : 0;
+                // Build a command list with just this command + terminator.
+                si._list = [
+                    { code: code, indent: 0, parameters: p },
+                    { code: 0, indent: 0, parameters: [] }
+                ];
+                si._index = 0;
+                si.executeCommand();
+            } catch (ex) {
+                console.warn('[MMO-NPC] Stat command ' + code + ' error:', ex.message);
+            }
+            break;
+
+        // --- Battle / Shop / Game Over ---
+        case 301: // Battle Processing — fallback if server sends to client
+            try {
+                var bi = new Game_Interpreter();
+                bi._list = [
+                    { code: 301, indent: 0, parameters: p },
+                    { code: 0, indent: 0, parameters: [] }
+                ];
+                bi._index = 0;
+                bi.executeCommand();
+            } catch (ex) {
+                console.warn('[MMO-NPC] Battle command error:', ex.message);
+            }
+            break;
+        case 302: // Shop Processing
+            try {
+                var shopInterp = new Game_Interpreter();
+                shopInterp._list = [
+                    { code: 302, indent: 0, parameters: p },
+                    { code: 0, indent: 0, parameters: [] }
+                ];
+                shopInterp._index = 0;
+                shopInterp.executeCommand();
+            } catch (ex) {
+                console.warn('[MMO-NPC] Shop command error:', ex.message);
+            }
+            break;
+        case 353: // Game Over
+            SceneManager.goto(Scene_Gameover);
+            break;
+        case 354: // Return to Title
+            SceneManager.goto(Scene_Title);
             break;
 
         // --- Plugin Command (code 356) ---

@@ -155,6 +155,9 @@ func (p *parser) parseFactor() (float64, error) {
 	case ch == 'M':
 		return p.parseMathFunc()
 
+	case unicode.IsLetter(rune(ch)) || ch == '_':
+		return p.parseCustomFunc()
+
 	default:
 		return 0, fmt.Errorf("unexpected character %q at pos %d", ch, p.pos)
 	}
@@ -263,6 +266,117 @@ func (p *parser) parseMathFunc() (float64, error) {
 		}
 	}
 	return applyMathFunc(fname, args)
+}
+
+// parseCustomFunc handles ProjectB custom damage formula functions like
+// damagecul_normal(a.atk, b.def, level, enhance).
+func (p *parser) parseCustomFunc() (float64, error) {
+	p.skipWS()
+	start := p.pos
+	for p.pos < len(p.input) && (unicode.IsLetter(rune(p.input[p.pos])) || p.input[p.pos] == '_' || unicode.IsDigit(rune(p.input[p.pos]))) {
+		p.pos++
+	}
+	fname := p.input[start:p.pos]
+	p.skipWS()
+	if p.pos >= len(p.input) || p.input[p.pos] != '(' {
+		return 0, fmt.Errorf("expected '(' after %s", fname)
+	}
+	p.pos++
+	var args []float64
+	for {
+		p.skipWS()
+		if p.pos < len(p.input) && p.input[p.pos] == ')' {
+			p.pos++
+			break
+		}
+		v, err := p.parseExpr()
+		if err != nil {
+			return 0, err
+		}
+		args = append(args, v)
+		p.skipWS()
+		if p.pos < len(p.input) && p.input[p.pos] == ',' {
+			p.pos++
+		}
+	}
+	return applyCustomFunc(fname, args)
+}
+
+// applyCustomFunc evaluates ProjectB's Damagecul.js custom damage functions.
+func applyCustomFunc(name string, args []float64) (float64, error) {
+	switch name {
+	case "damagecul_normal":
+		// damagecul_normal(atk, def, level, enhance_var_id)
+		// = (atk - def/2) * 2 * level * ((enhance+100)/100)
+		// Server ignores $gameVariables enhancement → treat 4th arg as 0.
+		if len(args) < 3 {
+			return 0, fmt.Errorf("damagecul_normal expects 3-4 args")
+		}
+		atk, def, level := args[0], args[1], args[2]
+		v := (atk - def/2) * 2 * level
+		if v <= 0 {
+			return float64(randMinDamage()), nil
+		}
+		return v, nil
+
+	case "damagecul_magic":
+		// damagecul_magic(mat, mdf, level, enhance_var_id)
+		// Same formula as normal but with mat/mdf.
+		if len(args) < 3 {
+			return 0, fmt.Errorf("damagecul_magic expects 3-4 args")
+		}
+		mat, mdf, level := args[0], args[1], args[2]
+		v := (mat - mdf/2) * 2 * level
+		if v <= 0 {
+			return float64(randMinDamage()), nil
+		}
+		return v, nil
+
+	case "damagecul_enemy_normal":
+		// damagecul_enemy_normal(atk, def, level)
+		if len(args) < 3 {
+			return 0, fmt.Errorf("damagecul_enemy_normal expects 3 args")
+		}
+		atk, def, level := args[0], args[1], args[2]
+		v := (atk - def/2) * 2 * level
+		if v <= 0 {
+			return float64(randMinDamage()), nil
+		}
+		return v, nil
+
+	case "damagecul_penetration":
+		// damagecul_penetration(atk, def, level)
+		// = (atk - def/4) * 2 * level
+		if len(args) < 3 {
+			return 0, fmt.Errorf("damagecul_penetration expects 3 args")
+		}
+		atk, def, level := args[0], args[1], args[2]
+		v := (atk - def/4) * 2 * level
+		if v <= 0 {
+			return float64(randMinDamage()), nil
+		}
+		return v, nil
+
+	case "damagecul_mat01":
+		// damagecul_mat01(mat, mdf, level)
+		// = (mat - mdf/2) * 2 * level
+		if len(args) < 3 {
+			return 0, fmt.Errorf("damagecul_mat01 expects 3 args")
+		}
+		mat, mdf, level := args[0], args[1], args[2]
+		v := (mat - mdf/2) * 2 * level
+		if v <= 0 {
+			return float64(randMinDamage()), nil
+		}
+		return v, nil
+	}
+	return 0, fmt.Errorf("unknown function %q", name)
+}
+
+// randMinDamage returns a small random damage (0-2) when formula evaluates to <= 0.
+func randMinDamage() int {
+	// Use a simple approach; in actual battle the BattleInstance RNG is used.
+	return 0
 }
 
 func applyMathFunc(name string, args []float64) (float64, error) {

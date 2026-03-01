@@ -42,28 +42,47 @@ type Class struct {
 	Name      string           `json:"name"`
 	Params    [][]int          `json:"params"`
 	Learnings []ClassLearning  `json:"learnings"`
+	Traits    []Trait          `json:"traits"`
 }
 
 // SkillDamage holds the damage formula and element from RMMV Skills.json.
 type SkillDamage struct {
 	Formula   string `json:"formula"`
 	ElementID int    `json:"elementId"`
-	Type      int    `json:"type"` // 0=none,1=HP dmg,2=MP dmg,3=HP rec,4=MP rec
+	Type      int    `json:"type"`     // 0=none,1=HP dmg,2=MP dmg,3=HP rec,4=MP rec
+	Critical  bool   `json:"critical"` // can crit
+	Variance  int    `json:"variance"` // damage variance %
 }
 
 type Skill struct {
-	ID        int         `json:"id"`
-	Name      string      `json:"name"`
-	MPCost    int         `json:"mpCost"`
-	IconIndex int         `json:"iconIndex"`
-	Damage    SkillDamage `json:"damage"`
+	ID          int           `json:"id"`
+	Name        string        `json:"name"`
+	MPCost      int           `json:"mpCost"`
+	TPCost      int           `json:"tpCost"`
+	IconIndex   int           `json:"iconIndex"`
+	Scope       int           `json:"scope"`       // 1-11 target range
+	HitType     int           `json:"hitType"`     // 0=certain, 1=physical, 2=magical
+	SuccessRate int           `json:"successRate"` // 0-100
+	Speed       int           `json:"speed"`       // action speed modifier
+	Repeats     int           `json:"repeats"`     // repeat count
+	TPGain      int           `json:"tpGain"`      // TP gain on use
+	Damage      SkillDamage   `json:"damage"`
+	Effects     []SkillEffect `json:"effects"`
+	Note        string        `json:"note"`
 }
 
 type Item struct {
-	ID        int    `json:"id"`
-	Name      string `json:"name"`
-	Price     int    `json:"price"`
-	Consumable bool  `json:"consumable"`
+	ID          int           `json:"id"`
+	Name        string        `json:"name"`
+	Price       int           `json:"price"`
+	Consumable  bool          `json:"consumable"`
+	Scope       int           `json:"scope"`
+	HitType     int           `json:"hitType"`
+	SuccessRate int           `json:"successRate"`
+	Speed       int           `json:"speed"`
+	Damage      SkillDamage   `json:"damage"`
+	Effects     []SkillEffect `json:"effects"`
+	Note        string        `json:"note"`
 }
 
 // EquipStats extracts the stat bonuses from a weapon or armor Params array.
@@ -108,6 +127,30 @@ type Armor struct {
 	AtypeID int    `json:"atypeId"`
 }
 
+// Trait represents an RMMV trait entry (used by actors, enemies, classes, equipment, states).
+type Trait struct {
+	Code   int     `json:"code"`   // 11=element rate, 13=state rate, 21=param, 22=xparam, etc.
+	DataID int     `json:"dataId"`
+	Value  float64 `json:"value"`
+}
+
+// SkillEffect represents an effect attached to a skill or item.
+type SkillEffect struct {
+	Code   int     `json:"code"`   // 11=add state, 12=remove state, 21=add buff, etc.
+	DataID int     `json:"dataId"`
+	Value1 float64 `json:"value1"`
+	Value2 float64 `json:"value2"`
+}
+
+// EnemyAction represents one entry in an RMMV enemy's action pattern table.
+type EnemyAction struct {
+	SkillID         int     `json:"skillId"`
+	ConditionType   int     `json:"conditionType"`   // 0=always, 1=turn, 2=hp, 3=mp, etc.
+	ConditionParam1 float64 `json:"conditionParam1"` // float: turn uses int values, hp/mp uses 0.0-1.0
+	ConditionParam2 float64 `json:"conditionParam2"`
+	Rating          int     `json:"rating"` // AI weight (1-9, 5=standard)
+}
+
 type Enemy struct {
 	ID     int    `json:"id"`
 	Name   string `json:"name"`
@@ -119,9 +162,11 @@ type Enemy struct {
 	Mdf    int    `json:"mdf"`
 	Agi    int    `json:"agi"`
 	Luk    int    `json:"luk"`
-	Exp       int          `json:"exp"`
-	Gold      int          `json:"gold"`
-	DropItems []EnemyDrop  `json:"dropItems"`
+	Exp       int           `json:"exp"`
+	Gold      int           `json:"gold"`
+	DropItems []EnemyDrop   `json:"dropItems"`
+	Actions   []EnemyAction `json:"actions"`
+	Traits    []Trait       `json:"traits"`
 }
 
 // EnemyDrop represents one entry in the RMMV enemy drop table.
@@ -142,9 +187,18 @@ type Troop struct {
 }
 
 type State struct {
-	ID        int    `json:"id"`
-	Name      string `json:"name"`
-	IconIndex int    `json:"iconIndex"`
+	ID                int     `json:"id"`
+	Name              string  `json:"name"`
+	IconIndex         int     `json:"iconIndex"`
+	Restriction       int     `json:"restriction"`       // 0=none, 1=attack enemy, 2=attack anyone, 4=cannot move
+	Priority          int     `json:"priority"`
+	AutoRemovalTiming int     `json:"autoRemovalTiming"` // 0=none, 1=action end, 2=turn end
+	MinTurns          int     `json:"minTurns"`
+	MaxTurns          int     `json:"maxTurns"`
+	RemoveAtBattleEnd bool    `json:"removeAtBattleEnd"`
+	RemoveByDamage    bool    `json:"removeByDamage"`
+	Traits            []Trait `json:"traits"`
+	Note              string  `json:"note"`
 }
 
 type Animation struct {

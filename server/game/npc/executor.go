@@ -51,6 +51,30 @@ const (
 	CmdPlaySE           = 250
 	CmdStopSE           = 251
 	CmdPlayME           = 249
+	CmdShowPicture      = 231
+	CmdMovePicture      = 232
+	CmdRotatePicture    = 233
+	CmdTintPicture      = 234
+	CmdErasePicture     = 235
+	CmdShowAnimation    = 212
+	CmdShowBalloon      = 213
+	CmdEraseEvent       = 214
+	CmdChangeHP         = 311
+	CmdChangeMP         = 312
+	CmdChangeState      = 313
+	CmdRecoverAll       = 314
+	CmdChangeEXP        = 315
+	CmdChangeLevel      = 316
+	CmdChangeParameter  = 317
+	CmdChangeSkill      = 318
+	CmdChangeEquipment  = 319
+	CmdChangeName       = 320
+	CmdChangeClass      = 321
+	CmdChangeActorImage = 322
+	CmdBattleProcessing = 301
+	CmdShopProcessing   = 302
+	CmdGameOver         = 353
+	CmdReturnToTitle    = 354
 	CmdComment          = 108
 	CmdCommentCont      = 408
 	CmdScript           = 355
@@ -88,12 +112,17 @@ func New(db *gorm.DB, res *resource.ResourceLoader, logger *zap.Logger) *Executo
 // is encountered. It performs the actual server-side map transfer.
 type TransferFunc func(s *player.PlayerSession, mapID, x, y, dir int)
 
+// BattleFunc is called by the executor when a Battle Processing command (301)
+// is encountered. It creates a server-authoritative battle session.
+type BattleFunc func(ctx context.Context, s *player.PlayerSession, troopID int, canEscape, canLose bool) int
+
 // ExecuteOpts holds optional parameters for Execute.
 type ExecuteOpts struct {
 	GameState  GameStateAccessor
 	MapID      int
 	EventID    int
 	TransferFn TransferFunc // server-side transfer handler
+	BattleFn   BattleFunc   // server-side battle handler
 }
 
 // Execute processes a single event page for the given session.
@@ -105,6 +134,15 @@ func (e *Executor) Execute(ctx context.Context, s *player.PlayerSession, page *r
 	}
 	e.executeList(ctx, s, page.List, opts, 0)
 	e.sendDialogEnd(s)
+}
+
+// SendStateSyncAfterExecution sends any pending state updates to the client
+// after an Execute call completes. Currently a no-op since state changes are
+// sent inline during execution.
+func (e *Executor) SendStateSyncAfterExecution(_ context.Context, _ *player.PlayerSession, _ *ExecuteOpts) {
+	// State changes (switches, variables, items, gold) are already sent to
+	// the client as npc_effect messages during execution. This method exists
+	// as a hook for future batch-sync optimizations.
 }
 
 // maxCallDepth prevents infinite recursion from common events calling each other.
@@ -146,10 +184,25 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 				i++
 				lines = append(lines, paramStr(cmds[i].Parameters, 0))
 			}
-			e.sendDialog(s, face, faceIndex, lines)
-			// Wait for client to acknowledge the dialog before continuing.
-			if !e.waitForDialogAck(ctx, s) {
-				return true
+
+			// RMMV: if text is immediately followed by choices, show together.
+			if i+1 < len(cmds) && cmds[i+1] != nil && cmds[i+1].Code == CmdShowChoices {
+				i++ // consume the choices command
+				choicesCmd := cmds[i]
+				choices := paramList(choicesCmd.Parameters, 0)
+				cancelType := paramInt(choicesCmd.Parameters, 1)
+				e.sendDialogWithChoices(s, face, faceIndex, lines, choices)
+
+				choiceIdx := e.waitForChoice(ctx, s)
+				if choiceIdx < 0 {
+					return true
+				}
+				i = e.skipToChoiceBranch(cmds, i, choiceIdx, cancelType)
+			} else {
+				e.sendDialog(s, face, faceIndex, lines)
+				if !e.waitForDialogAck(ctx, s) {
+					return true
+				}
 			}
 
 		case CmdShowChoices:
@@ -259,6 +312,72 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 			// Audio — forward to client.
 			e.sendEffect(s, cmd)
 
+		case CmdShowPicture, CmdMovePicture, CmdRotatePicture, CmdTintPicture, CmdErasePicture:
+			// Picture commands — forward to client for rendering.
+			e.sendEffect(s, cmd)
+
+		case CmdShowAnimation, CmdShowBalloon:
+			// Show Animation / Balloon Icon — forward to client.
+			e.sendEffect(s, cmd)
+
+		case CmdEraseEvent:
+			// Erase Event — forward to client (make event temporarily invisible).
+			e.sendEffect(s, cmd)
+
+		case CmdChangeHP:
+			e.applyChangeHP(ctx, s, cmd.Parameters, opts)
+
+		case CmdChangeMP:
+			e.applyChangeMP(ctx, s, cmd.Parameters, opts)
+
+		case CmdChangeState:
+			e.applyChangeState(ctx, s, cmd.Parameters, opts)
+
+		case CmdRecoverAll:
+			e.applyRecoverAll(ctx, s, cmd.Parameters, opts)
+
+		case CmdChangeEXP:
+			e.applyChangeEXP(ctx, s, cmd.Parameters, opts)
+
+		case CmdChangeLevel:
+			e.applyChangeLevel(ctx, s, cmd.Parameters, opts)
+
+		case CmdChangeParameter:
+			// Change Parameter — forward to client (stat buffs are session-only).
+			e.sendEffect(s, cmd)
+
+		case CmdChangeSkill:
+			// Change Skill (learn/forget) — forward to client.
+			e.sendEffect(s, cmd)
+
+		case CmdChangeEquipment:
+			// Change Equipment — forward to client.
+			e.sendEffect(s, cmd)
+
+		case CmdChangeName:
+			// Change Actor Name — forward to client.
+			e.sendEffect(s, cmd)
+
+		case CmdChangeClass:
+			e.applyChangeClass(ctx, s, cmd.Parameters, opts)
+
+		case CmdChangeActorImage:
+			// Change Actor Images — forward to client.
+			e.sendEffect(s, cmd)
+
+		case CmdBattleProcessing:
+			e.processBattle(ctx, s, cmd.Parameters, opts)
+
+		case CmdShopProcessing:
+			// Shop — forward to client for now.
+			e.sendEffect(s, cmd)
+
+		case CmdGameOver:
+			e.sendEffect(s, cmd)
+
+		case CmdReturnToTitle:
+			e.sendEffect(s, cmd)
+
 		case CmdComment, CmdCommentCont:
 			// Developer comments — skip.
 		}
@@ -314,6 +433,16 @@ func (e *Executor) sendChoices(s *player.PlayerSession, choices []string) {
 		"choices": choices,
 	})
 	s.Send(&player.Packet{Type: "npc_choices", Payload: payload})
+}
+
+func (e *Executor) sendDialogWithChoices(s *player.PlayerSession, faceName string, faceIndex int, lines []string, choices []string) {
+	payload, _ := json.Marshal(map[string]interface{}{
+		"face":       faceName,
+		"face_index": faceIndex,
+		"lines":      lines,
+		"choices":    choices,
+	})
+	s.Send(&player.Packet{Type: "npc_dialog_choices", Payload: payload})
 }
 
 func (e *Executor) sendDialogEnd(s *player.PlayerSession) {
