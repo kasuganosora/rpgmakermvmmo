@@ -243,7 +243,7 @@ func (dh *DebugHandlers) HandleTriggerCE(_ context.Context, s *player.PlayerSess
 		return nil
 	}
 
-	executor := npc.New(dh.db, dh.res, dh.logger)
+	executor := npc.NewWithDB(dh.db, dh.res, dh.logger)
 	opts := &npc.ExecuteOpts{
 		GameState:  composite,
 		MapID:      s.MapID,

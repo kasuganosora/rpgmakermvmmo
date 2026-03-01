@@ -1,14 +1,9 @@
-// Package npc implements RMMV event command execution for server-side NPC interactions.
+// Package npc 实现 RMMV 事件指令的服务端执行引擎。
 package npc
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"regexp"
-	"strconv"
-	"strings"
-	"time"
 
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/player"
 	"github.com/kasuganosora/rpgmakermvmmo/server/model"
@@ -17,15 +12,16 @@ import (
 	"gorm.io/gorm"
 )
 
-// RMMV event command codes handled by the server.
+// ---- RMMV 事件指令代码常量 ----
+
 const (
 	CmdEnd              = 0
 	CmdShowText         = 101
 	CmdShowTextLine     = 401
 	CmdShowChoices      = 102
-	CmdWhenBranch       = 402 // choice branch (When [n])
-	CmdWhenCancel       = 403 // choice cancel branch
-	CmdBranchEnd        = 404 // end of choice/conditional block
+	CmdWhenBranch       = 402 // 选项分支（When [n]）
+	CmdWhenCancel       = 403 // 选项取消分支
+	CmdBranchEnd        = 404 // 选项/条件块结束
 	CmdConditionalStart = 111
 	CmdLoop             = 112
 	CmdBreakLoop        = 113
@@ -50,7 +46,7 @@ const (
 	CmdTintScreen       = 223
 	CmdFlashScreen      = 224
 	CmdShakeScreen      = 225
-	CmdScreenEffect     = 211 // show/hide animation
+	CmdScreenEffect     = 211 // 显示/隐藏动画
 	CmdPlayBGM          = 241
 	CmdStopBGM          = 242
 	CmdPlayBGS          = 245
@@ -90,8 +86,10 @@ const (
 	CmdPluginCommand    = 356
 )
 
-// GameStateAccessor provides read/write access to switches, variables, and self-switches.
-// TemplateEvent.js extension: also supports self-variables with numeric indices.
+// ---- 核心接口 ----
+
+// GameStateAccessor 提供开关、变量、独立开关的读写访问。
+// TemplateEvent.js 扩展：还支持带数字索引的独立变量。
 type GameStateAccessor interface {
 	GetSwitch(id int) bool
 	SetSwitch(id int, val bool)
@@ -99,43 +97,69 @@ type GameStateAccessor interface {
 	SetVariable(id int, val int)
 	GetSelfSwitch(mapID, eventID int, ch string) bool
 	SetSelfSwitch(mapID, eventID int, ch string, val bool)
-	// Self-variable methods (TemplateEvent.js extension)
+	// 独立变量方法（TemplateEvent.js 扩展）
 	GetSelfVariable(mapID, eventID, index int) int
 	SetSelfVariable(mapID, eventID, index, val int)
 }
 
-// Executor runs RMMV event command lists for a player session.
+// InventoryStore 提供金币和物品的持久化操作。
+// 从 Executor 中提取此接口以支持单元测试中的 mock 替换。
+type InventoryStore interface {
+	// GetGold 查询角色当前金币数。
+	GetGold(ctx context.Context, charID int64) (int64, error)
+	// UpdateGold 增减角色金币（amount 可为负数）。
+	UpdateGold(ctx context.Context, charID int64, amount int64) error
+	// GetItem 查询角色背包中指定物品的数量，不存在返回 0。
+	GetItem(ctx context.Context, charID int64, itemID int) (qty int, err error)
+	// AddItem 增加物品数量，若不存在则创建记录。
+	AddItem(ctx context.Context, charID int64, itemID, qty int) error
+	// RemoveItem 减少物品数量，数量归零则删除记录。
+	RemoveItem(ctx context.Context, charID int64, itemID, qty int) error
+}
+
+// ---- 回调类型 ----
+
+// TransferFunc 在执行地图传送指令（201）时由 Executor 调用，执行服务端地图切换。
+type TransferFunc func(s *player.PlayerSession, mapID, x, y, dir int)
+
+// BattleFunc 在执行战斗处理指令（301）时由 Executor 调用，创建服务端权威战斗会话。
+type BattleFunc func(ctx context.Context, s *player.PlayerSession, troopID int, canEscape, canLose bool) int
+
+// ---- 执行选项 ----
+
+// ExecuteOpts 包含 Execute 方法的可选参数。
+type ExecuteOpts struct {
+	GameState  GameStateAccessor // 当前执行的游戏状态访问器
+	MapID      int               // 当前地图 ID
+	EventID    int               // 当前事件 ID
+	TransferFn TransferFunc      // 服务端传送处理器
+	BattleFn   BattleFunc        // 服务端战斗处理器
+}
+
+// ---- Executor 核心结构体 ----
+
+// Executor 为玩家会话执行 RMMV 事件指令列表。
 type Executor struct {
-	db     *gorm.DB
-	res    *resource.ResourceLoader
+	store  InventoryStore           // 金币/物品持久化（可 mock）
+	res    *resource.ResourceLoader // RMMV 资源数据（只读）
 	logger *zap.Logger
 }
 
-// New creates a new NPC Executor.
-func New(db *gorm.DB, res *resource.ResourceLoader, logger *zap.Logger) *Executor {
-	return &Executor{db: db, res: res, logger: logger}
+// New 创建 Executor，接受 InventoryStore 接口以支持测试 mock。
+func New(store InventoryStore, res *resource.ResourceLoader, logger *zap.Logger) *Executor {
+	return &Executor{store: store, res: res, logger: logger}
 }
 
-// TransferFunc is called by the executor when a Transfer Player command (201)
-// is encountered. It performs the actual server-side map transfer.
-type TransferFunc func(s *player.PlayerSession, mapID, x, y, dir int)
-
-// BattleFunc is called by the executor when a Battle Processing command (301)
-// is encountered. It creates a server-authoritative battle session.
-type BattleFunc func(ctx context.Context, s *player.PlayerSession, troopID int, canEscape, canLose bool) int
-
-// ExecuteOpts holds optional parameters for Execute.
-type ExecuteOpts struct {
-	GameState  GameStateAccessor
-	MapID      int
-	EventID    int
-	TransferFn TransferFunc // server-side transfer handler
-	BattleFn   BattleFunc   // server-side battle handler
+// NewWithDB 创建使用 GORM 数据库的 Executor（生产环境便捷构造函数）。
+func NewWithDB(db *gorm.DB, res *resource.ResourceLoader, logger *zap.Logger) *Executor {
+	return New(&gormInventoryStore{db: db}, res, logger)
 }
 
-// Execute processes a single event page for the given session.
-// Dialog commands are sent to the client; item/gold changes are applied immediately.
-// After sending choices, it waits for the player's reply via s.ChoiceCh.
+// ---- 公共 API ----
+
+// Execute 处理单个事件页的所有指令。
+// 对话指令发送给客户端；物品/金币变更立即生效。
+// 发送选项后阻塞等待玩家通过 s.ChoiceCh 回复。
 func (e *Executor) Execute(ctx context.Context, s *player.PlayerSession, page *resource.EventPage, opts *ExecuteOpts) {
 	if page == nil {
 		return
@@ -144,437 +168,13 @@ func (e *Executor) Execute(ctx context.Context, s *player.PlayerSession, page *r
 	e.sendDialogEnd(s)
 }
 
-// SendStateSyncAfterExecution sends any pending state updates to the client
-// after an Execute call completes. Currently a no-op since state changes are
-// sent inline during execution.
+// SendStateSyncAfterExecution 在 Execute 完成后发送待同步的状态更新。
+// 当前为空操作，因为状态变更已在执行过程中逐条发送。
+// 此方法作为未来批量同步优化的扩展点保留。
 func (e *Executor) SendStateSyncAfterExecution(_ context.Context, _ *player.PlayerSession, _ *ExecuteOpts) {
-	// State changes (switches, variables, items, gold) are already sent to
-	// the client as npc_effect messages during execution. This method exists
-	// as a hook for future batch-sync optimizations.
 }
 
-// maxCallDepth prevents infinite recursion from common events calling each other.
-const maxCallDepth = 10
-
-// executeList runs a command list. Returns true if a terminating command (CmdEnd) was hit.
-func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmds []*resource.EventCommand, opts *ExecuteOpts, depth int) bool {
-	if depth > maxCallDepth {
-		e.logger.Warn("common event call depth exceeded", zap.Int("depth", depth))
-		return false
-	}
-	for i := 0; i < len(cmds); i++ {
-		// Check context cancellation.
-		select {
-		case <-ctx.Done():
-			return true
-		default:
-		}
-
-		cmd := cmds[i]
-		if cmd == nil {
-			continue
-		}
-		switch cmd.Code {
-		case CmdEnd:
-			// Code 0 appears both as sub-block markers (within conditionals at
-			// indent > 0) and as the final list terminator (indent 0, last cmd).
-			// In RMMV, code 0 is a no-op — the interpreter just moves on.
-			// Only treat it as a true terminator if it's at indent 0.
-			if cmd.Indent == 0 {
-				return true
-			}
-
-		case CmdShowText:
-			var lines []string
-			face := paramStr(cmd.Parameters, 0)
-			faceIndex := paramInt(cmd.Parameters, 1)
-			background := paramInt(cmd.Parameters, 2)   // 0=window, 1=dim, 2=transparent
-			positionType := paramInt(cmd.Parameters, 3)  // 0=top, 1=middle, 2=bottom
-			for i+1 < len(cmds) && cmds[i+1] != nil && cmds[i+1].Code == CmdShowTextLine {
-				i++
-				lines = append(lines, paramStr(cmds[i].Parameters, 0))
-			}
-			// Resolve text escape codes (\N[n], \V[n], \P[n]) server-side.
-			lines = e.resolveDialogLines(lines, s, opts)
-
-			// RMMV: if text is immediately followed by choices, show together.
-			if i+1 < len(cmds) && cmds[i+1] != nil && cmds[i+1].Code == CmdShowChoices {
-				i++ // consume the choices command
-				choicesCmd := cmds[i]
-				choices := paramList(choicesCmd.Parameters, 0)
-				cancelType := paramInt(choicesCmd.Parameters, 1)
-				choiceDefault := paramInt(choicesCmd.Parameters, 2)
-				choicePosition := 2 // default=right
-				if len(choicesCmd.Parameters) > 3 {
-					choicePosition = paramInt(choicesCmd.Parameters, 3)
-				}
-				choiceBg := 0 // default=window
-				if len(choicesCmd.Parameters) > 4 {
-					choiceBg = paramInt(choicesCmd.Parameters, 4)
-				}
-				choices = e.resolveChoices(choices, s, opts)
-				e.sendDialogWithChoices(s, face, faceIndex, background, positionType, lines,
-					choices, choiceDefault, cancelType, choicePosition, choiceBg)
-
-				choiceIdx := e.waitForChoice(ctx, s)
-				if choiceIdx < 0 {
-					return true
-				}
-				i = e.skipToChoiceBranch(cmds, i, choiceIdx, cancelType)
-			} else {
-				e.sendDialog(s, face, faceIndex, background, positionType, lines)
-				if !e.waitForDialogAck(ctx, s) {
-					return true
-				}
-			}
-
-		case CmdShowChoices:
-			choices := paramList(cmd.Parameters, 0)
-			choices = e.resolveChoices(choices, s, opts)
-			cancelType := paramInt(cmd.Parameters, 1) // -1=disallow, 0-N=branch index
-			choiceDefault := paramInt(cmd.Parameters, 2)
-			choicePosition := 2
-			if len(cmd.Parameters) > 3 {
-				choicePosition = paramInt(cmd.Parameters, 3)
-			}
-			choiceBg := 0
-			if len(cmd.Parameters) > 4 {
-				choiceBg = paramInt(cmd.Parameters, 4)
-			}
-			e.sendChoices(s, choices, choiceDefault, cancelType, choicePosition, choiceBg)
-
-			// Wait for player's choice reply.
-			choiceIdx := e.waitForChoice(ctx, s)
-			if choiceIdx < 0 {
-				// Context cancelled or timeout — abort execution.
-				return true
-			}
-
-			// Skip to the matching When branch (code 402) or cancel branch (code 403).
-			i = e.skipToChoiceBranch(cmds, i, choiceIdx, cancelType)
-
-		case CmdWhenBranch, CmdWhenCancel:
-			// If we encounter a When branch during normal flow, it means
-			// we already executed the chosen branch and need to skip to BranchEnd.
-			i = e.skipToBranchEnd(cmds, i, cmd.Indent)
-
-		case CmdBranchEnd:
-			// Normal flow — continue.
-
-		case CmdConditionalStart:
-			if !e.evaluateCondition(cmd.Parameters, opts) {
-				// Skip to ElseBranch (411) or ConditionalEnd (412) at same indent.
-				i = e.skipToElseOrEnd(cmds, i, cmd.Indent)
-			}
-
-		case CmdElseBranch:
-			// If we reach ElseBranch during normal flow, the if-branch was taken.
-			// Skip to ConditionalEnd.
-			i = e.skipToConditionalEnd(cmds, i, cmd.Indent)
-
-		case CmdConditionalEnd:
-			// Normal flow — continue.
-
-		case CmdLoop:
-			// Loop start marker. Nothing to do here; the loop body follows.
-			// RepeatAbove (413) jumps back to the command after this Loop.
-
-		case CmdRepeatAbove:
-			// Jump back to the matching Loop (112) at the same indent.
-			i = e.jumpToLoopStart(cmds, i, cmd.Indent)
-
-		case CmdBreakLoop:
-			// Exit the current loop: skip to the command after RepeatAbove (413).
-			i = e.skipPastLoopEnd(cmds, i, cmd.Indent)
-
-		case CmdExitEvent:
-			// Stop event execution entirely.
-			return true
-
-		case CmdLabel:
-			// Label marker — labels are targets for JumpToLabel, no action needed.
-
-		case CmdJumpToLabel:
-			labelName := paramStr(cmd.Parameters, 0)
-			jumped := e.jumpToLabel(cmds, labelName)
-			if jumped >= 0 {
-				i = jumped
-			}
-			// If label not found, continue (RMMV behavior).
-
-		case CmdCallCommonEvent:
-			ceID := paramInt(cmd.Parameters, 0)
-			e.callCommonEvent(ctx, s, ceID, opts, depth)
-
-		case CmdChangeSwitches:
-			e.applySwitches(s, cmd.Parameters, opts)
-
-		case CmdChangeVars:
-			e.applyVariables(s, cmd.Parameters, opts)
-
-		case CmdChangeSelfSwitch:
-			e.applySelfSwitch(cmd.Parameters, opts)
-
-		case CmdChangeGold:
-			if err := e.applyGold(ctx, s, cmd.Parameters); err != nil {
-				e.logger.Warn("ChangeGold failed", zap.Int64("char_id", s.CharID), zap.Error(err))
-				// Continue execution - don't stop the event for gold errors.
-			}
-
-		case CmdChangeItems:
-			if err := e.applyItems(ctx, s, cmd.Parameters); err != nil {
-				e.logger.Warn("ChangeItems failed", zap.Int64("char_id", s.CharID), zap.Error(err))
-				// Continue execution - don't stop the event for item errors.
-			}
-
-		case CmdTransfer:
-			e.transferPlayer(s, cmd.Parameters, opts)
-
-		case CmdWait:
-			// Wait N frames; at 60fps: frames/60 seconds.
-			frames := paramInt(cmd.Parameters, 0)
-			if frames > 0 {
-				wait := time.Duration(frames) * time.Second / 60
-				select {
-				case <-time.After(wait):
-				case <-ctx.Done():
-					return true
-				}
-			}
-
-		case CmdScript:
-			// Concatenate code 355 + following 655 continuation lines.
-			script := paramStr(cmd.Parameters, 0)
-			for i+1 < len(cmds) && cmds[i+1] != nil && cmds[i+1].Code == CmdScriptCont {
-				i++
-				script += "\n" + paramStr(cmds[i].Parameters, 0)
-			}
-			// Forward only individual lines that are safe visual/audio commands.
-			// Multi-line blocks can mix safe ($gameScreen.startTint) with unsafe
-			// calls (SetMapDarkness, $gameVariables.setValue), so we filter per-line.
-			var safeLines []string
-			for _, line := range strings.Split(script, "\n") {
-				trimmed := strings.TrimSpace(line)
-				if trimmed == "" {
-					continue
-				}
-				if strings.HasPrefix(trimmed, "$gameScreen.") ||
-					strings.HasPrefix(trimmed, "AudioManager.") {
-					safeLines = append(safeLines, trimmed)
-				}
-			}
-			if len(safeLines) > 0 {
-				e.sendEffect(s, &resource.EventCommand{
-					Code:       CmdScript,
-					Parameters: []interface{}{strings.Join(safeLines, "\n")},
-				})
-			}
-
-		case CmdScriptCont:
-			// Handled above as part of CmdScript; skip if encountered standalone.
-
-		case CmdPluginCommand:
-			// Check for TE_CALL_ORIGIN_EVENT (TemplateEvent.js callback to original event).
-			if e.handleTECallOriginEvent(ctx, s, cmd, opts, depth) {
-				continue
-			}
-			// Filter out standing portrait commands — they rely on complex client-side
-			// state ($gameActors._equips, toneArray, etc.) and cause visual glitches
-			// (nude portrait, wrong timing) when forwarded from the server.
-			if pluginStr := paramStr(cmd.Parameters, 0); strings.HasPrefix(pluginStr, "CallStand") ||
-				strings.HasPrefix(pluginStr, "CallCutin") ||
-				strings.HasPrefix(pluginStr, "EraceStand") ||
-				strings.HasPrefix(pluginStr, "EraceCutin") ||
-				strings.HasPrefix(pluginStr, "CallAM") {
-				continue
-			}
-			// Other plugin commands — forward to client for execution.
-			e.sendEffect(s, cmd)
-
-		case CmdSetMoveRoute:
-			// Resolve charId=0 ("this event") to actual event ID before forwarding.
-			e.sendMoveRoute(s, cmd, opts)
-			// Skip continuation lines (505).
-			for i+1 < len(cmds) && cmds[i+1] != nil && cmds[i+1].Code == CmdMoveRouteCont {
-				i++
-			}
-			// If the move route has wait=true, estimate duration and wait.
-			if len(cmd.Parameters) > 1 {
-				if mr, ok := cmd.Parameters[1].(map[string]interface{}); ok {
-					if w, ok := mr["wait"]; ok && asBool(w) {
-						frames := estimateMoveRouteFrames(mr)
-						e.waitFrames(ctx, frames)
-					}
-				}
-			}
-
-		case CmdMoveRouteCont:
-			// Already consumed by CmdSetMoveRoute — skip.
-
-		case CmdWaitForMoveRoute:
-			// Wait for the last move route to complete.
-			// Use a generous default since we don't track client state.
-			e.waitFrames(ctx, 60)
-
-		case CmdFadeout:
-			// Fadeout always waits for completion in RMMV.
-			e.sendEffect(s, cmd)
-			frames := paramInt(cmd.Parameters, 0)
-			if frames <= 0 {
-				frames = 30
-			}
-			e.waitFrames(ctx, frames)
-
-		case CmdFadein:
-			// Fadein always waits for completion in RMMV.
-			e.sendEffect(s, cmd)
-			frames := paramInt(cmd.Parameters, 0)
-			if frames <= 0 {
-				frames = 30
-			}
-			e.waitFrames(ctx, frames)
-
-		case CmdTintScreen:
-			e.sendEffect(s, cmd)
-			// Wait if params[2] is true.
-			if len(cmd.Parameters) > 2 && asBool(cmd.Parameters[2]) {
-				frames := paramInt(cmd.Parameters, 1)
-				if frames > 0 {
-					e.waitFrames(ctx, frames)
-				}
-			}
-
-		case CmdFlashScreen:
-			e.sendEffect(s, cmd)
-			// Wait if params[2] is true.
-			if len(cmd.Parameters) > 2 && asBool(cmd.Parameters[2]) {
-				frames := paramInt(cmd.Parameters, 1)
-				if frames > 0 {
-					e.waitFrames(ctx, frames)
-				}
-			}
-
-		case CmdShakeScreen:
-			e.sendEffect(s, cmd)
-			// Wait if params[3] is true.
-			if len(cmd.Parameters) > 3 && asBool(cmd.Parameters[3]) {
-				frames := paramInt(cmd.Parameters, 2)
-				if frames > 0 {
-					e.waitFrames(ctx, frames)
-				}
-			}
-
-		case CmdScreenEffect:
-			e.sendEffect(s, cmd)
-
-		case CmdPlayBGM, CmdStopBGM, CmdPlayBGS, CmdStopBGS, CmdPlaySE, CmdStopSE, CmdPlayME:
-			// Audio — forward to client.
-			e.sendEffect(s, cmd)
-
-		case CmdShowPicture:
-			// Resolve variable-based coordinates before forwarding.
-			e.sendShowPicture(s, cmd.Parameters, opts)
-
-		case CmdMovePicture:
-			e.sendMovePicture(ctx, s, cmd.Parameters, opts)
-
-		case CmdRotatePicture, CmdTintPicture, CmdErasePicture:
-			e.sendEffect(s, cmd)
-
-		case CmdShowAnimation, CmdShowBalloon:
-			// Show Animation / Balloon Icon — resolve charId=0 to event ID.
-			charID := paramInt(cmd.Parameters, 0)
-			if charID == 0 && opts != nil && opts.EventID > 0 {
-				resolved := make([]interface{}, len(cmd.Parameters))
-				copy(resolved, cmd.Parameters)
-				resolved[0] = float64(opts.EventID)
-				e.sendEffect(s, &resource.EventCommand{Code: cmd.Code, Parameters: resolved})
-			} else {
-				e.sendEffect(s, cmd)
-			}
-
-		case CmdEraseEvent:
-			// Erase Event — forward to client (make event temporarily invisible).
-			e.sendEffect(s, cmd)
-
-		case CmdChangeHP:
-			e.applyChangeHP(ctx, s, cmd.Parameters, opts)
-
-		case CmdChangeMP:
-			e.applyChangeMP(ctx, s, cmd.Parameters, opts)
-
-		case CmdChangeState:
-			e.applyChangeState(ctx, s, cmd.Parameters, opts)
-
-		case CmdRecoverAll:
-			e.applyRecoverAll(ctx, s, cmd.Parameters, opts)
-
-		case CmdChangeEXP:
-			e.applyChangeEXP(ctx, s, cmd.Parameters, opts)
-
-		case CmdChangeLevel:
-			e.applyChangeLevel(ctx, s, cmd.Parameters, opts)
-
-		case CmdChangeParameter:
-			// Change Parameter — forward to client (stat buffs are session-only).
-			e.sendEffect(s, cmd)
-
-		case CmdChangeSkill:
-			// Change Skill (learn/forget) — forward to client.
-			e.sendEffect(s, cmd)
-
-		case CmdChangeEquipment:
-			// Change Equipment — forward to client.
-			e.sendEffect(s, cmd)
-
-		case CmdChangeName:
-			// Change Actor Name — if setting actor 1 or 101 name, this is the
-			// protagonist name change. The player's CharName is already set at
-			// character creation, so just forward to client.
-			e.sendEffect(s, cmd)
-
-		case CmdChangeClass:
-			e.applyChangeClass(ctx, s, cmd.Parameters, opts)
-
-		case CmdChangeActorImage:
-			// Change Actor Images — forward to client.
-			e.sendEffect(s, cmd)
-
-		case CmdBattleProcessing:
-			e.processBattle(ctx, s, cmd.Parameters, opts)
-
-		case CmdShopProcessing:
-			// Shop — forward to client for now.
-			e.sendEffect(s, cmd)
-
-		case CmdGameOver:
-			e.sendEffect(s, cmd)
-
-		case CmdReturnToTitle:
-			e.sendEffect(s, cmd)
-
-		case CmdComment, CmdCommentCont:
-			// Developer comments — skip.
-		}
-	}
-	return false
-}
-
-// callCommonEvent looks up a common event by ID and executes its command list.
-func (e *Executor) callCommonEvent(ctx context.Context, s *player.PlayerSession, ceID int, opts *ExecuteOpts, depth int) {
-	if ceID <= 0 || ceID >= len(e.res.CommonEvents) {
-		e.logger.Warn("common event ID out of range", zap.Int("ce_id", ceID))
-		return
-	}
-	ce := e.res.CommonEvents[ceID]
-	if ce == nil || len(ce.List) == 0 {
-		return
-	}
-	e.logger.Info("calling common event", zap.Int("ce_id", ceID), zap.String("name", ce.Name), zap.Int("depth", depth+1))
-	e.executeList(ctx, s, ce.List, opts, depth+1)
-}
-
-// ExecuteEventByID finds and runs the first page of a map event by event ID.
+// ExecuteEventByID 按事件 ID 查找地图事件并执行其第一页。
 func (e *Executor) ExecuteEventByID(ctx context.Context, s *player.PlayerSession, mapID, eventID int) {
 	md, ok := e.res.Maps[mapID]
 	if !ok {
@@ -592,950 +192,64 @@ func (e *Executor) ExecuteEventByID(ctx context.Context, s *player.PlayerSession
 	e.logger.Warn("event not found", zap.Int("map_id", mapID), zap.Int("event_id", eventID))
 }
 
-// ---- dialog helpers ----
+// ---- gormInventoryStore：基于 GORM 的 InventoryStore 默认实现 ----
 
-func (e *Executor) sendDialog(s *player.PlayerSession, faceName string, faceIndex, background, positionType int, lines []string) {
-	payload, _ := json.Marshal(map[string]interface{}{
-		"face":          faceName,
-		"face_index":    faceIndex,
-		"background":    background,
-		"position_type": positionType,
-		"lines":         lines,
-	})
-	s.Send(&player.Packet{Type: "npc_dialog", Payload: payload})
+// gormInventoryStore 使用 GORM 实现金币和物品的数据库持久化。
+type gormInventoryStore struct {
+	db *gorm.DB
 }
 
-func (e *Executor) sendChoices(s *player.PlayerSession, choices []string, defaultType, cancelType, positionType, background int) {
-	payload, _ := json.Marshal(map[string]interface{}{
-		"choices":       choices,
-		"default_type":  defaultType,
-		"cancel_type":   cancelType,
-		"position_type": positionType,
-		"background":    background,
-	})
-	s.Send(&player.Packet{Type: "npc_choices", Payload: payload})
+// GetGold 查询角色当前金币数。
+func (s *gormInventoryStore) GetGold(ctx context.Context, charID int64) (int64, error) {
+	var char model.Character
+	if err := s.db.WithContext(ctx).Select("gold").First(&char, charID).Error; err != nil {
+		return 0, err
+	}
+	return char.Gold, nil
 }
 
-func (e *Executor) sendDialogWithChoices(s *player.PlayerSession, faceName string, faceIndex, background, positionType int, lines []string, choices []string, choiceDefault, choiceCancel, choicePosition, choiceBg int) {
-	payload, _ := json.Marshal(map[string]interface{}{
-		"face":             faceName,
-		"face_index":       faceIndex,
-		"background":       background,
-		"position_type":    positionType,
-		"lines":            lines,
-		"choices":          choices,
-		"choice_default":   choiceDefault,
-		"choice_cancel":    choiceCancel,
-		"choice_position":  choicePosition,
-		"choice_background": choiceBg,
-	})
-	s.Send(&player.Packet{Type: "npc_dialog_choices", Payload: payload})
+// UpdateGold 增减角色金币。
+func (s *gormInventoryStore) UpdateGold(ctx context.Context, charID int64, amount int64) error {
+	return s.db.WithContext(ctx).Model(&model.Character{}).Where("id = ?", charID).
+		Update("gold", gorm.Expr("gold + ?", amount)).Error
 }
 
-func (e *Executor) sendDialogEnd(s *player.PlayerSession) {
-	s.Send(&player.Packet{Type: "npc_dialog_end"})
+// GetItem 查询角色背包中指定物品的数量。
+func (s *gormInventoryStore) GetItem(ctx context.Context, charID int64, itemID int) (int, error) {
+	var inv model.Inventory
+	err := s.db.WithContext(ctx).
+		Where("char_id = ? AND item_id = ? AND kind = 1", charID, itemID).
+		First(&inv).Error
+	if err != nil {
+		return 0, err
+	}
+	return inv.Qty, nil
 }
 
-// ---- dialog/choice waiting ----
-
-// waitForDialogAck blocks until the client acknowledges the dialog.
-// Only aborts on disconnect (s.Done) or context cancellation — no fixed timeout.
-func (e *Executor) waitForDialogAck(ctx context.Context, s *player.PlayerSession) bool {
-	select {
-	case <-s.DialogAckCh:
-		return true
-	case <-s.Done:
-		return false
-	case <-ctx.Done():
-		return false
+// AddItem 增加物品数量，若不存在则创建新记录。
+func (s *gormInventoryStore) AddItem(ctx context.Context, charID int64, itemID, qty int) error {
+	var inv model.Inventory
+	err := s.db.WithContext(ctx).
+		Where("char_id = ? AND item_id = ? AND kind = 1", charID, itemID).
+		First(&inv).Error
+	if err != nil {
+		inv = model.Inventory{CharID: charID, ItemID: itemID, Kind: model.ItemKindItem, Qty: qty}
+		return s.db.WithContext(ctx).Create(&inv).Error
 	}
+	return s.db.WithContext(ctx).Model(&inv).Update("qty", inv.Qty+qty).Error
 }
 
-// waitForChoice blocks until the player sends a choice reply.
-// Only aborts on disconnect (s.Done) or context cancellation — no fixed timeout.
-func (e *Executor) waitForChoice(ctx context.Context, s *player.PlayerSession) int {
-	select {
-	case idx := <-s.ChoiceCh:
-		return idx
-	case <-s.Done:
-		return -1
-	case <-ctx.Done():
-		return -1
+// RemoveItem 减少物品数量，数量归零时删除记录。
+func (s *gormInventoryStore) RemoveItem(ctx context.Context, charID int64, itemID, qty int) error {
+	var inv model.Inventory
+	if err := s.db.WithContext(ctx).
+		Where("char_id = ? AND item_id = ? AND kind = 1", charID, itemID).
+		First(&inv).Error; err != nil {
+		return fmt.Errorf("item %d not found in inventory", itemID)
 	}
-}
-
-// ---- branch navigation ----
-
-// skipToChoiceBranch advances past the ShowChoices to the matching When branch.
-func (e *Executor) skipToChoiceBranch(cmds []*resource.EventCommand, startIdx, choiceIdx, cancelType int) int {
-	indent := cmds[startIdx].Indent
-	branchCount := 0
-	for j := startIdx + 1; j < len(cmds); j++ {
-		c := cmds[j]
-		if c == nil {
-			continue
-		}
-		if c.Indent != indent {
-			continue
-		}
-		if c.Code == CmdWhenBranch {
-			if branchCount == choiceIdx {
-				return j // execution will continue from the command after this
-			}
-			branchCount++
-		}
-		if c.Code == CmdWhenCancel {
-			if choiceIdx < 0 || choiceIdx == cancelType {
-				return j
-			}
-		}
-		if c.Code == CmdBranchEnd {
-			return j // no matching branch found; continue after block
-		}
+	newQty := inv.Qty - qty
+	if newQty <= 0 {
+		return s.db.WithContext(ctx).Delete(&inv).Error
 	}
-	return len(cmds) - 1
-}
-
-// skipToBranchEnd skips forward to the BranchEnd (code 404) at the given indent level.
-func (e *Executor) skipToBranchEnd(cmds []*resource.EventCommand, startIdx, indent int) int {
-	for j := startIdx + 1; j < len(cmds); j++ {
-		c := cmds[j]
-		if c == nil {
-			continue
-		}
-		if c.Code == CmdBranchEnd && c.Indent == indent {
-			return j
-		}
-	}
-	return len(cmds) - 1
-}
-
-// skipToElseOrEnd skips to ElseBranch (411) or ConditionalEnd (412) at indent.
-func (e *Executor) skipToElseOrEnd(cmds []*resource.EventCommand, startIdx, indent int) int {
-	for j := startIdx + 1; j < len(cmds); j++ {
-		c := cmds[j]
-		if c == nil {
-			continue
-		}
-		if c.Indent != indent {
-			continue
-		}
-		if c.Code == CmdElseBranch || c.Code == CmdConditionalEnd {
-			return j
-		}
-	}
-	return len(cmds) - 1
-}
-
-// skipToConditionalEnd skips to ConditionalEnd (412) at indent.
-func (e *Executor) skipToConditionalEnd(cmds []*resource.EventCommand, startIdx, indent int) int {
-	for j := startIdx + 1; j < len(cmds); j++ {
-		c := cmds[j]
-		if c == nil {
-			continue
-		}
-		if c.Code == CmdConditionalEnd && c.Indent == indent {
-			return j
-		}
-	}
-	return len(cmds) - 1
-}
-
-// jumpToLoopStart scans backward from RepeatAbove (413) to find the matching
-// Loop (112) at the same indent. Returns the index of the Loop command so the
-// next iteration starts at the command after it.
-func (e *Executor) jumpToLoopStart(cmds []*resource.EventCommand, startIdx, indent int) int {
-	for j := startIdx - 1; j >= 0; j-- {
-		c := cmds[j]
-		if c == nil {
-			continue
-		}
-		if c.Code == CmdLoop && c.Indent == indent {
-			return j // will be incremented by the for-loop, starting at Loop+1
-		}
-	}
-	// Loop start not found — stay at current position (shouldn't happen).
-	return startIdx
-}
-
-// skipPastLoopEnd scans forward from BreakLoop (113) to find the matching
-// RepeatAbove (413) at the same indent, then returns that index so execution
-// continues after the loop.
-func (e *Executor) skipPastLoopEnd(cmds []*resource.EventCommand, startIdx, indent int) int {
-	for j := startIdx + 1; j < len(cmds); j++ {
-		c := cmds[j]
-		if c == nil {
-			continue
-		}
-		if c.Code == CmdRepeatAbove && c.Indent == indent {
-			return j // for-loop increments i, so next command is after RepeatAbove
-		}
-	}
-	return len(cmds) - 1
-}
-
-// jumpToLabel scans the entire command list for a Label (118) with the given name.
-// Returns the label's index, or -1 if not found.
-func (e *Executor) jumpToLabel(cmds []*resource.EventCommand, labelName string) int {
-	for j := 0; j < len(cmds); j++ {
-		c := cmds[j]
-		if c == nil {
-			continue
-		}
-		if c.Code == CmdLabel && len(c.Parameters) > 0 {
-			if paramStr(c.Parameters, 0) == labelName {
-				return j
-			}
-		}
-	}
-	return -1
-}
-
-// ---- conditional evaluation ----
-
-// evaluateCondition checks an RMMV conditional branch (code 111).
-// Parameters: [0]=conditionType, then type-specific params.
-func (e *Executor) evaluateCondition(params []interface{}, opts *ExecuteOpts) bool {
-	condType := paramInt(params, 0)
-	gs := opts.GameState
-	switch condType {
-	case 0: // Switch
-		switchID := paramInt(params, 1)
-		expected := paramInt(params, 2) // 0=ON, 1=OFF
-		if gs == nil {
-			return false
-		}
-		val := gs.GetSwitch(switchID)
-		if expected == 0 {
-			return val
-		}
-		return !val
-
-	case 1: // Variable
-		varID := paramInt(params, 1)
-		refType := paramInt(params, 2)  // 0=constant, 1=variable
-		refVal := paramInt(params, 3)
-		op := paramInt(params, 4) // 0=eq, 1=gte, 2=lte, 3=gt, 4=lt, 5=ne
-		if gs == nil {
-			return false
-		}
-		varVal := gs.GetVariable(varID)
-		compareVal := refVal
-		if refType == 1 {
-			compareVal = gs.GetVariable(refVal)
-		}
-		switch op {
-		case 0:
-			return varVal == compareVal
-		case 1:
-			return varVal >= compareVal
-		case 2:
-			return varVal <= compareVal
-		case 3:
-			return varVal > compareVal
-		case 4:
-			return varVal < compareVal
-		case 5:
-			return varVal != compareVal
-		}
-
-	case 2: // Self-switch
-		ch := paramStr(params, 1)     // "A","B","C","D"
-		expected := paramInt(params, 2) // 0=ON, 1=OFF
-		if gs == nil || opts == nil {
-			return false
-		}
-		val := gs.GetSelfSwitch(opts.MapID, opts.EventID, ch)
-		if expected == 0 {
-			return val
-		}
-		return !val
-
-	// Types 3-12 are player-specific (timer, actor, enemy, etc.) — skip on server.
-	default:
-		return true // unknown condition → treat as met (safe default)
-	}
-	return false
-}
-
-// ---- state changes ----
-
-// applySwitches handles RMMV ChangeSwitches (code 121).
-// Parameters: [0]=startID, [1]=endID, [2]=value (0=ON, 1=OFF)
-func (e *Executor) applySwitches(s *player.PlayerSession, params []interface{}, opts *ExecuteOpts) {
-	if opts == nil || opts.GameState == nil {
-		return
-	}
-	startID := paramInt(params, 0)
-	endID := paramInt(params, 1)
-	val := paramInt(params, 2) == 0 // 0=ON
-	for id := startID; id <= endID; id++ {
-		opts.GameState.SetSwitch(id, val)
-		// Sync to client so parallel CEs read correct values.
-		e.sendSwitchChange(s, id, val)
-	}
-}
-
-// applyVariables handles RMMV ChangeVariables (code 122).
-// Parameters: [0]=startID, [1]=endID, [2]=operation(0=set,1=add,2=sub,3=mul,4=div,5=mod),
-//
-//	[3]=operandType(0=const,1=var,2=random), [4]=operand or min, [5]=max (for random)
-func (e *Executor) applyVariables(s *player.PlayerSession, params []interface{}, opts *ExecuteOpts) {
-	if opts == nil || opts.GameState == nil {
-		return
-	}
-	startID := paramInt(params, 0)
-	endID := paramInt(params, 1)
-	op := paramInt(params, 2)
-	operandType := paramInt(params, 3)
-	operandVal := paramInt(params, 4)
-
-	for id := startID; id <= endID; id++ {
-		current := opts.GameState.GetVariable(id)
-		val := operandVal
-		if operandType == 1 {
-			val = opts.GameState.GetVariable(operandVal)
-		}
-		switch op {
-		case 0:
-			current = val
-		case 1:
-			current += val
-		case 2:
-			current -= val
-		case 3:
-			current *= val
-		case 4:
-			if val != 0 {
-				current /= val
-			}
-		case 5:
-			if val != 0 {
-				current %= val
-			}
-		}
-		opts.GameState.SetVariable(id, current)
-		// Sync to client so parallel CEs read correct values.
-		e.sendVarChange(s, id, current)
-	}
-}
-
-// sendVarChange notifies the client of a variable change.
-func (e *Executor) sendVarChange(s *player.PlayerSession, id, value int) {
-	payload, _ := json.Marshal(map[string]interface{}{"id": id, "value": value})
-	s.Send(&player.Packet{Type: "var_change", Payload: payload})
-}
-
-// sendSwitchChange notifies the client of a switch change.
-func (e *Executor) sendSwitchChange(s *player.PlayerSession, id int, value bool) {
-	payload, _ := json.Marshal(map[string]interface{}{"id": id, "value": value})
-	s.Send(&player.Packet{Type: "switch_change", Payload: payload})
-}
-
-// applySelfSwitch handles RMMV ChangeSelfSwitch (code 123).
-// Parameters: [0]=channel("A"-"D"), [1]=value (0=ON, 1=OFF)
-func (e *Executor) applySelfSwitch(params []interface{}, opts *ExecuteOpts) {
-	if opts == nil || opts.GameState == nil {
-		return
-	}
-	ch := paramStr(params, 0)
-	val := paramInt(params, 1) == 0 // 0=ON
-	opts.GameState.SetSelfSwitch(opts.MapID, opts.EventID, ch, val)
-}
-
-// ---- gold/items ----
-
-// applyGold changes the player's gold based on RMMV ChangeGold command parameters.
-// Parameters: [0]=operation(0=+,1=-), [1]=operandType(0=const,1=var), [2]=operand
-func (e *Executor) applyGold(ctx context.Context, s *player.PlayerSession, params []interface{}) error {
-	op := paramInt(params, 0)
-	amount := int64(paramInt(params, 2))
-	if op == 1 {
-		amount = -amount
-	}
-
-	// Check for sufficient gold when deducting.
-	if amount < 0 {
-		var char model.Character
-		if err := e.db.WithContext(ctx).Select("gold").First(&char, s.CharID).Error; err != nil {
-			e.logger.Warn("applyGold: failed to get character gold", zap.Int64("char_id", s.CharID), zap.Error(err))
-			return err
-		}
-		if char.Gold < -amount {
-			e.logger.Warn("applyGold: insufficient gold", zap.Int64("char_id", s.CharID), zap.Int64("have", char.Gold), zap.Int64("need", -amount))
-			return fmt.Errorf("insufficient gold: have %d, need %d", char.Gold, -amount)
-		}
-	}
-
-	if err := e.db.WithContext(ctx).Model(&model.Character{}).Where("id = ?", s.CharID).
-		Update("gold", gorm.Expr("gold + ?", amount)).Error; err != nil {
-		e.logger.Warn("applyGold: failed to update gold", zap.Int64("char_id", s.CharID), zap.Error(err))
-		return err
-	}
-	return nil
-}
-
-// applyItems changes the player's inventory based on RMMV ChangeItems parameters.
-// Parameters: [0]=itemID, [1]=operation(0=+,1=-), [2]=operandType, [3]=operand
-func (e *Executor) applyItems(ctx context.Context, s *player.PlayerSession, params []interface{}) error {
-	itemID := paramInt(params, 0)
-	op := paramInt(params, 1)
-	qty := paramInt(params, 3)
-	if itemID <= 0 {
-		return fmt.Errorf("invalid item_id: %d", itemID)
-	}
-	if qty <= 0 {
-		return fmt.Errorf("invalid quantity: %d", qty)
-	}
-
-	const maxStackQty = 9999
-
-	if op == 1 {
-		// Remove items.
-		var inv model.Inventory
-		if err := e.db.WithContext(ctx).
-			Where("char_id = ? AND item_id = ? AND kind = 1", s.CharID, itemID).
-			First(&inv).Error; err != nil {
-			e.logger.Warn("applyItems: item not found for removal", zap.Int64("char_id", s.CharID), zap.Int("item_id", itemID))
-			return fmt.Errorf("item %d not found in inventory", itemID)
-		}
-		if inv.Qty < qty {
-			e.logger.Warn("applyItems: insufficient quantity", zap.Int64("char_id", s.CharID), zap.Int("item_id", itemID), zap.Int("have", inv.Qty), zap.Int("need", qty))
-			return fmt.Errorf("insufficient quantity: have %d, need %d", inv.Qty, qty)
-		}
-		newQty := inv.Qty - qty
-		if newQty <= 0 {
-			if err := e.db.WithContext(ctx).Delete(&inv).Error; err != nil {
-				e.logger.Warn("applyItems: failed to delete inventory", zap.Int64("char_id", s.CharID), zap.Error(err))
-				return err
-			}
-		} else {
-			if err := e.db.WithContext(ctx).Model(&inv).Update("qty", newQty).Error; err != nil {
-				e.logger.Warn("applyItems: failed to update quantity", zap.Int64("char_id", s.CharID), zap.Error(err))
-				return err
-			}
-		}
-	} else {
-		// Add items with stack limit check.
-		var inv model.Inventory
-		err := e.db.WithContext(ctx).
-			Where("char_id = ? AND item_id = ? AND kind = 1", s.CharID, itemID).
-			First(&inv).Error
-		if err != nil {
-			inv = model.Inventory{CharID: s.CharID, ItemID: itemID, Kind: model.ItemKindItem, Qty: qty}
-			if err := e.db.WithContext(ctx).Create(&inv).Error; err != nil {
-				e.logger.Warn("applyItems: failed to create inventory", zap.Int64("char_id", s.CharID), zap.Error(err))
-				return err
-			}
-		} else {
-			newQty := inv.Qty + qty
-			if newQty > maxStackQty {
-				e.logger.Warn("applyItems: exceeds max stack", zap.Int64("char_id", s.CharID), zap.Int("item_id", itemID), zap.Int("new_qty", newQty))
-				return fmt.Errorf("exceeds maximum stack size: %d", maxStackQty)
-			}
-			if err := e.db.WithContext(ctx).Model(&inv).Update("qty", newQty).Error; err != nil {
-				e.logger.Warn("applyItems: failed to add quantity", zap.Int64("char_id", s.CharID), zap.Error(err))
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// ---- transfer ----
-
-// transferPlayer performs a server-side map transfer via the TransferFn callback.
-// Parameters: [0]=mode(0=direct,1=var), [1]=mapID, [2]=x, [3]=y, [4]=dir
-func (e *Executor) transferPlayer(s *player.PlayerSession, params []interface{}, opts *ExecuteOpts) {
-	mode := paramInt(params, 0)
-	mapID := paramInt(params, 1)
-	x := paramInt(params, 2)
-	y := paramInt(params, 3)
-	dir := paramInt(params, 4)
-
-	// Mode 1: resolve values from game variables.
-	if mode == 1 && opts != nil && opts.GameState != nil {
-		mapID = opts.GameState.GetVariable(mapID)
-		x = opts.GameState.GetVariable(x)
-		y = opts.GameState.GetVariable(y)
-	}
-
-	if dir <= 0 {
-		dir = 2
-	}
-
-	e.logger.Info("executor transferPlayer",
-		zap.Int64("char_id", s.CharID),
-		zap.Int("mode", mode),
-		zap.Int("dest_map", mapID),
-		zap.Int("dest_x", x),
-		zap.Int("dest_y", y),
-		zap.Int("dest_dir", dir),
-		zap.Int("from_map", opts.MapID),
-		zap.Int("event_id", opts.EventID))
-
-	if opts != nil && opts.TransferFn != nil {
-		opts.TransferFn(s, mapID, x, y, dir)
-		return
-	}
-
-	// Fallback: send transfer_player to client (no server-side handler available).
-	e.logger.Warn("no TransferFn set, sending client-side transfer",
-		zap.Int("map_id", mapID), zap.Int("x", x), zap.Int("y", y))
-	payload, _ := json.Marshal(map[string]interface{}{
-		"map_id": mapID,
-		"x":      x,
-		"y":      y,
-		"dir":    dir,
-	})
-	s.Send(&player.Packet{Type: "transfer_player", Payload: payload})
-}
-
-// ---- TemplateEvent plugin command handling ----
-
-// handleTECallOriginEvent checks if a plugin command (code 356) is a
-// TemplateEvent.js command that should be handled server-side.
-// Returns true if the command was handled (or intentionally skipped), false
-// if it should be forwarded to the client.
-//
-// Handled TE commands:
-//   - TE固有イベント呼び出し / TE_CALL_ORIGIN_EVENT — execute original event's page
-//   - TE_CALL_MAP_EVENT / TEテンプレート呼び出し — call a template event by name + page
-//   - TE_SET_SELF_VARIABLE — set a self-variable (absorbed silently)
-//   - TE関連データ値デバッグ表示 — debug display (skipped)
-func (e *Executor) handleTECallOriginEvent(ctx context.Context, s *player.PlayerSession, cmd *resource.EventCommand, opts *ExecuteOpts, depth int) bool {
-	if len(cmd.Parameters) == 0 {
-		return false
-	}
-	raw, _ := cmd.Parameters[0].(string)
-	if raw == "" {
-		return false
-	}
-
-	// Parse "CommandName arg1 arg2 ..." (RMMV code 356 format).
-	parts := strings.Fields(raw)
-	cmdName := parts[0]
-	cmdArgs := parts[1:]
-
-	switch cmdName {
-	case "TE固有イベント呼び出し", "TE_CALL_ORIGIN_EVENT":
-		return e.teCallOriginEvent(ctx, s, cmdArgs, opts, depth)
-
-	case "TEテンプレート呼び出し", "TE_CALL_MAP_EVENT":
-		return e.teCallMapEvent(ctx, s, cmdArgs, opts, depth)
-
-	case "TE_SET_SELF_VARIABLE":
-		// Self-variable management — absorb silently (not yet tracked server-side).
-		return true
-
-	case "TE関連データ値デバッグ表示":
-		// Debug display — skip on server.
-		return true
-	}
-
-	// Not a TE command — let the caller forward it to the client.
-	return false
-}
-
-// teCallOriginEvent handles TE_CALL_ORIGIN_EVENT: executes the original
-// (pre-template) event's page commands.
-func (e *Executor) teCallOriginEvent(ctx context.Context, s *player.PlayerSession, args []string, opts *ExecuteOpts, depth int) bool {
-	if opts == nil || opts.MapID <= 0 || opts.EventID <= 0 {
-		e.logger.Warn("TE_CALL_ORIGIN_EVENT: missing map/event context")
-		return true
-	}
-
-	mapEvent := e.findMapEvent(opts.MapID, opts.EventID)
-	if mapEvent == nil {
-		e.logger.Warn("TE_CALL_ORIGIN_EVENT: event not found",
-			zap.Int("map_id", opts.MapID), zap.Int("event_id", opts.EventID))
-		return true
-	}
-
-	if len(mapEvent.OriginalPages) == 0 {
-		e.logger.Warn("TE_CALL_ORIGIN_EVENT: no original pages",
-			zap.Int("map_id", opts.MapID), zap.Int("event_id", opts.EventID))
-		return true
-	}
-
-	// Optional page index argument (defaults to 0).
-	pageIdx := 0
-	if len(args) > 0 {
-		if idx, err := strconv.Atoi(args[0]); err == nil && idx >= 0 {
-			pageIdx = idx
-		}
-	}
-	if pageIdx >= len(mapEvent.OriginalPages) {
-		pageIdx = 0
-	}
-
-	origPage := mapEvent.OriginalPages[pageIdx]
-	if origPage == nil || len(origPage.List) == 0 {
-		return true
-	}
-
-	e.logger.Info("TE_CALL_ORIGIN_EVENT: executing original page",
-		zap.Int("map_id", opts.MapID),
-		zap.Int("event_id", opts.EventID),
-		zap.Int("page_idx", pageIdx),
-		zap.Int("cmd_count", len(origPage.List)))
-
-	e.executeList(ctx, s, origPage.List, opts, depth+1)
-	return true
-}
-
-// teCallMapEvent handles TE_CALL_MAP_EVENT: calls a template event from the
-// template map by name, executing a specific page's commands.
-// Format: "TE_CALL_MAP_EVENT templateName pageIndex"
-func (e *Executor) teCallMapEvent(ctx context.Context, s *player.PlayerSession, args []string, opts *ExecuteOpts, depth int) bool {
-	if len(args) < 1 {
-		e.logger.Warn("TE_CALL_MAP_EVENT: missing template name")
-		return true
-	}
-	tmplName := args[0]
-	pageIdx := 0
-	if len(args) > 1 {
-		if idx, err := strconv.Atoi(args[1]); err == nil && idx >= 0 {
-			pageIdx = idx
-		}
-	}
-
-	// Find the template event in the template map.
-	// We search all maps for the event by name — the template map is typically
-	// identified by TemplateMapId, but we don't have that config here.
-	// Instead, search all maps for a matching event name.
-	var tmplEvent *resource.MapEvent
-	for _, md := range e.res.Maps {
-		if md == nil {
-			continue
-		}
-		for _, ev := range md.Events {
-			if ev != nil && ev.Name == tmplName {
-				tmplEvent = ev
-				break
-			}
-		}
-		if tmplEvent != nil {
-			break
-		}
-	}
-
-	if tmplEvent == nil {
-		e.logger.Warn("TE_CALL_MAP_EVENT: template not found",
-			zap.String("name", tmplName))
-		return true
-	}
-
-	// RMMV page indices are 1-based in the plugin command but 0-based in array.
-	// TemplateEvent.js uses 1-based page index in plugin commands.
-	arrayIdx := pageIdx - 1
-	if arrayIdx < 0 {
-		arrayIdx = 0
-	}
-	if arrayIdx >= len(tmplEvent.Pages) {
-		arrayIdx = 0
-	}
-
-	page := tmplEvent.Pages[arrayIdx]
-	if page == nil || len(page.List) == 0 {
-		return true
-	}
-
-	e.logger.Info("TE_CALL_MAP_EVENT: executing template page",
-		zap.String("template", tmplName),
-		zap.Int("page_idx", arrayIdx),
-		zap.Int("cmd_count", len(page.List)))
-
-	e.executeList(ctx, s, page.List, opts, depth+1)
-	return true
-}
-
-// findMapEvent looks up a MapEvent by map ID and event ID.
-func (e *Executor) findMapEvent(mapID, eventID int) *resource.MapEvent {
-	md, ok := e.res.Maps[mapID]
-	if !ok {
-		return nil
-	}
-	for _, ev := range md.Events {
-		if ev != nil && ev.ID == eventID {
-			return ev
-		}
-	}
-	return nil
-}
-
-// ---- visual effect forwarding ----
-
-// sendEffect forwards a visual/audio RMMV command to the client as an npc_effect message.
-// The client is expected to execute the corresponding RMMV function and acknowledge completion.
-func (e *Executor) sendEffect(s *player.PlayerSession, cmd *resource.EventCommand) {
-	payload, _ := json.Marshal(map[string]interface{}{
-		"code":   cmd.Code,
-		"indent": cmd.Indent,
-		"params": cmd.Parameters,
-	})
-	s.Send(&player.Packet{Type: "npc_effect", Payload: payload})
-}
-
-// ---- parameter helpers ----
-
-func paramStr(params []interface{}, idx int) string {
-	if idx >= len(params) {
-		return ""
-	}
-	if s, ok := params[idx].(string); ok {
-		return s
-	}
-	return ""
-}
-
-func paramInt(params []interface{}, idx int) int {
-	if idx >= len(params) {
-		return 0
-	}
-	switch v := params[idx].(type) {
-	case int:
-		return v
-	case float64:
-		return int(v)
-	case int64:
-		return int(v)
-	}
-	return 0
-}
-
-func paramList(params []interface{}, idx int) []string {
-	if idx >= len(params) {
-		return nil
-	}
-	raw, ok := params[idx].([]interface{})
-	if !ok {
-		return nil
-	}
-	result := make([]string, 0, len(raw))
-	for _, v := range raw {
-		if s, ok := v.(string); ok {
-			result = append(result, s)
-		}
-	}
-	return result
-}
-
-// estimateMoveRouteFrames estimates how many frames a move route will take.
-// Each move/turn command ~16 frames at normal speed, wait commands add their duration.
-func estimateMoveRouteFrames(mr map[string]interface{}) int {
-	listRaw, ok := mr["list"]
-	if !ok {
-		return 30
-	}
-	list, ok := listRaw.([]interface{})
-	if !ok || len(list) == 0 {
-		return 30
-	}
-	frames := 0
-	for _, item := range list {
-		cmd, ok := item.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		codeRaw, _ := cmd["code"]
-		code := 0
-		if f, ok := codeRaw.(float64); ok {
-			code = int(f)
-		}
-		switch {
-		case code >= 1 && code <= 14:
-			// Move/jump commands: ~16 frames each at normal speed.
-			frames += 16
-		case code == 15:
-			// Wait command: params[0] = frames to wait.
-			if params, ok := cmd["parameters"].([]interface{}); ok && len(params) > 0 {
-				if f, ok := params[0].(float64); ok {
-					frames += int(f)
-				}
-			}
-		case code >= 16 && code <= 44:
-			// Turn/speed/other commands: near instant.
-			frames += 2
-		}
-	}
-	if frames < 10 {
-		frames = 10
-	}
-	return frames
-}
-
-// asBool converts an interface{} to bool (handles JSON booleans, numbers, strings).
-func asBool(v interface{}) bool {
-	switch val := v.(type) {
-	case bool:
-		return val
-	case float64:
-		return val != 0
-	case int:
-		return val != 0
-	case string:
-		return val == "true" || val == "1"
-	}
-	return false
-}
-
-// waitFrames waits for N frames (at 60fps) or until context is cancelled.
-func (e *Executor) waitFrames(ctx context.Context, frames int) {
-	if frames <= 0 {
-		return
-	}
-	wait := time.Duration(frames) * time.Second / 60
-	select {
-	case <-time.After(wait):
-	case <-ctx.Done():
-	}
-}
-
-// sendShowPicture resolves variable-based coordinates and forwards Show Picture.
-// RMMV params: [pictureId, name, origin, directDesignation, x, y, scaleX, scaleY, opacity, blendMode]
-// If params[3] == 1, x/y come from game variables instead of direct values.
-func (e *Executor) sendShowPicture(s *player.PlayerSession, params []interface{}, opts *ExecuteOpts) {
-	resolved := make([]interface{}, len(params))
-	copy(resolved, params)
-
-	designation := paramInt(params, 3)
-	if designation == 1 && opts != nil && opts.GameState != nil {
-		// Variable-based: params[4] = varID for X, params[5] = varID for Y
-		varX := paramInt(params, 4)
-		varY := paramInt(params, 5)
-		if len(resolved) > 4 {
-			resolved[4] = float64(opts.GameState.GetVariable(varX))
-		}
-		if len(resolved) > 5 {
-			resolved[5] = float64(opts.GameState.GetVariable(varY))
-		}
-		// Mark as direct designation so client doesn't try to resolve again.
-		if len(resolved) > 3 {
-			resolved[3] = float64(0)
-		}
-	}
-
-	e.sendEffect(s, &resource.EventCommand{Code: CmdShowPicture, Parameters: resolved})
-}
-
-// sendMoveRoute resolves charId=0 ("this event") to the actual event ID
-// before forwarding the move route to the client.
-func (e *Executor) sendMoveRoute(s *player.PlayerSession, cmd *resource.EventCommand, opts *ExecuteOpts) {
-	charID := paramInt(cmd.Parameters, 0)
-	if charID == 0 && opts != nil && opts.EventID > 0 {
-		// Replace "this event" with the actual event ID so the client
-		// can find the correct NPC sprite.
-		resolved := make([]interface{}, len(cmd.Parameters))
-		copy(resolved, cmd.Parameters)
-		resolved[0] = float64(opts.EventID)
-		e.sendEffect(s, &resource.EventCommand{Code: CmdSetMoveRoute, Parameters: resolved})
-		return
-	}
-	e.sendEffect(s, cmd)
-}
-
-// ---- text escape code resolution ----
-
-// textCodeRe matches RMMV text escape codes: \N[n], \V[n], \P[n] (case-insensitive).
-// Also matches \C[n], \I[n], etc. but we only resolve N, V, P server-side.
-var textCodeRe = regexp.MustCompile(`(?i)\\([NVP])\[(\d+)\]`)
-
-// resolveTextCodes replaces RMMV text escape codes in dialog text:
-//   - \N[n] → Actor name (Actor 1 = player name in MMO)
-//   - \V[n] → Game variable value
-//   - \P[n] → Party member name (in MMO, P[1] = player)
-func (e *Executor) resolveTextCodes(text string, s *player.PlayerSession, opts *ExecuteOpts) string {
-	return textCodeRe.ReplaceAllStringFunc(text, func(match string) string {
-		sub := textCodeRe.FindStringSubmatch(match)
-		if len(sub) < 3 {
-			return match
-		}
-		code := strings.ToUpper(sub[1])
-		id, err := strconv.Atoi(sub[2])
-		if err != nil {
-			return match
-		}
-
-		switch code {
-		case "N":
-			// \N[n] = Actor name. In MMO, Actor 1 maps to the player.
-			// Also, any actor whose name matches the "protagonist placeholder"
-			// pattern should resolve to player name.
-			if id == 1 || id == 101 {
-				// Primary protagonist actor IDs → player's character name.
-				return s.CharName
-			}
-			// Try to look up from resource data.
-			if e.res != nil && id > 0 && id < len(e.res.Actors) && e.res.Actors[id] != nil {
-				return e.res.Actors[id].Name
-			}
-			return match
-
-		case "V":
-			// \V[n] = Game variable value.
-			if opts != nil && opts.GameState != nil {
-				return strconv.Itoa(opts.GameState.GetVariable(id))
-			}
-			return "0"
-
-		case "P":
-			// \P[n] = Party member name. In MMO, party member 1 = player.
-			if id == 1 {
-				return s.CharName
-			}
-			return match
-		}
-		return match
-	})
-}
-
-// resolveDialogLines applies text escape code resolution to all dialog lines.
-func (e *Executor) resolveDialogLines(lines []string, s *player.PlayerSession, opts *ExecuteOpts) []string {
-	resolved := make([]string, len(lines))
-	for i, line := range lines {
-		resolved[i] = e.resolveTextCodes(line, s, opts)
-	}
-	return resolved
-}
-
-// resolveChoices applies text escape code resolution to choice labels.
-func (e *Executor) resolveChoices(choices []string, s *player.PlayerSession, opts *ExecuteOpts) []string {
-	resolved := make([]string, len(choices))
-	for i, choice := range choices {
-		resolved[i] = e.resolveTextCodes(choice, s, opts)
-	}
-	return resolved
-}
-
-// sendMovePicture resolves variable coordinates and handles wait.
-// RMMV params: [pictureId, origin, directDesignation, x, y, scaleX, scaleY, opacity, blendMode, duration, wait]
-func (e *Executor) sendMovePicture(ctx context.Context, s *player.PlayerSession, params []interface{}, opts *ExecuteOpts) {
-	resolved := make([]interface{}, len(params))
-	copy(resolved, params)
-
-	designation := paramInt(params, 2)
-	if designation == 1 && opts != nil && opts.GameState != nil {
-		varX := paramInt(params, 3)
-		varY := paramInt(params, 4)
-		if len(resolved) > 3 {
-			resolved[3] = float64(opts.GameState.GetVariable(varX))
-		}
-		if len(resolved) > 4 {
-			resolved[4] = float64(opts.GameState.GetVariable(varY))
-		}
-		if len(resolved) > 2 {
-			resolved[2] = float64(0)
-		}
-	}
-
-	e.sendEffect(s, &resource.EventCommand{Code: CmdMovePicture, Parameters: resolved})
-
-	// Wait if params[10] is true.
-	if len(params) > 10 && asBool(params[10]) {
-		frames := paramInt(params, 9)
-		if frames > 0 {
-			e.waitFrames(ctx, frames)
-		}
-	}
+	return s.db.WithContext(ctx).Model(&inv).Update("qty", newQty).Error
 }

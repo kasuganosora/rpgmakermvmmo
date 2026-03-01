@@ -29,7 +29,7 @@ func NewNPCHandlers(db *gorm.DB, res *resource.ResourceLoader, wm *world.WorldMa
 		db:       db,
 		res:      res,
 		wm:       wm,
-		executor: npc.New(db, res, logger),
+		executor: npc.NewWithDB(db, res, logger),
 		logger:   logger,
 	}
 }
