@@ -22,6 +22,19 @@ func (e *Executor) sendEffect(s *player.PlayerSession, cmd *resource.EventComman
 	s.Send(&player.Packet{Type: "npc_effect", Payload: payload})
 }
 
+// sendShopProcessing 发送商店指令，包含所有续行商品（605）。
+// RMMV command302 的参数为第一个商品，后续 605 指令为额外商品。
+// 客户端需要完整商品列表才能正确构建 Scene_Shop。
+func (e *Executor) sendShopProcessing(s *player.PlayerSession, cmd *resource.EventCommand, extraGoods [][]interface{}) {
+	payload, _ := json.Marshal(map[string]interface{}{
+		"code":       cmd.Code,
+		"indent":     cmd.Indent,
+		"params":     cmd.Parameters,
+		"shop_goods": extraGoods,
+	})
+	s.Send(&player.Packet{Type: "npc_effect", Payload: payload})
+}
+
 // transferPlayer 处理 RMMV 地图传送指令（代码 201）。
 // 参数格式：[0]=模式(0=直接指定,1=变量引用), [1]=地图ID, [2]=X, [3]=Y, [4]=朝向。
 // 优先调用 TransferFn 回调执行服务端传送；未配置时退回客户端处理。

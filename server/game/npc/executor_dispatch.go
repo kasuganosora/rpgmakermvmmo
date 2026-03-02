@@ -176,11 +176,17 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 		case CmdChangeGold:
 			if err := e.applyGold(ctx, s, cmd.Parameters, opts); err != nil {
 				e.logger.Warn("ChangeGold failed", zap.Int64("char_id", s.CharID), zap.Error(err))
+			} else {
+				// 金币变更成功，同步给客户端更新 $gameParty._gold
+				e.sendEffect(s, cmd)
 			}
 
 		case CmdChangeItems:
 			if err := e.applyItems(ctx, s, cmd.Parameters, opts); err != nil {
 				e.logger.Warn("ChangeItems failed", zap.Int64("char_id", s.CharID), zap.Error(err))
+			} else {
+				// 物品变更成功，同步给客户端更新 $gameParty 物品
+				e.sendEffect(s, cmd)
 			}
 
 		case CmdChangeWeapons, CmdChangeArmors:
@@ -409,11 +415,13 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 
 		case CmdShopProcessing:
 			// 商店 — 聚合续行商品（605）后转发给客户端处理
-			// RMMV command302 会消费后续所有 605 指令作为额外商品
+			// RMMV command302 消费后续所有 605 指令作为额外商品
+			var shopGoods [][]interface{}
 			for i+1 < len(cmds) && cmds[i+1] != nil && cmds[i+1].Code == CmdShopItem {
 				i++
+				shopGoods = append(shopGoods, cmds[i].Parameters)
 			}
-			e.sendEffect(s, cmd)
+			e.sendShopProcessing(s, cmd, shopGoods)
 
 		case CmdShopItem:
 			// 已由 CmdShopProcessing 消费，单独出现时跳过

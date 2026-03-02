@@ -992,6 +992,20 @@ func TestExecute_ChangeGold_Add(t *testing.T) {
 	exec.Execute(context.Background(), s, page, &ExecuteOpts{})
 
 	assert.Equal(t, int64(150), store.gold[1], "Gold should increase from 100 to 150")
+
+	// 验证发送了 npc_effect 同步给客户端
+	pkts := drainPackets(t, s)
+	found := false
+	for _, pkt := range pkts {
+		if pkt.Type == "npc_effect" {
+			var data map[string]interface{}
+			json.Unmarshal(pkt.Payload, &data)
+			if data["code"] == float64(CmdChangeGold) {
+				found = true
+			}
+		}
+	}
+	assert.True(t, found, "Gold change should send npc_effect to client")
 }
 
 // TestExecute_ChangeGold_Subtract 测试减少金币。
@@ -1037,6 +1051,16 @@ func TestExecute_ChangeGold_InsufficientGold(t *testing.T) {
 	exec.Execute(context.Background(), s, page, &ExecuteOpts{})
 
 	assert.Equal(t, int64(10), store.gold[1], "Gold should remain unchanged when insufficient")
+
+	// 余额不足时不应发送 npc_effect 给客户端
+	pkts := drainPackets(t, s)
+	for _, pkt := range pkts {
+		if pkt.Type == "npc_effect" {
+			var data map[string]interface{}
+			json.Unmarshal(pkt.Payload, &data)
+			assert.NotEqual(t, float64(CmdChangeGold), data["code"], "Should NOT send gold effect on insufficient balance")
+		}
+	}
 }
 
 // ========================================================================
@@ -1064,6 +1088,20 @@ func TestExecute_ChangeItems_Add(t *testing.T) {
 
 	qty, _ := store.GetItem(context.Background(), 1, 5)
 	assert.Equal(t, 3, qty, "Should have 3 of item 5")
+
+	// 验证发送了 npc_effect 同步给客户端
+	pkts := drainPackets(t, s)
+	found := false
+	for _, pkt := range pkts {
+		if pkt.Type == "npc_effect" {
+			var data map[string]interface{}
+			json.Unmarshal(pkt.Payload, &data)
+			if data["code"] == float64(CmdChangeItems) {
+				found = true
+			}
+		}
+	}
+	assert.True(t, found, "Item change should send npc_effect to client")
 }
 
 // TestExecute_ChangeItems_Remove 测试减少物品。
@@ -1926,4 +1964,51 @@ func TestExecute_ShowPicture_VariableCoords(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "ShowPicture should be forwarded as npc_effect")
+}
+
+// ========================================================================
+// ShopProcessing 商店指令测试
+// ========================================================================
+
+// TestExecute_ShopProcessing_AggregatesItems 测试商店指令聚合 605 续行商品。
+func TestExecute_ShopProcessing_AggregatesItems(t *testing.T) {
+	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	s := testSession(1)
+
+	page := &resource.EventPage{
+		List: []*resource.EventCommand{
+			// ShopProcessing: [itemType=0(item), itemId=1, priceType=0, price=0, purchaseOnly=0]
+			{Code: CmdShopProcessing, Indent: 0, Parameters: []interface{}{
+				float64(0), float64(1), float64(0), float64(0), float64(0),
+			}},
+			// ShopItem continuation: weapon 5
+			{Code: CmdShopItem, Indent: 0, Parameters: []interface{}{
+				float64(1), float64(5), float64(0), float64(0),
+			}},
+			// ShopItem continuation: armor 3
+			{Code: CmdShopItem, Indent: 0, Parameters: []interface{}{
+				float64(2), float64(3), float64(0), float64(0),
+			}},
+			{Code: CmdEnd, Indent: 0},
+		},
+	}
+
+	exec.Execute(context.Background(), s, page, &ExecuteOpts{})
+
+	pkts := drainPackets(t, s)
+	found := false
+	for _, pkt := range pkts {
+		if pkt.Type == "npc_effect" {
+			var data map[string]interface{}
+			json.Unmarshal(pkt.Payload, &data)
+			if data["code"] == float64(CmdShopProcessing) {
+				found = true
+				// shop_goods 应包含 2 个续行商品
+				goods, ok := data["shop_goods"].([]interface{})
+				assert.True(t, ok, "shop_goods should be an array")
+				assert.Equal(t, 2, len(goods), "Should have 2 continuation items")
+			}
+		}
+	}
+	assert.True(t, found, "ShopProcessing should be forwarded as npc_effect with shop_goods")
 }

@@ -513,11 +513,11 @@
 
         switch (code) {
         // --- Screen effects ---
-        case 221: // Fadeout Screen
-            $gameScreen.startFadeOut(paramInt(p, 0) || 30);
+        case 221: // Fadeout Screen — RMMV uses fadeSpeed()=24, not params
+            $gameScreen.startFadeOut(24);
             break;
-        case 222: // Fadein Screen
-            $gameScreen.startFadeIn(paramInt(p, 0) || 30);
+        case 222: // Fadein Screen — RMMV uses fadeSpeed()=24, not params
+            $gameScreen.startFadeIn(24);
             break;
         case 223: // Tint Screen — [tone_array, duration, wait]
             var tone = p[0] || [0, 0, 0, 0];
@@ -603,19 +603,21 @@
             }
             break;
         case 232: // Move Picture
-            // params: [pictureId, origin, directDesignation?, x, y, scaleX, scaleY, opacity, blendMode, duration, wait]
-            // Server already resolves variable-based coordinates.
+            // RMMV params: [0]=pictureId, [1]=(unused), [2]=origin, [3]=designation,
+            //              [4]=x, [5]=y, [6]=scaleX, [7]=scaleY, [8]=opacity, [9]=blendMode,
+            //              [10]=duration, [11]=wait
+            // Server resolves variable coords (designation=1→0), sends RMMV-format params.
             if ($gameScreen) {
                 $gameScreen.movePicture(
                     paramInt(p, 0),             // pictureId
-                    paramInt(p, 1),             // origin
-                    paramInt(p, 3),             // x
-                    paramInt(p, 4),             // y
-                    p[5] != null ? paramInt(p, 5) : 100,   // scaleX
-                    p[6] != null ? paramInt(p, 6) : 100,   // scaleY
-                    p[7] != null ? paramInt(p, 7) : 255,   // opacity
-                    paramInt(p, 8),             // blendMode
-                    paramInt(p, 9) || 1         // duration
+                    paramInt(p, 2),             // origin (RMMV skips p[1])
+                    paramInt(p, 4),             // x (resolved by server)
+                    paramInt(p, 5),             // y (resolved by server)
+                    p[6] != null ? paramInt(p, 6) : 100,   // scaleX
+                    p[7] != null ? paramInt(p, 7) : 100,   // scaleY
+                    p[8] != null ? paramInt(p, 8) : 255,   // opacity
+                    paramInt(p, 9),             // blendMode
+                    paramInt(p, 10) || 1        // duration
                 );
             }
             break;
@@ -664,6 +666,11 @@
             // Server-erased events — handled via NPC visibility system.
             break;
 
+        // --- Gold / Item / Weapon / Armor changes ---
+        case 125: // Change Gold
+        case 126: // Change Items
+        case 127: // Change Weapons
+        case 128: // Change Armors
         // --- Stat changes (forwarded from server) ---
         case 311: // Change HP
         case 312: // Change MP
@@ -709,12 +716,18 @@
             }
             break;
         case 302: // Shop Processing
+            // Server aggregates 605 (ShopItem) continuation commands into shop_goods.
+            // Build a proper command list so RMMV command302 can consume 605 entries.
             try {
                 var shopInterp = new Game_Interpreter();
-                shopInterp._list = [
-                    { code: 302, indent: 0, parameters: p },
-                    { code: 0, indent: 0, parameters: [] }
-                ];
+                var shopList = [{ code: 302, indent: 0, parameters: p }];
+                if (data.shop_goods) {
+                    for (var gi = 0; gi < data.shop_goods.length; gi++) {
+                        shopList.push({ code: 605, indent: 0, parameters: data.shop_goods[gi] });
+                    }
+                }
+                shopList.push({ code: 0, indent: 0, parameters: [] });
+                shopInterp._list = shopList;
                 shopInterp._index = 0;
                 shopInterp.executeCommand();
             } catch (ex) {
