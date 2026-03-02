@@ -1010,6 +1010,17 @@
         AudioManager.fadeOutBgm(1);
         AudioManager.stopBgs();
         AudioManager.stopMe();
+
+        // 重建所有游戏对象，清除上次会话的残留状态（地图、精灵、变量等）。
+        // 不这样做的话，Scene_Map 创建 Spriteset_Map 时会用旧 $gameMap 数据
+        // 渲染上一次的地图场景，在 map_init 到达前产生一帧闪现。
+        // 重建后 $gameMap.mapId() = 0，RMMV 会用 makeEmptyMap() 创建空白地图，
+        // 等 map_init 到达后再 reserveTransfer 到正确地图。
+        DataManager.createGameObjects();
+        // 初始化队伍主角，否则 Scene_Map 中依赖 $gameParty.leader() 的逻辑
+        // （如 Game_Player.refresh → characterName）会因队伍为空而异常。
+        $gameParty.setupStartingMembers();
+
         SceneManager.goto(Scene_Map);
     };
 
