@@ -22,6 +22,39 @@ func (e *Executor) sendEffect(s *player.PlayerSession, cmd *resource.EventComman
 	s.Send(&player.Packet{Type: "npc_effect", Payload: payload})
 }
 
+// sendEffectWait 发送效果指令并等待客户端确认播放完成。
+// payload 中添加 "wait":true 字段通知客户端需要在效果结束后回复 npc_effect_ack。
+// 返回 true 表示收到确认，false 表示连接断开或上下文已取消。
+func (e *Executor) sendEffectWait(ctx context.Context, s *player.PlayerSession, cmd *resource.EventCommand) bool {
+	payload, _ := json.Marshal(map[string]interface{}{
+		"code":   cmd.Code,
+		"indent": cmd.Indent,
+		"params": cmd.Parameters,
+		"wait":   true,
+	})
+	s.Send(&player.Packet{Type: "npc_effect", Payload: payload})
+	return e.waitForEffectAck(ctx, s)
+}
+
+// waitForEffectAck 阻塞等待客户端确认效果播放完成。
+// 设置 30 秒安全超时，防止客户端异常时永久阻塞。
+// 返回 true 表示收到确认（或超时），false 表示连接断开或上下文已取消。
+func (e *Executor) waitForEffectAck(ctx context.Context, s *player.PlayerSession) bool {
+	timer := time.NewTimer(30 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-s.EffectAckCh:
+		return true
+	case <-timer.C:
+		e.logger.Warn("effect ack timeout", zap.Int64("char_id", s.CharID))
+		return true // 超时后继续执行，避免永久阻塞
+	case <-s.Done:
+		return false
+	case <-ctx.Done():
+		return false
+	}
+}
+
 // sendShopProcessing 发送商店指令，包含所有续行商品（605）。
 // RMMV command302 的参数为第一个商品，后续 605 指令为额外商品。
 // 客户端需要完整商品列表才能正确构建 Scene_Shop。
@@ -83,63 +116,6 @@ func (e *Executor) transferPlayer(s *player.PlayerSession, params []interface{},
 	s.Send(&player.Packet{Type: "transfer_player", Payload: payload})
 }
 
-// waitFrames 等待 N 帧（按 60fps 换算为毫秒），或在上下文取消时提前返回。
-func (e *Executor) waitFrames(ctx context.Context, frames int) {
-	if frames <= 0 {
-		return
-	}
-	wait := time.Duration(frames) * time.Second / 60
-	select {
-	case <-time.After(wait):
-	case <-ctx.Done():
-	}
-}
-
-// estimateMoveRouteFrames 估算移动路线所需的帧数。
-// 移动/跳跃指令约 16 帧（普通速度），等待指令按实际帧数计算，
-// 转向/速度等指令约 2 帧。最少返回 10 帧。
-func estimateMoveRouteFrames(mr map[string]interface{}) int {
-	listRaw, ok := mr["list"]
-	if !ok {
-		return 30
-	}
-	list, ok := listRaw.([]interface{})
-	if !ok || len(list) == 0 {
-		return 30
-	}
-	frames := 0
-	for _, item := range list {
-		cmd, ok := item.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		codeRaw, _ := cmd["code"]
-		code := 0
-		if f, ok := codeRaw.(float64); ok {
-			code = int(f)
-		}
-		switch {
-		case code >= 1 && code <= 14:
-			// 移动/跳跃指令：普通速度约 16 帧
-			frames += 16
-		case code == 15:
-			// 等待指令：params[0] = 等待帧数
-			if params, ok := cmd["parameters"].([]interface{}); ok && len(params) > 0 {
-				if f, ok := params[0].(float64); ok {
-					frames += int(f)
-				}
-			}
-		case code >= 16 && code <= 44:
-			// 转向/速度等指令：几乎瞬间完成
-			frames += 2
-		}
-	}
-	if frames < 10 {
-		frames = 10
-	}
-	return frames
-}
-
 // sendShowPicture 解析变量坐标并转发显示图片指令。
 // RMMV 参数：[图片ID, 名称, 原点, 指定方式, X, Y, 缩放X, 缩放Y, 不透明度, 混合模式]。
 // 当 params[3]==1 时，X/Y 取自游戏变量而非直接值，解析后标记为直接指定以避免客户端重复解析。
@@ -166,24 +142,25 @@ func (e *Executor) sendShowPicture(s *player.PlayerSession, params []interface{}
 	e.sendEffect(s, &resource.EventCommand{Code: CmdShowPicture, Parameters: resolved})
 }
 
-// sendMoveRoute 解析 charId=0（"当前事件"）为实际事件 ID 后转发移动路线。
-// RMMV 中 charId=0 表示触发事件自身，需替换为具体 eventID 以供客户端定位精灵。
-func (e *Executor) sendMoveRoute(s *player.PlayerSession, cmd *resource.EventCommand, opts *ExecuteOpts) {
+// resolveCharIDCommand 解析 charId=0（"当前事件"）为实际事件 ID。
+// RMMV 中 charId=0（params[0]）表示触发事件自身，需替换为具体 eventID 以供客户端定位精灵。
+// 返回解析后的指令（新对象或原对象）。
+func (e *Executor) resolveCharIDCommand(cmd *resource.EventCommand, opts *ExecuteOpts) *resource.EventCommand {
 	charID := paramInt(cmd.Parameters, 0)
 	if charID == 0 && opts != nil && opts.EventID > 0 {
 		resolved := make([]interface{}, len(cmd.Parameters))
 		copy(resolved, cmd.Parameters)
 		resolved[0] = float64(opts.EventID)
-		e.sendEffect(s, &resource.EventCommand{Code: CmdSetMoveRoute, Parameters: resolved})
-		return
+		return &resource.EventCommand{Code: cmd.Code, Parameters: resolved}
 	}
-	e.sendEffect(s, cmd)
+	return cmd
 }
 
 // sendMovePicture 解析变量坐标并转发移动图片指令，支持等待完成。
 // RMMV 参数：[0]=图片ID, [1]=保留, [2]=原点, [3]=指定方式(0=直接,1=变量),
 // [4]=X/变量ID, [5]=Y/变量ID, [6]=缩放X, [7]=缩放Y, [8]=不透明度, [9]=混合模式,
 // [10]=持续帧数, [11]=是否等待。
+// params[11]=true 时发送 wait:true 并等待客户端回复 npc_effect_ack。
 func (e *Executor) sendMovePicture(ctx context.Context, s *player.PlayerSession, params []interface{}, opts *ExecuteOpts) {
 	resolved := make([]interface{}, len(params))
 	copy(resolved, params)
@@ -203,13 +180,11 @@ func (e *Executor) sendMovePicture(ctx context.Context, s *player.PlayerSession,
 		}
 	}
 
-	e.sendEffect(s, &resource.EventCommand{Code: CmdMovePicture, Parameters: resolved})
-
-	// params[11]=true 时等待动画完成
+	cmd := &resource.EventCommand{Code: CmdMovePicture, Parameters: resolved}
+	// params[11]=true 时等待客户端播放完成
 	if len(params) > 11 && asBool(params[11]) {
-		frames := paramInt(params, 10)
-		if frames > 0 {
-			e.waitFrames(ctx, frames)
-		}
+		e.sendEffectWait(ctx, s, cmd)
+	} else {
+		e.sendEffect(s, cmd)
 	}
 }

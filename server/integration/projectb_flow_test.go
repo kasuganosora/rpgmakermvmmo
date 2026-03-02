@@ -154,6 +154,12 @@ func messagePump(t *testing.T, ws *WSClient, opts pumpOpts) *pumpResult {
 
 		case "npc_effect":
 			res.Effects = append(res.Effects, pkt)
+			// 自动回复 wait:true 的效果指令，避免服务端阻塞
+			if p, ok := pkt["payload"].(map[string]interface{}); ok {
+				if w, _ := p["wait"].(bool); w {
+					ws.Send("npc_effect_ack", map[string]interface{}{})
+				}
+			}
 
 		case "npc_dialog_end":
 			res.DialogEnds++

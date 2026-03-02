@@ -44,6 +44,7 @@ func (h *NPCHandlers) RegisterHandlers(r *Router) {
 	r.On("npc_interact", h.HandleInteract)
 	r.On("npc_choice_reply", h.HandleChoiceReply)
 	r.On("npc_dialog_ack", h.HandleDialogAck)
+	r.On("npc_effect_ack", h.HandleEffectAck)
 	r.On("scene_ready", h.HandleSceneReady)
 }
 
@@ -170,6 +171,16 @@ func (h *NPCHandlers) HandleSceneReady(_ context.Context, s *player.PlayerSessio
 func (h *NPCHandlers) HandleDialogAck(_ context.Context, s *player.PlayerSession, _ json.RawMessage) error {
 	select {
 	case s.DialogAckCh <- struct{}{}:
+	default:
+		// No executor waiting — ignore.
+	}
+	return nil
+}
+
+// HandleEffectAck processes a client's acknowledgment that a visual effect has finished playing.
+func (h *NPCHandlers) HandleEffectAck(_ context.Context, s *player.PlayerSession, _ json.RawMessage) error {
+	select {
+	case s.EffectAckCh <- struct{}{}:
 	default:
 		// No executor waiting — ignore.
 	}

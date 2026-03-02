@@ -256,66 +256,63 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 
 		case CmdSetMoveRoute:
 			// 解析 charId=0（当前事件）为实际事件 ID 后转发
-			e.sendMoveRoute(s, cmd, opts)
-			// 跳过续行（505）
-			for i+1 < len(cmds) && cmds[i+1] != nil && cmds[i+1].Code == CmdMoveRouteCont {
-				i++
-			}
-			// 若移动路线设置了 wait=true，估算时长并等待
+			// 若移动路线设置了 wait=true，等待客户端确认完成
+			needMRWait := false
 			if len(cmd.Parameters) > 1 {
 				if mr, ok := cmd.Parameters[1].(map[string]interface{}); ok {
 					if w, ok := mr["wait"]; ok && asBool(w) {
-						frames := estimateMoveRouteFrames(mr)
-						e.waitFrames(ctx, frames)
+						needMRWait = true
 					}
 				}
+			}
+			resolvedMR := e.resolveCharIDCommand(cmd, opts)
+			if needMRWait {
+				e.sendEffectWait(ctx, s, resolvedMR)
+			} else {
+				e.sendEffect(s, resolvedMR)
+			}
+			// 跳过续行（505）
+			for i+1 < len(cmds) && cmds[i+1] != nil && cmds[i+1].Code == CmdMoveRouteCont {
+				i++
 			}
 
 		case CmdMoveRouteCont:
 			// 已由 CmdSetMoveRoute 消费，跳过
 
 		case CmdWaitForMoveRoute:
-			// 等待最后一个移动路线完成（使用默认时长，因为服务端不追踪客户端状态）
-			e.waitFrames(ctx, 60)
+			// 等待最后一个移动路线完成（发送 wait 信号等待客户端确认）
+			e.sendEffectWait(ctx, s, cmd)
 
 		case CmdFadeout:
-			// RMMV 中淡出总是等待 fadeSpeed()=24 帧
-			e.sendEffect(s, cmd)
-			e.waitFrames(ctx, 24)
+			// RMMV 中淡出总是等待 fadeSpeed()=24 帧，等待客户端确认完成
+			e.sendEffectWait(ctx, s, cmd)
 
 		case CmdFadein:
-			// RMMV 中淡入总是等待 fadeSpeed()=24 帧
-			e.sendEffect(s, cmd)
-			e.waitFrames(ctx, 24)
+			// RMMV 中淡入总是等待 fadeSpeed()=24 帧，等待客户端确认完成
+			e.sendEffectWait(ctx, s, cmd)
 
 		case CmdTintScreen:
-			e.sendEffect(s, cmd)
 			// params[2]=true 时等待色调变化完成
 			if len(cmd.Parameters) > 2 && asBool(cmd.Parameters[2]) {
-				frames := paramInt(cmd.Parameters, 1)
-				if frames > 0 {
-					e.waitFrames(ctx, frames)
-				}
+				e.sendEffectWait(ctx, s, cmd)
+			} else {
+				e.sendEffect(s, cmd)
 			}
 
 		case CmdFlashScreen:
-			e.sendEffect(s, cmd)
 			// params[2]=true 时等待闪烁完成
 			if len(cmd.Parameters) > 2 && asBool(cmd.Parameters[2]) {
-				frames := paramInt(cmd.Parameters, 1)
-				if frames > 0 {
-					e.waitFrames(ctx, frames)
-				}
+				e.sendEffectWait(ctx, s, cmd)
+			} else {
+				e.sendEffect(s, cmd)
 			}
 
 		case CmdShakeScreen:
-			e.sendEffect(s, cmd)
 			// params[3]=true 时等待震动完成
 			if len(cmd.Parameters) > 3 && asBool(cmd.Parameters[3]) {
-				frames := paramInt(cmd.Parameters, 2)
-				if frames > 0 {
-					e.waitFrames(ctx, frames)
-				}
+				e.sendEffectWait(ctx, s, cmd)
+			} else {
+				e.sendEffect(s, cmd)
 			}
 
 		case CmdChangeTransparency:
@@ -332,19 +329,44 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 		case CmdMovePicture:
 			e.sendMovePicture(ctx, s, cmd.Parameters, opts)
 
-		case CmdRotatePicture, CmdTintPicture, CmdErasePicture:
+		case CmdRotatePicture, CmdErasePicture:
+			// 旋转/删除图片 — 无等待
 			e.sendEffect(s, cmd)
 
-		case CmdShowAnimation, CmdShowBalloon:
-			// 显示动画/气泡 — 解析 charId=0 为事件 ID
-			charID := paramInt(cmd.Parameters, 0)
-			if charID == 0 && opts != nil && opts.EventID > 0 {
-				resolved := make([]interface{}, len(cmd.Parameters))
-				copy(resolved, cmd.Parameters)
-				resolved[0] = float64(opts.EventID)
-				e.sendEffect(s, &resource.EventCommand{Code: cmd.Code, Parameters: resolved})
+		case CmdTintPicture:
+			// params[3]=true 时等待图片色调变化完成（持续帧数=params[2]）
+			if len(cmd.Parameters) > 3 && asBool(cmd.Parameters[3]) {
+				e.sendEffectWait(ctx, s, cmd)
 			} else {
 				e.sendEffect(s, cmd)
+			}
+
+		case CmdSetWeather:
+			// params[3]=true 时等待天气效果变化完成（持续帧数=params[2]）
+			if len(cmd.Parameters) > 3 && asBool(cmd.Parameters[3]) {
+				e.sendEffectWait(ctx, s, cmd)
+			} else {
+				e.sendEffect(s, cmd)
+			}
+
+		case CmdShowAnimation:
+			// 显示动画 — 解析 charId=0 为事件 ID
+			// params[2]=true 时等待动画播放完成
+			resolvedAnim := e.resolveCharIDCommand(cmd, opts)
+			if len(cmd.Parameters) > 2 && asBool(cmd.Parameters[2]) {
+				e.sendEffectWait(ctx, s, resolvedAnim)
+			} else {
+				e.sendEffect(s, resolvedAnim)
+			}
+
+		case CmdShowBalloon:
+			// 显示气泡 — 解析 charId=0 为事件 ID
+			// params[2]=true 时等待气泡动画完成
+			resolvedBalloon := e.resolveCharIDCommand(cmd, opts)
+			if len(cmd.Parameters) > 2 && asBool(cmd.Parameters[2]) {
+				e.sendEffectWait(ctx, s, resolvedBalloon)
+			} else {
+				e.sendEffect(s, resolvedBalloon)
 			}
 
 		case CmdEraseEvent:

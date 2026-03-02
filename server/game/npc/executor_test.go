@@ -28,6 +28,7 @@ func testSession(charID int64) *player.PlayerSession {
 		Done:         make(chan struct{}),
 		ChoiceCh:     make(chan int, 1),
 		DialogAckCh:  make(chan struct{}, 1),
+		EffectAckCh:  make(chan struct{}, 1),
 		SceneReadyCh: make(chan struct{}, 1),
 	}
 }
@@ -731,6 +732,12 @@ func TestExecute_ScreenEffects_ForwardsAsEffect(t *testing.T) {
 		},
 	}
 
+	// Fadeout 和 Fadein 现在等待客户端 ack，在后台提供 ack
+	go func() {
+		s.EffectAckCh <- struct{}{} // ack for Fadeout
+		s.EffectAckCh <- struct{}{} // ack for Fadein
+	}()
+
 	exec.Execute(context.Background(), s, page, &ExecuteOpts{})
 
 	pkts := drainPackets(t, s)
@@ -741,6 +748,18 @@ func TestExecute_ScreenEffects_ForwardsAsEffect(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 3, effectCount, "All 3 effect commands should be forwarded")
+
+	// 验证 Fadeout 和 Fadein 的 wait 标记
+	for _, pkt := range pkts {
+		if pkt.Type == "npc_effect" {
+			var data map[string]interface{}
+			json.Unmarshal(pkt.Payload, &data)
+			code := data["code"]
+			if code == float64(CmdFadeout) || code == float64(CmdFadein) {
+				assert.Equal(t, true, data["wait"], "Fadeout/Fadein should have wait:true")
+			}
+		}
+	}
 }
 
 // ========================================================================
@@ -2011,4 +2030,302 @@ func TestExecute_ShopProcessing_AggregatesItems(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "ShopProcessing should be forwarded as npc_effect with shop_goods")
+}
+
+// ========================================================================
+// Effect Ack 等待机制测试
+// ========================================================================
+
+// TestExecute_TintScreen_WaitAck 测试色调变化等待客户端确认。
+func TestExecute_TintScreen_WaitAck(t *testing.T) {
+	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	s := testSession(1)
+
+	page := &resource.EventPage{
+		List: []*resource.EventCommand{
+			// TintScreen: [tone, duration=30, wait=true]
+			{Code: CmdTintScreen, Indent: 0, Parameters: []interface{}{
+				[]interface{}{float64(0), float64(0), float64(0), float64(0)},
+				float64(30), true,
+			}},
+			{Code: CmdEnd, Indent: 0},
+		},
+	}
+
+	go func() {
+		s.EffectAckCh <- struct{}{}
+	}()
+
+	exec.Execute(context.Background(), s, page, &ExecuteOpts{})
+
+	pkts := drainPackets(t, s)
+	found := false
+	for _, pkt := range pkts {
+		if pkt.Type == "npc_effect" {
+			var data map[string]interface{}
+			json.Unmarshal(pkt.Payload, &data)
+			if data["code"] == float64(CmdTintScreen) {
+				found = true
+				assert.Equal(t, true, data["wait"], "TintScreen with wait=true should have wait flag")
+			}
+		}
+	}
+	assert.True(t, found, "TintScreen should be sent")
+}
+
+// TestExecute_TintScreen_NoWait 测试色调变化不等待时无 wait 标记。
+func TestExecute_TintScreen_NoWait(t *testing.T) {
+	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	s := testSession(1)
+
+	page := &resource.EventPage{
+		List: []*resource.EventCommand{
+			// TintScreen: [tone, duration=30, wait=false]
+			{Code: CmdTintScreen, Indent: 0, Parameters: []interface{}{
+				[]interface{}{float64(0), float64(0), float64(0), float64(0)},
+				float64(30), false,
+			}},
+			{Code: CmdEnd, Indent: 0},
+		},
+	}
+
+	exec.Execute(context.Background(), s, page, &ExecuteOpts{})
+
+	pkts := drainPackets(t, s)
+	for _, pkt := range pkts {
+		if pkt.Type == "npc_effect" {
+			var data map[string]interface{}
+			json.Unmarshal(pkt.Payload, &data)
+			if data["code"] == float64(CmdTintScreen) {
+				assert.Nil(t, data["wait"], "TintScreen without wait should NOT have wait flag")
+			}
+		}
+	}
+}
+
+// TestExecute_ShowAnimation_WaitAck 测试动画显示等待客户端确认。
+func TestExecute_ShowAnimation_WaitAck(t *testing.T) {
+	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	s := testSession(1)
+
+	page := &resource.EventPage{
+		List: []*resource.EventCommand{
+			// ShowAnimation: [charId=0, animationId=5, wait=true]
+			{Code: CmdShowAnimation, Indent: 0, Parameters: []interface{}{
+				float64(0), float64(5), true,
+			}},
+			{Code: CmdEnd, Indent: 0},
+		},
+	}
+
+	go func() {
+		s.EffectAckCh <- struct{}{}
+	}()
+
+	exec.Execute(context.Background(), s, page, &ExecuteOpts{EventID: 10})
+
+	pkts := drainPackets(t, s)
+	found := false
+	for _, pkt := range pkts {
+		if pkt.Type == "npc_effect" {
+			var data map[string]interface{}
+			json.Unmarshal(pkt.Payload, &data)
+			if data["code"] == float64(CmdShowAnimation) {
+				found = true
+				assert.Equal(t, true, data["wait"], "ShowAnimation with wait=true should have wait flag")
+				// charId=0 应被解析为 eventID=10
+				params := data["params"].([]interface{})
+				assert.Equal(t, float64(10), params[0], "charId=0 should resolve to eventID=10")
+			}
+		}
+	}
+	assert.True(t, found, "ShowAnimation should be sent")
+}
+
+// TestExecute_ShowBalloon_WaitAck 测试气泡显示等待客户端确认。
+func TestExecute_ShowBalloon_WaitAck(t *testing.T) {
+	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	s := testSession(1)
+
+	page := &resource.EventPage{
+		List: []*resource.EventCommand{
+			// ShowBalloon: [charId=0, balloonId=1, wait=true]
+			{Code: CmdShowBalloon, Indent: 0, Parameters: []interface{}{
+				float64(0), float64(1), true,
+			}},
+			{Code: CmdEnd, Indent: 0},
+		},
+	}
+
+	go func() {
+		s.EffectAckCh <- struct{}{}
+	}()
+
+	exec.Execute(context.Background(), s, page, &ExecuteOpts{EventID: 20})
+
+	pkts := drainPackets(t, s)
+	found := false
+	for _, pkt := range pkts {
+		if pkt.Type == "npc_effect" {
+			var data map[string]interface{}
+			json.Unmarshal(pkt.Payload, &data)
+			if data["code"] == float64(CmdShowBalloon) {
+				found = true
+				assert.Equal(t, true, data["wait"], "ShowBalloon with wait=true should have wait flag")
+				params := data["params"].([]interface{})
+				assert.Equal(t, float64(20), params[0], "charId=0 should resolve to eventID=20")
+			}
+		}
+	}
+	assert.True(t, found, "ShowBalloon should be sent")
+}
+
+// TestExecute_TintPicture_WaitAck 测试图片色调变化等待客户端确认。
+func TestExecute_TintPicture_WaitAck(t *testing.T) {
+	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	s := testSession(1)
+
+	page := &resource.EventPage{
+		List: []*resource.EventCommand{
+			// TintPicture: [pictureId=1, tone, duration=20, wait=true]
+			{Code: CmdTintPicture, Indent: 0, Parameters: []interface{}{
+				float64(1), []interface{}{float64(0), float64(0), float64(0), float64(0)},
+				float64(20), true,
+			}},
+			{Code: CmdEnd, Indent: 0},
+		},
+	}
+
+	go func() {
+		s.EffectAckCh <- struct{}{}
+	}()
+
+	exec.Execute(context.Background(), s, page, &ExecuteOpts{})
+
+	pkts := drainPackets(t, s)
+	found := false
+	for _, pkt := range pkts {
+		if pkt.Type == "npc_effect" {
+			var data map[string]interface{}
+			json.Unmarshal(pkt.Payload, &data)
+			if data["code"] == float64(CmdTintPicture) {
+				found = true
+				assert.Equal(t, true, data["wait"], "TintPicture with wait=true should have wait flag")
+			}
+		}
+	}
+	assert.True(t, found, "TintPicture should be sent")
+}
+
+// TestExecute_SetWeather_WaitAck 测试天气效果等待客户端确认。
+func TestExecute_SetWeather_WaitAck(t *testing.T) {
+	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	s := testSession(1)
+
+	page := &resource.EventPage{
+		List: []*resource.EventCommand{
+			// SetWeather: [type="rain", power=5, duration=60, wait=true]
+			{Code: CmdSetWeather, Indent: 0, Parameters: []interface{}{
+				"rain", float64(5), float64(60), true,
+			}},
+			{Code: CmdEnd, Indent: 0},
+		},
+	}
+
+	go func() {
+		s.EffectAckCh <- struct{}{}
+	}()
+
+	exec.Execute(context.Background(), s, page, &ExecuteOpts{})
+
+	pkts := drainPackets(t, s)
+	found := false
+	for _, pkt := range pkts {
+		if pkt.Type == "npc_effect" {
+			var data map[string]interface{}
+			json.Unmarshal(pkt.Payload, &data)
+			if data["code"] == float64(CmdSetWeather) {
+				found = true
+				assert.Equal(t, true, data["wait"], "SetWeather with wait=true should have wait flag")
+			}
+		}
+	}
+	assert.True(t, found, "SetWeather should be sent")
+}
+
+// TestExecute_EffectAck_Timeout 测试效果确认超时后继续执行。
+func TestExecute_EffectAck_Timeout(t *testing.T) {
+	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	s := testSession(1)
+	gs := newMockGameState()
+
+	page := &resource.EventPage{
+		List: []*resource.EventCommand{
+			// ShowAnimation with wait=true — 但不发送 ack
+			{Code: CmdShowAnimation, Indent: 0, Parameters: []interface{}{
+				float64(-1), float64(1), true,
+			}},
+			// 超时后应继续执行到这里
+			{Code: CmdChangeVars, Indent: 0, Parameters: []interface{}{
+				float64(1), float64(1), float64(0), float64(0), float64(99),
+			}},
+			{Code: CmdEnd, Indent: 0},
+		},
+	}
+
+	// 使用 2 秒超时的上下文（不发送 ack，但上下文会先取消）
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	exec.Execute(ctx, s, page, &ExecuteOpts{GameState: gs})
+
+	// 上下文取消后停止执行，var[1] 不应被设置
+	assert.Equal(t, 0, gs.variables[1], "Execution should stop on context cancel")
+}
+
+// TestExecute_MoveRoute_WaitAck 测试移动路线等待客户端确认。
+func TestExecute_MoveRoute_WaitAck(t *testing.T) {
+	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	s := testSession(1)
+
+	moveRoute := map[string]interface{}{
+		"repeat": false,
+		"skippable": false,
+		"wait": true,
+		"list": []interface{}{
+			map[string]interface{}{"code": float64(1), "parameters": []interface{}{}},
+		},
+	}
+
+	page := &resource.EventPage{
+		List: []*resource.EventCommand{
+			{Code: CmdSetMoveRoute, Indent: 0, Parameters: []interface{}{
+				float64(0), moveRoute,
+			}},
+			{Code: CmdEnd, Indent: 0},
+		},
+	}
+
+	go func() {
+		s.EffectAckCh <- struct{}{}
+	}()
+
+	exec.Execute(context.Background(), s, page, &ExecuteOpts{EventID: 5})
+
+	pkts := drainPackets(t, s)
+	found := false
+	for _, pkt := range pkts {
+		if pkt.Type == "npc_effect" {
+			var data map[string]interface{}
+			json.Unmarshal(pkt.Payload, &data)
+			if data["code"] == float64(CmdSetMoveRoute) {
+				found = true
+				assert.Equal(t, true, data["wait"], "MoveRoute with wait=true should have wait flag")
+				// charId=0 应被解析为 eventID=5
+				params := data["params"].([]interface{})
+				assert.Equal(t, float64(5), params[0], "charId=0 should resolve to eventID=5")
+			}
+		}
+	}
+	assert.True(t, found, "MoveRoute should be sent")
 }

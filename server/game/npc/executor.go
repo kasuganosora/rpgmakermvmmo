@@ -83,6 +83,7 @@ const (
 	CmdBattleWin        = 601 // 战斗胜利分支
 	CmdBattleEscape     = 602 // 战斗逃跑分支
 	CmdBattleLose       = 603 // 战斗败北分支
+	CmdSetWeather       = 236 // 天气效果
 	CmdGameOver         = 353
 	CmdReturnToTitle    = 354
 	CmdComment          = 108

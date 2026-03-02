@@ -510,6 +510,7 @@
         if (!data) return;
         var code = data.code;
         var p = data.params || [];
+        var needAck = !!data.wait;
 
         switch (code) {
         // --- Screen effects ---
@@ -529,6 +530,23 @@
             break;
         case 225: // Shake Screen — [power, speed, duration, wait]
             $gameScreen.startShake(paramInt(p, 0) || 5, paramInt(p, 1) || 5, paramInt(p, 2) || 30);
+            break;
+
+        // --- Weather ---
+        case 236: // Set Weather Effect — [type, power, duration, wait]
+            if ($gameScreen && !$gameParty.inBattle()) {
+                $gameScreen.changeWeather(
+                    (p[0] || 'none').toString(),
+                    paramInt(p, 1),
+                    paramInt(p, 2)
+                );
+            }
+            break;
+
+        // --- Wait for Move Route (code 209) ---
+        case 209:
+            // 服务端发送 wait:true 时，客户端在移动路线完成后回复 ack
+            // 通过 pollEffectAck 监测 $gamePlayer.isMoveRouteForcing()
             break;
 
         // --- Audio ---
@@ -777,7 +795,105 @@
             }
             break;
         }
+
+        // ----------------------------------------------------------
+        // Effect ack: 服务端发送 wait:true 时，客户端在效果播放完成后
+        // 发送 npc_effect_ack 通知服务端继续执行。
+        // ----------------------------------------------------------
+        if (needAck) {
+            switch (code) {
+            // 已知持续帧数的效果 — 使用定时器回复
+            case 221: // Fadeout
+            case 222: // Fadein
+                _scheduleEffectAck(24); // fadeSpeed() = 24
+                break;
+            case 223: // Tint Screen — duration = params[1]
+                _scheduleEffectAck(paramInt(p, 1) || 1);
+                break;
+            case 224: // Flash Screen — duration = params[1]
+                _scheduleEffectAck(paramInt(p, 1) || 1);
+                break;
+            case 225: // Shake Screen — duration = params[2]
+                _scheduleEffectAck(paramInt(p, 2) || 1);
+                break;
+            case 232: // Move Picture — duration = params[10]
+                _scheduleEffectAck(paramInt(p, 10) || 1);
+                break;
+            case 234: // Tint Picture — duration = params[2]
+                _scheduleEffectAck(paramInt(p, 2) || 1);
+                break;
+            case 236: // Set Weather — duration = params[2]
+                _scheduleEffectAck(paramInt(p, 2) || 1);
+                break;
+            // 动画/气泡 — 通过轮询检测播放完成
+            case 212: // Show Animation
+                (function () {
+                    var cid = paramInt(p, 0);
+                    // 等待 2 帧让精灵系统处理动画请求
+                    setTimeout(function () {
+                        _pollEffectAck(function () {
+                            var ch = (cid === -1) ? $gamePlayer : _npcChar(cid);
+                            return !ch || !ch.isAnimationPlaying();
+                        });
+                    }, 33);
+                })();
+                break;
+            case 213: // Show Balloon
+                (function () {
+                    var cid = paramInt(p, 0);
+                    setTimeout(function () {
+                        _pollEffectAck(function () {
+                            var ch = (cid === -1) ? $gamePlayer : _npcChar(cid);
+                            return !ch || !ch.isBalloonPlaying();
+                        });
+                    }, 33);
+                })();
+                break;
+            // 移动路线 — 轮询检测移动完成
+            case 205: // Set Move Route
+            case 209: // Wait for Move Route
+                (function () {
+                    var cid = paramInt(p, 0);
+                    setTimeout(function () {
+                        _pollEffectAck(function () {
+                            var ch = (cid === -1) ? $gamePlayer : _npcChar(cid);
+                            return !ch || !ch.isMoveRouteForcing();
+                        });
+                    }, 33);
+                })();
+                break;
+            default:
+                // 未知效果 — 立即回复避免死锁
+                $MMO.send('npc_effect_ack', {});
+                break;
+            }
+        }
     });
+
+    // 按帧数延时发送 effect ack。
+    function _scheduleEffectAck(frames) {
+        setTimeout(function () {
+            $MMO.send('npc_effect_ack', {});
+        }, Math.max(1, frames) * 1000 / 60);
+    }
+
+    // 轮询检测条件满足后发送 effect ack（带 30 秒安全超时）。
+    function _pollEffectAck(checkFn) {
+        var elapsed = 0;
+        var pollId = setInterval(function () {
+            elapsed += 16;
+            if (checkFn() || elapsed > 30000) {
+                clearInterval(pollId);
+                $MMO.send('npc_effect_ack', {});
+            }
+        }, 16);
+    }
+
+    // 获取 NPC 精灵对应的 Game_Character。
+    function _npcChar(eventId) {
+        var sp = NPCManager.get(eventId);
+        return sp ? sp._character : null;
+    }
 
     // Helper: safely extract int from param array.
     function paramInt(arr, idx) {

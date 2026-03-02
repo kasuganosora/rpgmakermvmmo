@@ -49,6 +49,7 @@ type PlayerSession struct {
 	Done         chan struct{}
 	ChoiceCh      chan int      // receives choice index from npc_choice_reply
 	DialogAckCh   chan struct{} // receives ack when client finishes displaying a dialog
+	EffectAckCh   chan struct{} // receives ack when client finishes playing a visual effect
 	SceneReadyCh  chan struct{} // receives signal when client Scene_Map is fully loaded
 	TraceID      string
 	LastSeq      uint64
@@ -71,6 +72,7 @@ func NewPlayerSession(accountID, charID int64, conn *websocket.Conn, logger *zap
 		Done:         make(chan struct{}),
 		ChoiceCh:     make(chan int, 1),
 		DialogAckCh:  make(chan struct{}, 1),
+		EffectAckCh:  make(chan struct{}, 1),
 		SceneReadyCh: make(chan struct{}, 1),
 		logger:    logger,
 	}
@@ -271,6 +273,10 @@ func (s *PlayerSession) GetContext() context.Context {
 func (s *PlayerSession) ClearNPCChannels() {
 	select {
 	case <-s.DialogAckCh:
+	default:
+	}
+	select {
+	case <-s.EffectAckCh:
 	default:
 	}
 	select {
