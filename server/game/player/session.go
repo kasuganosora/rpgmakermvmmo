@@ -58,8 +58,10 @@ type PlayerSession struct {
 	LastGlobalChat time.Time
 	LastTransfer   time.Time // set when entering a new map; moves ignored during grace period
 
-	mu     sync.Mutex
-	logger *zap.Logger
+	mu      sync.Mutex
+	EventMu sync.Mutex // 序列化每个玩家的事件执行（与 mu 分离：EventMu 持有秒级，mu 持有微秒级）
+	mapGen  uint64     // incremented on each map entry; used to cancel stale autorun goroutines
+	logger  *zap.Logger
 }
 
 // NewPlayerSession creates a new PlayerSession with write goroutine started.
@@ -261,6 +263,22 @@ func (s *PlayerSession) SetGlobalChatCooldown() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.LastGlobalChat = time.Now()
+}
+
+// IncrMapGen increments the map generation counter and returns the new value.
+// Called when the player enters a new map. Used to cancel stale autorun goroutines.
+func (s *PlayerSession) IncrMapGen() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mapGen++
+	return s.mapGen
+}
+
+// GetMapGen returns the current map generation counter.
+func (s *PlayerSession) GetMapGen() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.mapGen
 }
 
 // GetContext returns a background context (convenience helper).

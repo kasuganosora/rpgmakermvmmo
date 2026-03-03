@@ -156,7 +156,7 @@ func main() {
 	sh.RegisterHandlers(wsRouter)
 
 	npcH := apows.NewNPCHandlers(db, res, wm, logger)
-	npcH.SetTransferFunc(gh.EnterMapRoom)
+	npcH.SetTransferFunc(gh.TransferPlayer)
 	npcH.RegisterHandlers(wsRouter)
 	gh.SetAutorunFunc(npcH.ExecuteAutoruns)
 

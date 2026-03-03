@@ -119,6 +119,14 @@ func (h *NPCHandlers) HandleInteract(ctx context.Context, s *player.PlayerSessio
 		return nil
 	}
 
+	// 防止并发事件：已有事件运行时拒绝新的交互。
+	if !s.EventMu.TryLock() {
+		h.logger.Info("npc_interact rejected: player already in event",
+			zap.Int64("char_id", s.CharID),
+			zap.Int("event_id", req.EventID))
+		return nil
+	}
+
 	opts := &npc.ExecuteOpts{
 		GameState:  composite,
 		MapID:      s.MapID,
@@ -130,6 +138,10 @@ func (h *NPCHandlers) HandleInteract(ctx context.Context, s *player.PlayerSessio
 	// The executor may block waiting for choice replies.
 	startMapID := s.MapID
 	go func() {
+		defer s.EventMu.Unlock()
+		// 通知客户端事件开始，阻止移动和交互。
+		s.Send(&player.Packet{Type: "event_start"})
+
 		h.executor.Execute(ctx, s, activePage, opts)
 		// After execution, send per-player page changes (not broadcast).
 		h.sendPageChangesToPlayer(s, room, composite)
@@ -141,6 +153,9 @@ func (h *NPCHandlers) HandleInteract(ctx context.Context, s *player.PlayerSessio
 				}
 			}
 		}
+
+		// 通知客户端事件结束，恢复移动和交互。
+		s.Send(&player.Packet{Type: "event_end"})
 	}()
 
 	return nil
@@ -234,12 +249,45 @@ func (h *NPCHandlers) ExecuteAutoruns(s *player.PlayerSession, mapID int) {
 		return // session closed
 	}
 
+	// Stale check: player may have already left this map during scene_ready wait.
+	if s.MapID != mapID {
+		h.logger.Info("autorun skipped: player already left map",
+			zap.Int64("char_id", s.CharID),
+			zap.Int("expected_map", mapID),
+			zap.Int("current_map", s.MapID))
+		return
+	}
+
+	// 阻塞等待当前事件完成，序列化自动运行事件。
+	// 若玩家正在执行 NPC 事件（EventMu 被锁），自动运行排队等待。
+	s.EventMu.Lock()
+
+	// Stale check after acquiring lock — player may have transferred during wait.
+	if s.MapID != mapID {
+		s.EventMu.Unlock()
+		h.logger.Info("autorun skipped: player left map while waiting for event lock",
+			zap.Int64("char_id", s.CharID),
+			zap.Int("expected_map", mapID),
+			zap.Int("current_map", s.MapID))
+		return
+	}
+
+	defer s.EventMu.Unlock()
+
+	// 通知客户端事件开始，阻止移动和交互。
+	s.Send(&player.Packet{Type: "event_start"})
+	defer s.Send(&player.Packet{Type: "event_end"})
+
 	h.logger.Info("executing autorun events",
 		zap.Int64("char_id", s.CharID),
 		zap.Int("map_id", mapID),
 		zap.Int("count", len(autoruns)))
 
 	for _, npcInst := range autoruns {
+		// If a previous autorun transferred the player, stop executing this map's autoruns.
+		if s.MapID != mapID {
+			break
+		}
 		activePage := room.GetActivePageForPlayer(npcInst.EventID, composite)
 		if activePage == nil || activePage.Trigger != 3 || len(activePage.List) <= 1 {
 			continue

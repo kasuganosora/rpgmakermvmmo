@@ -42,6 +42,10 @@
         _serverUrl: (window.MMO_CONFIG && window.MMO_CONFIG.serverUrl) || 'ws://localhost:8080',
         /** @type {boolean} 调试模式开关。 */
         _debug: !!(window.MMO_CONFIG && window.MMO_CONFIG.debug),
+        /** @type {boolean} 服务器事件执行中标志 — 阻止移动和交互。 */
+        _serverEventActive: false,
+        /** @type {number|null} 事件安全超时定时器 ID。 */
+        _eventSafetyTimer: null,
         /** @type {number} 最大重连尝试次数。 */
         _reconnectMax: (window.MMO_CONFIG && window.MMO_CONFIG.reconnectMax) || 10,
 
@@ -453,6 +457,32 @@
         }
     });
 
+    // ═══════════════════════════════════════════════════════════
+    //  事件锁信号：服务器通知事件开始/结束，客户端据此阻止移动和交互。
+    // ═══════════════════════════════════════════════════════════
+
+    /** 处理 event_start — 服务器开始执行事件，阻止玩家移动和交互。 */
+    $MMO.on('event_start', function () {
+        $MMO._serverEventActive = true;
+        // 安全超时：若服务器 60 秒内未发送 event_end，自动清除以防永久卡住。
+        if ($MMO._eventSafetyTimer) clearTimeout($MMO._eventSafetyTimer);
+        $MMO._eventSafetyTimer = setTimeout(function () {
+            if ($MMO._serverEventActive) {
+                console.warn('[MMO] event_start safety timeout (60s) — forcing event_end');
+                $MMO._serverEventActive = false;
+            }
+        }, 60000);
+    });
+
+    /** 处理 event_end — 服务器事件执行完毕，恢复玩家移动和交互。 */
+    $MMO.on('event_end', function () {
+        $MMO._serverEventActive = false;
+        if ($MMO._eventSafetyTimer) {
+            clearTimeout($MMO._eventSafetyTimer);
+            $MMO._eventSafetyTimer = null;
+        }
+    });
+
     /**
      * 处理服务器发起的地图传送（NPC 执行器无 TransferFn 时的回退方案）。
      * 参数格式与 RMMV command 201 相同：map_id, x, y, dir。
@@ -463,7 +493,15 @@
         var x     = data.x != null ? data.x : 0;
         var y     = data.y != null ? data.y : 0;
         var dir   = data.dir || 2;
-        $gamePlayer.reserveTransfer(mapId, x, y, dir, 0);
+        // 同一地图传送：直接 locate + setDirection，避免 reserveTransfer 触发
+        // SceneManager.goto(Scene_Map) 导致的完整场景重建（破坏精灵和移动路线）。
+        if ($gameMap && $gameMap.mapId() === mapId) {
+            $gamePlayer.locate(x, y);
+            $gamePlayer.setDirection(dir);
+            $gamePlayer.center(x, y);
+        } else {
+            $gamePlayer.reserveTransfer(mapId, x, y, dir, 0);
+        }
     });
 
     // ═══════════════════════════════════════════════════════════
@@ -511,6 +549,12 @@
     //  仅在游戏内场景（非登录/角色选择/创建）时显示。
     // ═══════════════════════════════════════════════════════════
     $MMO.on('_disconnected', function () {
+        // 清除事件锁状态。
+        $MMO._serverEventActive = false;
+        if ($MMO._eventSafetyTimer) {
+            clearTimeout($MMO._eventSafetyTimer);
+            $MMO._eventSafetyTimer = null;
+        }
         // 仅在游戏内（非登录/角色选择/创建场景）时显示断线提示。
         if (!SceneManager._scene || SceneManager._scene instanceof Scene_Title) return;
         if (typeof Scene_Login !== 'undefined' && SceneManager._scene instanceof Scene_Login) return;
@@ -710,6 +754,8 @@
     // ═══════════════════════════════════════════════════════════
     var _SMpmt_core = Scene_Map.prototype.processMapTouch;
     Scene_Map.prototype.processMapTouch = function () {
+        // 服务器事件执行期间阻止点击移动。
+        if ($MMO._serverEventActive) return;
         if (TouchInput.isTriggered() || TouchInput.isPressed()) {
             var tx = TouchInput.x, ty = TouchInput.y;
             var ch = this.children;
@@ -738,8 +784,8 @@
                 $MMO._triggerAction('system');
             }
         }
-        // RMMV 对话/选项窗口激活时隐藏底部 MMO UI。
-        var busy = !!($gameMessage && $gameMessage.isBusy());
+        // RMMV 对话/选项窗口或服务器事件执行时隐藏底部 MMO UI。
+        var busy = !!($gameMessage && $gameMessage.isBusy()) || !!$MMO._serverEventActive;
         if (busy !== $MMO._eventBusy) {
             $MMO._eventBusy = busy;
             $MMO._bottomUI.forEach(function (panel) {

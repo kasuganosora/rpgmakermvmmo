@@ -149,6 +149,13 @@ func (gh *GameHandlers) HandleMove(_ context.Context, s *player.PlayerSession, r
 		return err
 	}
 
+	// 事件执行期间拒绝移动。
+	if !s.EventMu.TryLock() {
+		sendMoveReject(s)
+		return nil
+	}
+	s.EventMu.Unlock() // 不在事件中，立即释放后继续正常处理。
+
 	curX, curY, _ := s.Position()
 
 	// After a map transfer or resetpos, skip the speed check for a grace period.
@@ -287,6 +294,14 @@ func (gh *GameHandlers) HandleMapTransfer(_ context.Context, s *player.PlayerSes
 		return nil
 	}
 
+	// 事件执行期间拒绝客户端发起的传送。
+	if !s.EventMu.TryLock() {
+		gh.logger.Warn("map_transfer rejected: player in event",
+			zap.Int64("char_id", s.CharID))
+		return nil
+	}
+	s.EventMu.Unlock()
+
 	// Use exact coordinates from the event — the map maker's positions are authoritative.
 	destDir := req.Dir
 	if destDir <= 0 {
@@ -310,6 +325,16 @@ func (gh *GameHandlers) HandleMapTransfer(_ context.Context, s *player.PlayerSes
 // HandleResetPos teleports the player to a random passable tile on their current map.
 // 3-minute cooldown to prevent abuse.
 func (gh *GameHandlers) HandleResetPos(_ context.Context, s *player.PlayerSession, _ json.RawMessage) error {
+	// 事件执行期间拒绝重置位置。
+	if !s.EventMu.TryLock() {
+		payload, _ := json.Marshal(map[string]interface{}{
+			"error": "Cannot reset position during an event.",
+		})
+		s.Send(&player.Packet{Type: "reset_pos", Payload: payload})
+		return nil
+	}
+	s.EventMu.Unlock()
+
 	// Cooldown check.
 	since := s.CheckResetPosCooldown()
 	if since < resetPosCooldown {
@@ -397,6 +422,54 @@ func formatCooldown(totalSecs int) string {
 		return fmt.Sprintf("%dm%02ds", m, sec)
 	}
 	return fmt.Sprintf("%ds", sec)
+}
+
+// ------------------------------------------------------------------ TransferPlayer
+
+// TransferPlayer handles event-initiated player transfers (RMMV command 201).
+// For same-map transfers, it repositions without full scene reload.
+// For cross-map transfers, it delegates to EnterMapRoom.
+func (gh *GameHandlers) TransferPlayer(s *player.PlayerSession, mapID, x, y, dir int) {
+	if mapID == s.MapID {
+		// Same-map transfer: lightweight reposition without full map reload.
+		// This avoids sending map_init (which causes scene reload) and prevents
+		// the client from entering a transitional state that blocks effect acks.
+		s.SetPosition(x, y, dir)
+		s.LastTransfer = time.Now()
+
+		// Notify the client to reposition via reserveTransfer (lightweight for same-map).
+		payload, _ := json.Marshal(map[string]interface{}{
+			"map_id": mapID,
+			"x":      x,
+			"y":      y,
+			"dir":    dir,
+		})
+		s.Send(&player.Packet{Type: "transfer_player", Payload: payload})
+
+		// Broadcast position update to other players on the same map.
+		s.ResetDirty()
+		syncPayload, _ := json.Marshal(map[string]interface{}{
+			"char_id": s.CharID,
+			"x":       x,
+			"y":       y,
+			"dir":     dir,
+			"hp":      s.HP,
+			"mp":      s.MP,
+			"state":   "normal",
+		})
+		syncPkt, _ := json.Marshal(&player.Packet{Type: "player_sync", Payload: syncPayload})
+		if room := gh.wm.Get(s.MapID); room != nil {
+			room.BroadcastExcept(syncPkt, s.CharID)
+		}
+
+		gh.logger.Info("same-map transfer",
+			zap.Int64("char_id", s.CharID),
+			zap.Int("map_id", mapID),
+			zap.Int("x", x),
+			zap.Int("y", y))
+		return
+	}
+	gh.EnterMapRoom(s, mapID, x, y, dir)
 }
 
 // ------------------------------------------------------------------ enterMapRoom
@@ -634,6 +707,7 @@ func (gh *GameHandlers) EnterMapRoom(s *player.PlayerSession, mapID, x, y, dir i
 	// Execute autorun events (trigger=3) for this player on the new map.
 	if gh.autorunFn != nil {
 		autorunFn := gh.autorunFn
+		gen := s.IncrMapGen()
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
@@ -643,6 +717,13 @@ func (gh *GameHandlers) EnterMapRoom(s *player.PlayerSession, mapID, x, y, dir i
 						zap.Any("panic", r))
 				}
 			}()
+			// Stale check: if another EnterMapRoom already ran, this autorun is outdated.
+			if s.GetMapGen() != gen {
+				gh.logger.Info("autorun skipped: stale map generation",
+					zap.Int64("char_id", s.CharID),
+					zap.Int("map_id", mapID))
+				return
+			}
 			autorunFn(s, mapID)
 		}()
 	}

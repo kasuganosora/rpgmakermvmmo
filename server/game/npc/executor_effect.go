@@ -26,6 +26,9 @@ func (e *Executor) sendEffect(s *player.PlayerSession, cmd *resource.EventComman
 // payload 中添加 "wait":true 字段通知客户端需要在效果结束后回复 npc_effect_ack。
 // 返回 true 表示收到确认，false 表示连接断开或上下文已取消。
 func (e *Executor) sendEffectWait(ctx context.Context, s *player.PlayerSession, cmd *resource.EventCommand) bool {
+	e.logger.Info("sendEffectWait: waiting for client ack",
+		zap.Int64("char_id", s.CharID),
+		zap.Int("code", cmd.Code))
 	payload, _ := json.Marshal(map[string]interface{}{
 		"code":   cmd.Code,
 		"indent": cmd.Indent,
@@ -33,20 +36,22 @@ func (e *Executor) sendEffectWait(ctx context.Context, s *player.PlayerSession, 
 		"wait":   true,
 	})
 	s.Send(&player.Packet{Type: "npc_effect", Payload: payload})
-	return e.waitForEffectAck(ctx, s)
+	return e.waitForEffectAck(ctx, s, cmd.Code)
 }
 
 // waitForEffectAck 阻塞等待客户端确认效果播放完成。
 // 设置 30 秒安全超时，防止客户端异常时永久阻塞。
 // 返回 true 表示收到确认（或超时），false 表示连接断开或上下文已取消。
-func (e *Executor) waitForEffectAck(ctx context.Context, s *player.PlayerSession) bool {
+func (e *Executor) waitForEffectAck(ctx context.Context, s *player.PlayerSession, code int) bool {
 	timer := time.NewTimer(30 * time.Second)
 	defer timer.Stop()
 	select {
 	case <-s.EffectAckCh:
 		return true
 	case <-timer.C:
-		e.logger.Warn("effect ack timeout", zap.Int64("char_id", s.CharID))
+		e.logger.Warn("effect ack timeout",
+			zap.Int64("char_id", s.CharID),
+			zap.Int("code", code))
 		return true // 超时后继续执行，避免永久阻塞
 	case <-s.Done:
 		return false

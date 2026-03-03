@@ -243,6 +243,12 @@ func (dh *DebugHandlers) HandleTriggerCE(_ context.Context, s *player.PlayerSess
 		return nil
 	}
 
+	// 防止并发事件：已有事件运行时拒绝。
+	if !s.EventMu.TryLock() {
+		dh.sendDebugOK(s, "trigger_ce")
+		return nil
+	}
+
 	executor := npc.NewWithDB(dh.db, dh.res, dh.logger)
 	opts := &npc.ExecuteOpts{
 		GameState:  composite,
@@ -252,6 +258,7 @@ func (dh *DebugHandlers) HandleTriggerCE(_ context.Context, s *player.PlayerSess
 	}
 
 	go func() {
+		defer s.EventMu.Unlock()
 		defer func() {
 			if r := recover(); r != nil {
 				dh.logger.Error("debug_trigger_ce: panic recovered",
@@ -260,8 +267,10 @@ func (dh *DebugHandlers) HandleTriggerCE(_ context.Context, s *player.PlayerSess
 					zap.Any("panic", r))
 			}
 		}()
+		s.Send(&player.Packet{Type: "event_start"})
 		executor.Execute(context.Background(), s, page, opts)
 		executor.SendStateSyncAfterExecution(context.Background(), s, opts)
+		s.Send(&player.Packet{Type: "event_end"})
 	}()
 
 	dh.sendDebugOK(s, "trigger_ce")
@@ -289,7 +298,14 @@ func (dh *DebugHandlers) HandleStartBattle(ctx context.Context, s *player.Player
 		req.TroopID = 1
 	}
 
+	// 防止并发事件：已有事件运行时拒绝。
+	if !s.EventMu.TryLock() {
+		dh.sendDebugOK(s, "start_battle")
+		return nil
+	}
+
 	go func() {
+		defer s.EventMu.Unlock()
 		defer func() {
 			if r := recover(); r != nil {
 				dh.logger.Error("debug_start_battle: panic recovered",
@@ -298,7 +314,9 @@ func (dh *DebugHandlers) HandleStartBattle(ctx context.Context, s *player.Player
 					zap.Any("panic", r))
 			}
 		}()
+		s.Send(&player.Packet{Type: "event_start"})
 		dh.battleFn(ctx, s, req.TroopID, req.CanEscape, req.CanLose)
+		s.Send(&player.Packet{Type: "event_end"})
 	}()
 
 	dh.sendDebugOK(s, "start_battle")

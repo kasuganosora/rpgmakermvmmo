@@ -254,7 +254,7 @@ func NewTestServerWithResources(t *testing.T, dataPath string) *TestServer {
 	sh.RegisterHandlers(wsRouter)
 
 	npcH := apows.NewNPCHandlers(db, res, wm, logger)
-	npcH.SetTransferFunc(gh.EnterMapRoom)
+	npcH.SetTransferFunc(gh.TransferPlayer)
 	npcH.RegisterHandlers(wsRouter)
 	gh.SetAutorunFunc(npcH.ExecuteAutoruns)
 
@@ -273,7 +273,7 @@ func NewTestServerWithResources(t *testing.T, dataPath string) *TestServer {
 
 	// Debug handlers
 	debugH := apows.NewDebugHandlers(wm, sm, res, db, logger)
-	debugH.SetTransferFunc(gh.EnterMapRoom)
+	debugH.SetTransferFunc(gh.TransferPlayer)
 	debugH.SetBattleFn(battleMgr.RunBattle)
 	debugH.RegisterHandlers(wsRouter)
 

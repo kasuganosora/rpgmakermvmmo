@@ -442,7 +442,7 @@
         }
         // 动作键：直接检测 OK 按键 — 绕过 triggerAction、canMove、
         // triggerButtonAction 和所有插件包装器。
-        if (!$gameMessage.isBusy() && Input.isTriggered('ok')) {
+        if (!$MMO._serverEventActive && !$gameMessage.isBusy() && Input.isTriggered('ok')) {
             var dir = this.direction();
             var x2 = $gameMap.roundXWithDirection(this.x, dir);
             var y2 = $gameMap.roundYWithDirection(this.y, dir);
@@ -468,6 +468,7 @@
      * @returns {boolean} 是否允许移动
      */
     Game_Player.prototype.canMove = function () {
+        if ($MMO._serverEventActive) return false;
         if ($gameMessage.isBusy()) return false;
         if (this.isMoveRouteForcing() || this.areFollowersGathering()) return false;
         if (this._waitCount > 0) return false;
@@ -484,6 +485,7 @@
      * @param {boolean} normal - 是否为法线方向检测
      */
     Game_Player.prototype.startMapEvent = function (x, y, triggers, normal) {
+        if ($MMO._serverEventActive) return;
         if ($gameMessage.isBusy()) {
             if (MMO_CONFIG.debug) console.log('[MMO-NPC] startMapEvent 被阻止: $gameMessage.isBusy()');
             return;
@@ -819,11 +821,18 @@
             if (!moveRoute) break;
             if (charId === -1 && $gamePlayer) {
                 // 强制玩家角色执行移动路线。
+                // 服务端已验证移动合法性，设置 through=true 绕过客户端通行检查，
+                // 防止不可通行地块导致 skippable=false 路线永久卡死。
+                $gamePlayer._through = true;
                 $gamePlayer.forceMoveRoute(moveRoute);
             } else if (charId > 0) {
                 // NPC 移动路线：找到 NPC 精灵并应用到其角色对象。
                 var npcSprite = NPCManager.get(charId);
                 if (npcSprite && npcSprite._character) {
+                    // NPC 精灵使用裸 Game_Character（非 Game_Event），
+                    // 地图通行检查会导致 moveStraight 失败 → 路线卡死。
+                    // 设置 through=true 绕过通行检查，NPC 位置由服务器权威管理。
+                    npcSprite._character._through = true;
                     npcSprite._character.forceMoveRoute(moveRoute);
                 } else if (MMO_CONFIG.debug) {
                     console.warn('[MMO-NPC] 移动路线: 未找到 event_id=' + charId + ' 的 NPC 精灵');
@@ -1097,7 +1106,14 @@
                     setTimeout(function () {
                         _pollEffectAck(function () {
                             var ch = (cid === -1) ? $gamePlayer : _npcChar(cid);
-                            return !ch || !ch.isMoveRouteForcing();
+                            if (!ch || !ch.isMoveRouteForcing()) {
+                                // 路线完成，恢复玩家通行检查
+                                if (cid === -1 && $gamePlayer) {
+                                    $gamePlayer._through = false;
+                                }
+                                return true;
+                            }
+                            return false;
                         });
                     }, 33);
                 })();
