@@ -66,6 +66,7 @@ func (h *TemplateEventHandlers) RegisterHandlers(r *Router) {
 	// Self-variable operations (TemplateEvent.js extension)
 	r.On("self_var_get", h.HandleSelfVarGet)
 	r.On("self_var_set", h.HandleSelfVarSet)
+	r.On("self_var_set_batch", h.HandleSelfVarSetBatch)
 
 	// Variable operations (for whitelist synchronization)
 	r.On("var_get", h.HandleVarGet)
@@ -190,6 +191,40 @@ func (h *TemplateEventHandlers) HandleSelfVarSet(ctx context.Context, s *player.
 		zap.Int("event_id", req.EventID),
 		zap.Int("index", req.Index),
 		zap.Int("value", req.Value))
+
+	return nil
+}
+
+// selfVarSetBatchRequest is the WS payload for self_var_set_batch.
+type selfVarSetBatchRequest struct {
+	Changes []selfVarSetRequest `json:"changes"`
+}
+
+// HandleSelfVarSetBatch handles batch updates to self-variable values.
+// Client mmo-template-event-hook.js sends batched changes for efficiency.
+func (h *TemplateEventHandlers) HandleSelfVarSetBatch(ctx context.Context, s *player.PlayerSession, raw json.RawMessage) error {
+	var req selfVarSetBatchRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return nil
+	}
+
+	if len(req.Changes) == 0 {
+		return nil
+	}
+
+	composite, err := h.wm.PlayerStateManager().GetComposite(s.CharID)
+	if err != nil {
+		h.logger.Error("failed to get player state for self_var_set_batch", zap.Error(err), zap.Int64("char_id", s.CharID))
+		return nil
+	}
+
+	for _, change := range req.Changes {
+		composite.SetSelfVariable(change.MapID, change.EventID, change.Index, change.Value)
+	}
+
+	h.logger.Debug("self_var_set_batch",
+		zap.Int64("char_id", s.CharID),
+		zap.Int("count", len(req.Changes)))
 
 	return nil
 }

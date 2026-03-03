@@ -3,6 +3,7 @@ package npc
 
 import (
 	"context"
+	"encoding/json"
 	"strconv"
 	"strings"
 
@@ -40,9 +41,11 @@ func (e *Executor) handleTECallOriginEvent(ctx context.Context, s *player.Player
 	case "TEテンプレート呼び出し", "TE_CALL_MAP_EVENT":
 		return e.teCallMapEvent(ctx, s, cmdArgs, opts, depth)
 
-	case "TE_SET_SELF_VARIABLE":
-		// 独立变量管理 — 静默吸收（服务端尚未追踪）
-		return true
+	case "TE_SET_SELF_VARIABLE", "TEセルフ変数の操作":
+		return e.teSetSelfVariable(s, cmdArgs, opts)
+
+	case "TE_SET_RANGE_SELF_VARIABLE", "TEセルフ変数の一括操作":
+		return e.teSetRangeSelfVariable(s, cmdArgs, opts)
 
 	case "TE関連データ値デバッグ表示":
 		// 调试显示 — 服务端跳过
@@ -173,4 +176,137 @@ func (e *Executor) findMapEvent(mapID, eventID int) *resource.MapEvent {
 		}
 	}
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// TE_SET_SELF_VARIABLE / TE_SET_RANGE_SELF_VARIABLE
+// ---------------------------------------------------------------------------
+
+// teSetSelfVariable 处理 TE_SET_SELF_VARIABLE：设置/修改单个独立变量。
+// 格式："TE_SET_SELF_VARIABLE [Index] [OperationType] [Operand]"
+// OperationType: 0=赋值, 1=加, 2=减, 3=乘, 4=除, 5=取模
+func (e *Executor) teSetSelfVariable(s *player.PlayerSession, args []string, opts *ExecuteOpts) bool {
+	if opts == nil || opts.GameState == nil || opts.MapID <= 0 || opts.EventID <= 0 {
+		return true
+	}
+	if len(args) < 3 {
+		e.logger.Warn("TE_SET_SELF_VARIABLE: need 3 args [index, opType, operand]",
+			zap.Strings("args", args))
+		return true
+	}
+
+	index, err := strconv.Atoi(args[0])
+	if err != nil {
+		return true
+	}
+	opType, err := strconv.Atoi(args[1])
+	if err != nil {
+		return true
+	}
+	operand, err := strconv.Atoi(args[2])
+	if err != nil {
+		return true
+	}
+
+	current := opts.GameState.GetSelfVariable(opts.MapID, opts.EventID, index)
+	result := operateSelfVariable(current, opType, operand)
+	opts.GameState.SetSelfVariable(opts.MapID, opts.EventID, index, result)
+
+	// 推送自变量变更给客户端，使客户端 TemplateEvent.js 状态同步。
+	e.sendSelfVarChange(s, opts.MapID, opts.EventID, index, result)
+
+	e.logger.Debug("TE_SET_SELF_VARIABLE",
+		zap.Int("map_id", opts.MapID),
+		zap.Int("event_id", opts.EventID),
+		zap.Int("index", index),
+		zap.Int("op", opType),
+		zap.Int("operand", operand),
+		zap.Int("old", current),
+		zap.Int("new", result))
+	return true
+}
+
+// teSetRangeSelfVariable 处理 TE_SET_RANGE_SELF_VARIABLE：批量设置独立变量。
+// 格式："TE_SET_RANGE_SELF_VARIABLE [StartIndex] [EndIndex] [OperationType] [Operand]"
+func (e *Executor) teSetRangeSelfVariable(s *player.PlayerSession, args []string, opts *ExecuteOpts) bool {
+	if opts == nil || opts.GameState == nil || opts.MapID <= 0 || opts.EventID <= 0 {
+		return true
+	}
+	if len(args) < 4 {
+		e.logger.Warn("TE_SET_RANGE_SELF_VARIABLE: need 4 args [start, end, opType, operand]",
+			zap.Strings("args", args))
+		return true
+	}
+
+	startIdx, err := strconv.Atoi(args[0])
+	if err != nil {
+		return true
+	}
+	endIdx, err := strconv.Atoi(args[1])
+	if err != nil {
+		return true
+	}
+	opType, err := strconv.Atoi(args[2])
+	if err != nil {
+		return true
+	}
+	operand, err := strconv.Atoi(args[3])
+	if err != nil {
+		return true
+	}
+
+	for i := startIdx; i <= endIdx; i++ {
+		current := opts.GameState.GetSelfVariable(opts.MapID, opts.EventID, i)
+		result := operateSelfVariable(current, opType, operand)
+		opts.GameState.SetSelfVariable(opts.MapID, opts.EventID, i, result)
+		e.sendSelfVarChange(s, opts.MapID, opts.EventID, i, result)
+	}
+
+	e.logger.Debug("TE_SET_RANGE_SELF_VARIABLE",
+		zap.Int("map_id", opts.MapID),
+		zap.Int("event_id", opts.EventID),
+		zap.Int("start", startIdx),
+		zap.Int("end", endIdx),
+		zap.Int("op", opType),
+		zap.Int("operand", operand))
+	return true
+}
+
+// sendSelfVarChange 推送自变量变更给客户端。
+// 客户端收到后更新本地 $gameSelfSwitches._variableData，使 TemplateEvent.js 状态同步。
+func (e *Executor) sendSelfVarChange(s *player.PlayerSession, mapID, eventID, index, value int) {
+	payload, _ := json.Marshal(map[string]interface{}{
+		"map_id":   mapID,
+		"event_id": eventID,
+		"index":    index,
+		"value":    value,
+	})
+	s.Send(&player.Packet{Type: "self_var_change", Payload: payload})
+}
+
+// operateSelfVariable 对独立变量执行算术操作。
+// opType: 0=赋值, 1=加, 2=减, 3=乘, 4=除, 5=取模
+func operateSelfVariable(current, opType, operand int) int {
+	switch opType {
+	case 0: // 赋值
+		return operand
+	case 1: // 加
+		return current + operand
+	case 2: // 减
+		return current - operand
+	case 3: // 乘
+		return current * operand
+	case 4: // 除
+		if operand != 0 {
+			return current / operand
+		}
+		return current
+	case 5: // 取模
+		if operand != 0 {
+			return current % operand
+		}
+		return current
+	default:
+		return current
+	}
 }

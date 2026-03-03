@@ -13,11 +13,12 @@ import (
 // Both *GameState and *CompositeGameState satisfy this.
 // ---------------------------------------------------------------------------
 
-// GameStateReader provides read access to switches, variables, and self-switches.
+// GameStateReader provides read access to switches, variables, self-switches, and self-variables.
 type GameStateReader interface {
 	GetSwitch(id int) bool
 	GetVariable(id int) int
 	GetSelfSwitch(mapID, eventID int, ch string) bool
+	GetSelfVariable(mapID, eventID, index int) int
 }
 
 // ---------------------------------------------------------------------------

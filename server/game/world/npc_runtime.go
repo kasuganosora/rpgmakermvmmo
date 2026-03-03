@@ -30,6 +30,7 @@ type NPCRuntime struct {
 // selectPage chooses the highest-index page whose conditions are met.
 // RMMV convention: pages are checked from last to first; the first match wins.
 // actorValid and itemValid are skipped (server doesn't track per-player actor/item conditions).
+// Also evaluates TemplateEvent.js \TE{condition} expressions from page start comments.
 func selectPage(ev *resource.MapEvent, mapID int, state GameStateReader) *resource.EventPage {
 	if len(ev.Pages) == 0 {
 		return nil
@@ -43,12 +44,13 @@ func selectPage(ev *resource.MapEvent, mapID int, state GameStateReader) *resour
 		if page == nil {
 			continue
 		}
-		if meetsConditions(&page.Conditions, mapID, ev.ID, state) {
+		if meetsConditions(&page.Conditions, mapID, ev.ID, state) &&
+			meetsTEConditions(page, mapID, ev.ID, state) {
 			return page
 		}
 	}
-	// No conditions met — return first page as default (RMMV behavior).
-	return ev.Pages[0]
+	// No conditions met — event is completely inactive (RMMV returns -1).
+	return nil
 }
 
 // meetsConditions checks whether all enabled conditions on a page are satisfied.
@@ -67,6 +69,247 @@ func meetsConditions(cond *resource.EventPageConditions, mapID, eventID int, sta
 	}
 	// actorValid and itemValid are per-player conditions; skip on server.
 	return true
+}
+
+// ---------------------------------------------------------------------------
+// TemplateEvent.js \TE{condition} page conditions
+// ---------------------------------------------------------------------------
+
+// teCondRegex matches \TE{...} patterns in page start comments.
+var teCondRegex = regexp.MustCompile(`(?i)\\TE\{(.+?)\}`)
+
+// svRegex matches \sv[N] self-variable references.
+var svRegex = regexp.MustCompile(`(?i)\\sv\[(\d+)\]`)
+
+// varRegex matches \v[N] game variable references.
+var varRegex = regexp.MustCompile(`(?i)\\v\[(\d+)\]`)
+
+// switchRegex matches \s[N] game switch references.
+var switchRegex = regexp.MustCompile(`(?i)\\s\[(\d+)\]`)
+
+// meetsTEConditions checks TemplateEvent.js \TE{...} conditions in page start comments.
+// Returns true if all conditions are satisfied (or if no TE conditions exist).
+func meetsTEConditions(page *resource.EventPage, mapID, eventID int, state GameStateReader) bool {
+	comments := getStartComments(page)
+	if comments == "" {
+		return true
+	}
+
+	matches := teCondRegex.FindAllStringSubmatch(comments, -1)
+	if len(matches) == 0 {
+		return true
+	}
+
+	for _, m := range matches {
+		if !evalTEExpression(m[1], mapID, eventID, state) {
+			return false
+		}
+	}
+	return true
+}
+
+// getStartComments extracts all consecutive comment text from the beginning of a page's command list.
+// RMMV code 108 = Comment (first line), code 408 = Comment (continuation lines).
+func getStartComments(page *resource.EventPage) string {
+	if page == nil || len(page.List) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for _, cmd := range page.List {
+		if cmd == nil {
+			break
+		}
+		if cmd.Code != 108 && cmd.Code != 408 {
+			break
+		}
+		if len(cmd.Parameters) > 0 {
+			if s, ok := cmd.Parameters[0].(string); ok {
+				if sb.Len() > 0 {
+					sb.WriteByte('\n')
+				}
+				sb.WriteString(s)
+			}
+		}
+	}
+	return sb.String()
+}
+
+// evalTEExpression evaluates a TE condition expression after substituting variable references.
+// Supports: \v[N] (game variable), \s[N] (game switch as 0/1), \sv[N] (self-variable),
+// operators: ==, !=, >=, <=, >, <, &&, ||, and string/numeric literals.
+func evalTEExpression(expr string, mapID, eventID int, state GameStateReader) bool {
+	// Replace \sv[N] with self-variable values.
+	expr = svRegex.ReplaceAllStringFunc(expr, func(match string) string {
+		sub := svRegex.FindStringSubmatch(match)
+		if len(sub) >= 2 {
+			idx, _ := strconv.Atoi(sub[1])
+			return strconv.Itoa(state.GetSelfVariable(mapID, eventID, idx))
+		}
+		return "0"
+	})
+
+	// Replace \v[N] with game variable values.
+	expr = varRegex.ReplaceAllStringFunc(expr, func(match string) string {
+		sub := varRegex.FindStringSubmatch(match)
+		if len(sub) >= 2 {
+			id, _ := strconv.Atoi(sub[1])
+			return strconv.Itoa(state.GetVariable(id))
+		}
+		return "0"
+	})
+
+	// Replace \s[N] with game switch values (true=1, false=0).
+	expr = switchRegex.ReplaceAllStringFunc(expr, func(match string) string {
+		sub := switchRegex.FindStringSubmatch(match)
+		if len(sub) >= 2 {
+			id, _ := strconv.Atoi(sub[1])
+			if state.GetSwitch(id) {
+				return "1"
+			}
+			return "0"
+		}
+		return "0"
+	})
+
+	return evalLogicalExpr(strings.TrimSpace(expr))
+}
+
+// evalLogicalExpr evaluates an expression with ||, &&, and comparison operators.
+// Precedence: || (lowest) < && < comparisons (highest).
+func evalLogicalExpr(expr string) bool {
+	// Split by || (OR) — lowest precedence.
+	orParts := splitLogical(expr, "||")
+	if len(orParts) > 1 {
+		for _, part := range orParts {
+			if evalLogicalExpr(strings.TrimSpace(part)) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Split by && (AND).
+	andParts := splitLogical(expr, "&&")
+	if len(andParts) > 1 {
+		for _, part := range andParts {
+			if !evalLogicalExpr(strings.TrimSpace(part)) {
+				return false
+			}
+		}
+		return true
+	}
+
+	// Single comparison expression.
+	return evalComparison(strings.TrimSpace(expr))
+}
+
+// splitLogical splits an expression by a logical operator (|| or &&),
+// respecting parentheses and quoted strings.
+func splitLogical(expr, op string) []string {
+	var parts []string
+	depth := 0
+	inStr := false
+	last := 0
+	for i := 0; i < len(expr); i++ {
+		ch := expr[i]
+		if ch == '\'' || ch == '"' {
+			inStr = !inStr
+			continue
+		}
+		if inStr {
+			continue
+		}
+		if ch == '(' {
+			depth++
+		} else if ch == ')' {
+			depth--
+		}
+		if depth == 0 && i+len(op) <= len(expr) && expr[i:i+len(op)] == op {
+			parts = append(parts, expr[last:i])
+			last = i + len(op)
+			i += len(op) - 1
+		}
+	}
+	parts = append(parts, expr[last:])
+	if len(parts) <= 1 {
+		return nil // no split occurred
+	}
+	return parts
+}
+
+// evalComparison evaluates a single comparison like "5 == 5", "3 > 1", "'AAA' === 'BBB'".
+func evalComparison(expr string) bool {
+	// Try operators from longest to shortest to avoid ambiguity.
+	operators := []string{"===", "!==", "==", "!=", ">=", "<=", ">", "<"}
+	for _, op := range operators {
+		idx := strings.Index(expr, op)
+		if idx >= 0 {
+			left := strings.TrimSpace(expr[:idx])
+			right := strings.TrimSpace(expr[idx+len(op):])
+			return compareValues(left, right, op)
+		}
+	}
+	// No operator found — treat as boolean (non-zero/non-empty = true).
+	expr = strings.TrimSpace(expr)
+	if expr == "" || expr == "0" || expr == "false" {
+		return false
+	}
+	return true
+}
+
+// compareValues compares two value strings with the given operator.
+func compareValues(left, right, op string) bool {
+	// Strip quotes for string comparison.
+	leftStr := stripQuotes(left)
+	rightStr := stripQuotes(right)
+
+	// Try numeric comparison first.
+	leftNum, errL := strconv.ParseFloat(leftStr, 64)
+	rightNum, errR := strconv.ParseFloat(rightStr, 64)
+
+	if errL == nil && errR == nil {
+		switch op {
+		case "==", "===":
+			return leftNum == rightNum
+		case "!=", "!==":
+			return leftNum != rightNum
+		case ">":
+			return leftNum > rightNum
+		case "<":
+			return leftNum < rightNum
+		case ">=":
+			return leftNum >= rightNum
+		case "<=":
+			return leftNum <= rightNum
+		}
+	}
+
+	// Fall back to string comparison.
+	switch op {
+	case "==", "===":
+		return leftStr == rightStr
+	case "!=", "!==":
+		return leftStr != rightStr
+	case ">":
+		return leftStr > rightStr
+	case "<":
+		return leftStr < rightStr
+	case ">=":
+		return leftStr >= rightStr
+	case "<=":
+		return leftStr <= rightStr
+	}
+	return false
+}
+
+// stripQuotes removes surrounding single or double quotes from a string.
+func stripQuotes(s string) string {
+	if len(s) >= 2 {
+		if (s[0] == '\'' && s[len(s)-1] == '\'') || (s[0] == '"' && s[len(s)-1] == '"') {
+			return s[1 : len(s)-1]
+		}
+	}
+	return s
 }
 
 // populateNPCs creates NPCRuntime entries for all events on this map.
@@ -229,6 +472,44 @@ func (room *MapRoom) GetNPC(eventID int) *NPCRuntime {
 	return nil
 }
 
+// iconOnEventRegex matches YEP_IconsOnEvents comment tags: <Icon on Event: N>
+var iconOnEventRegex = regexp.MustCompile(`(?i)<Icon On Event:\s*(\d+)>`)
+
+// ExtractIconOnEvent scans the event note and the active page's command list
+// for <Icon on Event: N> tags (YEP_IconsOnEvents plugin).
+// Returns the icon index, or 0 if not found.
+func ExtractIconOnEvent(ev *resource.MapEvent, page *resource.EventPage) int {
+	// Check event note first (notetag = always active).
+	if ev.Note != "" {
+		if m := iconOnEventRegex.FindStringSubmatch(ev.Note); m != nil {
+			if n, err := strconv.Atoi(m[1]); err == nil && n > 0 {
+				return n
+			}
+		}
+	}
+	// Check page commands (comment tag = page-specific).
+	if page != nil {
+		for _, cmd := range page.List {
+			if cmd.Code != 108 && cmd.Code != 408 {
+				continue
+			}
+			if len(cmd.Parameters) == 0 {
+				continue
+			}
+			s, ok := cmd.Parameters[0].(string)
+			if !ok {
+				continue
+			}
+			if m := iconOnEventRegex.FindStringSubmatch(s); m != nil {
+				if n, err := strconv.Atoi(m[1]); err == nil && n > 0 {
+					return n
+				}
+			}
+		}
+	}
+	return 0
+}
+
 // isFunctionalMarker checks if the given image name is an editor-only marker
 // that should be hidden from players. Only matches specific known markers.
 // NOTE: RMMV's "!" prefix (e.g., !Flame, !Door, !Chest) means "object character"
@@ -272,6 +553,10 @@ func (room *MapRoom) NPCSnapshot() []map[string]interface{} {
 			snap["direction_fix"] = n.ActivePage.DirectionFix
 			snap["through"] = n.ActivePage.Through
 			snap["walk_anime"] = n.ActivePage.WalkAnime
+			// YEP_IconsOnEvents: extract <Icon on Event: N> from commands/note.
+			if icon := ExtractIconOnEvent(n.MapEvent, n.ActivePage); icon > 0 {
+				snap["icon_on_event"] = icon
+			}
 		} else {
 			// No active page — NPC is invisible
 			snap["walk_name"] = ""
@@ -532,6 +817,10 @@ func (room *MapRoom) NPCSnapshotForPlayer(state GameStateReader) []map[string]in
 			snap["direction_fix"] = activePage.DirectionFix
 			snap["through"] = activePage.Through
 			snap["walk_anime"] = activePage.WalkAnime
+			// YEP_IconsOnEvents: extract <Icon on Event: N> from commands/note.
+			if icon := ExtractIconOnEvent(n.MapEvent, activePage); icon > 0 {
+				snap["icon_on_event"] = icon
+			}
 		} else {
 			snap["walk_name"] = ""
 			snap["walk_index"] = 0

@@ -117,71 +117,96 @@
     }
 
     // ═══════════════════════════════════════════════════════════
-    //  钩子 Game_SelfSwitches.setValue
-    //  拦截数值型自变量修改（索引 >= 13，为 TemplateEvent 保留）。
-    //  始终调用原始方法以保持客户端行为一致。
+    //  钩子 Game_SelfSwitches.setVariableValue
+    //  拦截 TemplateEvent.js 自变量修改，同步到服务器。
+    //  TemplateEvent.js 使用独立的 setVariableValue 方法（非 setValue）。
+    //  key 格式：[mapId, eventId, index]，值为数字。
     // ═══════════════════════════════════════════════════════════
 
     /**
-     * 覆写 Game_SelfSwitches.setValue 以拦截自变量修改。
-     * 仅对索引 >= 13 的数值型键（TemplateEvent 自变量）进行同步。
+     * 覆写 Game_SelfSwitches.setVariableValue 以拦截自变量修改。
+     * TemplateEvent.js 自变量通过此方法存取，与 setValue（A/B/C/D 自开关）完全独立。
      * 始终调用原始方法以保持本地状态正确。
      */
     function hookGameSelfSwitches() {
-        var originalSetValue = Game_SelfSwitches.prototype.setValue;
-
-        Game_SelfSwitches.prototype.setValue = function (key, value) {
-            // key 格式: [mapId, eventId, switchChar/index]
-            // TemplateEvent 自变量使用数值索引（>= 13）。
-            if (Array.isArray(key) && key.length >= 3) {
-                var ch = key[2];
-                if (typeof ch === 'number' && ch >= 13) {
-                    debugLog('拦截自变量修改:', { mapId: key[0], eventId: key[1], index: ch, value: value });
-                    queueChange(key[0], key[1], ch, value);
-                }
-            }
-
-            // 始终调用原始方法。
-            return originalSetValue.call(this, key, value);
-        };
-
-        debugLog('Game_SelfSwitches.setValue 钩子已安装');
-    }
-
-    // ═══════════════════════════════════════════════════════════
-    //  钩子 TemplateEvent.js 专有方法（如存在）
-    //  直接拦截 TemplateEvent.setSelfVariable 以更精确地捕获变更。
-    // ═══════════════════════════════════════════════════════════
-
-    /**
-     * 检测并钩住 TemplateEvent.js 的 setSelfVariable 方法。
-     * @returns {boolean} 是否成功检测到 TemplateEvent.js
-     */
-    function hookTemplateEvent() {
-        if (typeof TemplateEvent === 'undefined') {
-            debugLog('未检测到 TemplateEvent');
+        // 等待 TemplateEvent.js 安装 setVariableValue（它可能在本插件之后加载）。
+        if (!Game_SelfSwitches.prototype.setVariableValue) {
+            debugLog('setVariableValue 尚未定义，延迟 hook');
             return false;
         }
 
-        _templateEventDetected = true;
-        debugLog('已检测到 TemplateEvent.js');
+        var originalSetVariableValue = Game_SelfSwitches.prototype.setVariableValue;
 
-        // 钩住 setSelfVariable（如存在）。
-        if (TemplateEvent.setSelfVariable) {
-            var originalSetSelfVariable = TemplateEvent.setSelfVariable;
-            TemplateEvent.setSelfVariable = function (eventId, mapId, index, value) {
-                debugLog('TemplateEvent.setSelfVariable 拦截:', { eventId: eventId, mapId: mapId, index: index, value: value });
-                queueChange(mapId, eventId, index, value);
-                return originalSetSelfVariable.apply(this, arguments);
-            };
-        }
+        Game_SelfSwitches.prototype.setVariableValue = function (key, value) {
+            // key 格式: [mapId, eventId, index]
+            if (Array.isArray(key) && key.length >= 3) {
+                var mapId = key[0];
+                var eventId = key[1];
+                var index = key[2];
+                debugLog('拦截自变量修改:', { mapId: mapId, eventId: eventId, index: index, value: value });
+                queueChange(mapId, eventId, index, typeof value === 'number' ? value : 0);
+            }
 
+            // 始终调用原始方法。
+            return originalSetVariableValue.call(this, key, value);
+        };
+
+        debugLog('Game_SelfSwitches.setVariableValue 钩子已安装');
         return true;
     }
 
     // ═══════════════════════════════════════════════════════════
+    //  检测 TemplateEvent.js
+    //  TemplateEvent.js 不创建全局对象，通过 setVariableValue 方法判断。
+    // ═══════════════════════════════════════════════════════════
+
+    /**
+     * 检测 TemplateEvent.js 是否已加载。
+     * TemplateEvent.js 使用 IIFE 模式，通过检查其在 Game_SelfSwitches 上
+     * 添加的 setVariableValue 方法来判断。
+     * @returns {boolean} 是否已加载
+     */
+    function detectTemplateEvent() {
+        if (typeof Game_SelfSwitches !== 'undefined' &&
+            Game_SelfSwitches.prototype.setVariableValue) {
+            _templateEventDetected = true;
+            debugLog('已检测到 TemplateEvent.js（通过 setVariableValue）');
+            return true;
+        }
+        return false;
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  服务端→客户端同步：self_var_change 处理器
+    //  服务端执行 TE_SET_SELF_VARIABLE 后推送变更，客户端更新本地状态。
+    // ═══════════════════════════════════════════════════════════
+
+    /**
+     * 注册 self_var_change 消息处理器。
+     * 服务端通过此消息推送自变量变更，客户端更新 $gameSelfSwitches._variableData。
+     */
+    function registerSelfVarChangeHandler() {
+        if (typeof $MMO === 'undefined' || !$MMO.on) return;
+
+        $MMO.on('self_var_change', function (data) {
+            if (!$gameSelfSwitches || !$gameSelfSwitches.setVariableValue) return;
+
+            var key = [data.map_id, data.event_id, data.index];
+            debugLog('服务端自变量变更:', { mapId: data.map_id, eventId: data.event_id, index: data.index, value: data.value });
+
+            // 直接写入 _variableData 避免触发 hook 回传服务器。
+            if ($gameSelfSwitches._variableData) {
+                $gameSelfSwitches._variableData[key] = data.value;
+                $gameSelfSwitches.onChange();
+            }
+        });
+
+        debugLog('self_var_change 处理器已注册');
+    }
+
+    // ═══════════════════════════════════════════════════════════
     //  初始化
-    //  等待 $MMO 就绪后安装所有钩子。
+    //  等待 $MMO 和 TemplateEvent.js 就绪后安装所有钩子。
     //  30 秒超时后停止等待，防止未连接时无限轮询。
     // ═══════════════════════════════════════════════════════════
 
@@ -191,39 +216,47 @@
     function initialize() {
         debugLog('初始化中...');
 
-        // 等待 $MMO 就绪。
+        var hookInstalled = false;
+        // 等待 $MMO 和 TemplateEvent.js 就绪。
         var checkInterval = setInterval(function () {
-            if (typeof $MMO !== 'undefined' && $MMO.isConnected) {
-                clearInterval(checkInterval);
+            if (typeof $MMO === 'undefined' || !$MMO.isConnected) return;
 
-                // 检查服务器可用性。
+            // 首次检测到 $MMO 时注册服务端→客户端处理器。
+            if (!hookInstalled) {
                 checkServerAvailability();
                 debugLog('服务器可用:', _isServerAvailable);
 
-                // 安装 RMMV 钩子。
-                if (typeof Game_SelfSwitches !== 'undefined') {
-                    hookGameSelfSwitches();
-                } else {
-                    console.warn('[MMO-TemplateEvent-Hook] Game_SelfSwitches 不存在');
-                }
-
-                // 检测并钩住 TemplateEvent.js。
-                hookTemplateEvent();
+                // 注册服务端推送的自变量变更处理器。
+                registerSelfVarChangeHandler();
 
                 // 场景切换时刷新待发送变更（防止切换地图时丢失）。
-                var originalTerminate = Scene_Map.prototype.terminate;
-                Scene_Map.prototype.terminate = function () {
-                    flushChanges();
-                    return originalTerminate.call(this);
-                };
+                if (typeof Scene_Map !== 'undefined') {
+                    var originalTerminate = Scene_Map.prototype.terminate;
+                    Scene_Map.prototype.terminate = function () {
+                        flushChanges();
+                        return originalTerminate.call(this);
+                    };
+                }
+            }
 
+            // 检测 TemplateEvent.js 并安装 setVariableValue 钩子。
+            if (!hookInstalled && detectTemplateEvent()) {
+                hookInstalled = hookGameSelfSwitches();
+            }
+
+            // 所有钩子安装完毕后停止轮询。
+            if (hookInstalled) {
+                clearInterval(checkInterval);
                 debugLog('初始化完成');
             }
-        }, 100);
+        }, 200);
 
         // 30 秒超时后停止等待。
         setTimeout(function () {
-            clearInterval(checkInterval);
+            if (!hookInstalled) {
+                clearInterval(checkInterval);
+                debugLog('初始化超时，TemplateEvent.js 可能未加载');
+            }
         }, 30000);
     }
 

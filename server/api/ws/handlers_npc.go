@@ -128,10 +128,19 @@ func (h *NPCHandlers) HandleInteract(ctx context.Context, s *player.PlayerSessio
 
 	// Execute in a goroutine so the WS handler returns immediately.
 	// The executor may block waiting for choice replies.
+	startMapID := s.MapID
 	go func() {
 		h.executor.Execute(ctx, s, activePage, opts)
 		// After execution, send per-player page changes (not broadcast).
 		h.sendPageChangesToPlayer(s, room, composite)
+		// 如果执行过程中发生了 Transfer，还需更新新地图的 NPC 页面。
+		if s.MapID != startMapID {
+			if currentRoom := h.wm.Get(s.MapID); currentRoom != nil {
+				if fc, err := h.wm.PlayerStateManager().GetComposite(s.CharID); err == nil {
+					h.sendPageChangesToPlayer(s, currentRoom, fc)
+				}
+			}
+		}
 	}()
 
 	return nil
@@ -246,6 +255,23 @@ func (h *NPCHandlers) ExecuteAutoruns(s *player.PlayerSession, mapID int) {
 		// Send per-player page changes after each autorun.
 		h.sendPageChangesToPlayer(s, room, composite)
 	}
+
+	// Autorun 中可能执行了 Transfer（cmd 201），导致玩家已在不同地图。
+	// 此时上面的 sendPageChangesToPlayer 只更新了原始地图（room）的 NPC，
+	// 新地图的 NPC 页面未被重新评估。
+	// 例：Map 20 autorun 先 Transfer 到 Map 67，再设 Switch 317=ON，
+	// 但 Map 67 的 map_init 发送时 switch 317 还是 OFF → 柜子事件不显示。
+	// 这里重新获取 composite（反映 autorun 中设置的最新开关/变量），
+	// 并对玩家当前所在地图发送 page changes。
+	if s.MapID != mapID {
+		currentRoom := h.wm.Get(s.MapID)
+		if currentRoom != nil {
+			freshComposite, err := h.wm.PlayerStateManager().GetComposite(s.CharID)
+			if err == nil {
+				h.sendPageChangesToPlayer(s, currentRoom, freshComposite)
+			}
+		}
+	}
 }
 
 // sendPageChangesToPlayer re-evaluates all NPC pages for a single player's state
@@ -264,13 +290,30 @@ func (h *NPCHandlers) sendPageChangesToPlayer(s *player.PlayerSession, room *wor
 			"dir":      npcInst.Dir,
 		}
 		if playerPage != nil {
-			data["walk_name"] = playerPage.Image.CharacterName
-			data["walk_index"] = playerPage.Image.CharacterIndex
+			img := playerPage.Image
+			walkName := img.CharacterName
+			// 图块事件（柜子、门等）使用 TileID 而非行走图。
+			if img.TileID > 0 {
+				walkName = ""
+				data["tile_id"] = img.TileID
+			}
+			h.logger.Info("npc_page_change",
+				zap.Int("event_id", npcInst.EventID),
+				zap.String("walk_name", walkName),
+				zap.Int("tile_id", img.TileID),
+				zap.Bool("playerPage_nil", playerPage == nil),
+				zap.Bool("globalPage_nil", npcInst.ActivePage == nil))
+			data["walk_name"] = walkName
+			data["walk_index"] = img.CharacterIndex
 			data["priority_type"] = playerPage.PriorityType
 			data["step_anime"] = playerPage.StepAnime
 			data["direction_fix"] = playerPage.DirectionFix
 			data["through"] = playerPage.Through
 			data["walk_anime"] = playerPage.WalkAnime
+			// YEP_IconsOnEvents: extract <Icon on Event: N> from commands/note.
+			if icon := world.ExtractIconOnEvent(npcInst.MapEvent, playerPage); icon > 0 {
+				data["icon_on_event"] = icon
+			}
 		} else {
 			data["walk_name"] = ""
 			data["walk_index"] = 0

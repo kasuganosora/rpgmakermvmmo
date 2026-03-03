@@ -118,6 +118,16 @@ func (a *templateEventAdapter) Apply(rl *ResourceLoader, params map[string]strin
 	// Parse OverrideTarget settings.
 	override := parseOverrideTarget(params["OverrideTarget"])
 
+	// AutoOverride: when true, ALL template events use OverrideTarget.
+	// When false (default), only events with <OverRide>/<上書き> note tag use it.
+	autoOverride := params["AutoOverride"] == "true"
+
+	// IntegrateNote: 0=None, 1=Integrate (template+original), 2=Override (original replaces template).
+	integrateNote := 0
+	if v, err := strconv.Atoi(params["IntegrateNote"]); err == nil {
+		integrateNote = v
+	}
+
 	// Build name→event lookup for the template map.
 	tmplByName := make(map[string]*MapEvent)
 	for _, ev := range tmplMap.Events {
@@ -161,8 +171,21 @@ func (a *templateEventAdapter) Apply(rl *ResourceLoader, params map[string]strin
 				continue
 			}
 
+			// TemplateEvent.js OverrideTarget logic:
+			// Override only applies when AutoOverride=true OR the event has <OverRide>/<上書き> tag.
+			// Without these, the template's images/settings are used as-is.
+			eventOverride := override
+			if !autoOverride && !hasOverrideTag(ev.Note) {
+				eventOverride = overrideTarget{} // all false — no override
+			}
 			// Replace the event's pages with the template event's pages.
-			applyTemplate(ev, tmplEv, override)
+			applyTemplate(ev, tmplEv, eventOverride)
+
+			// IntegrateNote: merge template and original event notes.
+			// Only applies when the event has <OverRide>/<上書き> tag or AutoOverride is on.
+			if integrateNote > 0 && (autoOverride || hasOverrideTag(ev.Note)) {
+				integrateNotes(ev, tmplEv, integrateNote)
+			}
 			applied++
 		}
 	}
@@ -201,6 +224,29 @@ func parseOverrideTarget(raw string) overrideTarget {
 	ot.Trigger = m["Trigger"] == "true"
 	ot.Option = m["Option"] == "true"
 	return ot
+}
+
+// integrateNotes merges template and original event notes per IntegrateNote setting.
+// mode 1 = Integrate (template note + original note), mode 2 = Override (original replaces template).
+func integrateNotes(target, tmpl *MapEvent, mode int) {
+	switch mode {
+	case 1: // Integrate: template note + original note
+		target.Note = tmpl.Note + target.Note
+	case 2: // Override: original note replaces template note (already the case, no-op)
+		// target.Note is already the original; nothing to do.
+	}
+}
+
+// hasOverrideTag checks if the event note contains override meta tags.
+// TemplateEvent.js uses metaTagPrefix "TE", so getMetaValues(event, ['OverRide', '上書き'])
+// actually checks for meta keys "TEOverRide" and "TE上書き". RMMV's extractMetadata
+// parses <TEOverRide> and <TE上書き> from the note field into those keys.
+// We also check the unprefixed forms for safety.
+func hasOverrideTag(note string) bool {
+	return strings.Contains(note, "<TEOverRide>") ||
+		strings.Contains(note, "<TE上書き>") ||
+		strings.Contains(note, "<OverRide>") ||
+		strings.Contains(note, "<上書き>")
 }
 
 // applyTemplate replaces the target event's pages with the template event's pages,

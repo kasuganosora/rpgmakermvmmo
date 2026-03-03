@@ -323,6 +323,22 @@
     };
 
     // ═══════════════════════════════════════════════════════════
+    //  command355 安全包装
+    //  客户端并行公共事件可能在插件数据未初始化时执行脚本
+    //  （如 ExtasyCul.js 的 .EXT 属性在 CE 1001 运行前未创建）。
+    //  用 try-catch 包装 eval 防止崩溃。
+    // ═══════════════════════════════════════════════════════════
+    var _origCommand355 = Game_Interpreter.prototype.command355;
+    Game_Interpreter.prototype.command355 = function () {
+        try {
+            return _origCommand355.call(this);
+        } catch (e) {
+            console.warn('[MMO] command355 脚本执行错误:', e.message);
+            return true;
+        }
+    };
+
+    // ═══════════════════════════════════════════════════════════
     //  map_init 消息处理
     //  在初始登录、重新登录、服务端地图传送时触发。
     //  同步玩家位置、变量/开关、装备、音频到客户端。
@@ -376,6 +392,19 @@
                         actor._equips[slot].setEquip(isWeapon, eq.item_id);
                     }
                 }
+            }
+        }
+
+        // 初始化插件扩展属性（ExtasyCul.js 等）。
+        // 原游戏由 CE 1001 的脚本命令初始化，但服务端脚本白名单过滤了这些行。
+        // 在此确保对象存在，防止并行 CE 访问 .EXT.mouth 等属性时崩溃。
+        if ($gameActors) {
+            var _a = $gameActors.actor(1);
+            if (_a) {
+                if (!_a.EXT) _a.EXT = { mouth: 0, nipple: 0, clit: 0, vagina: 0, anus: 0 };
+                if (!_a.QTE) _a.QTE = {};
+                if (!_a.abu) _a.abu = {};
+                if (!_a.hyp) _a.hyp = {};
             }
         }
 

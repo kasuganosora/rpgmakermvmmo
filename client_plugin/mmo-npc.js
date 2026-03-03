@@ -78,6 +78,10 @@
         Sprite_Character.prototype.initialize.call(this, ch);
         /** @type {Array} 待处理的移动指令队列。 */
         this._moveQueue = [];
+        // 服务器传来的事件图标 ID（对应 YEP_IconsOnEvents 的 <Icon on Event: N>）。
+        this._npcIconId = data.icon_on_event || 0;
+        this._npcIconSprite = null;
+        this._npcIconDrawn = false;
         // 无图像的事件（隐形传送触发器等）设为不可见。
         if (!walkName && tileId === 0) this.visible = false;
     };
@@ -143,6 +147,9 @@
         c._directionFix = !!data.direction_fix;
         c._through = !!data.through;
         c._walkAnime = data.walk_anime != null ? data.walk_anime : true;
+        // 更新事件图标。
+        this._npcIconId = data.icon_on_event || 0;
+        this._npcIconDrawn = false;
         // 有图像时显示，否则隐藏。
         this.visible = !!walkName || tileId > 0;
     };
@@ -163,7 +170,58 @@
             c.setDirection(next.dir);
         }
         c.update();
+        // 图块事件（tile_id > 0）需要地图 tileset 才能渲染。
+        // 在 map_init 到达前 $gameMap 可能是空白地图（mapId=0，无 tileset），
+        // 此时跳过精灵渲染以避免 tilesetBitmap() 访问 null tileset 崩溃。
+        if (c._tileId > 0 && !$gameMap.tileset()) return;
         Sprite_Character.prototype.update.call(this);
+        this._updateNpcIcon();
+    };
+
+    /**
+     * 更新事件头顶图标精灵（对应 YEP_IconsOnEvents 的 <Icon on Event: N>）。
+     * 由于 Sprite_ServerNPC 不走 Game_Event.setupPageSettings 流程，
+     * 这里直接渲染图标而不依赖 YEP 插件的钩子。
+     * IconSet 异步加载完成后才绘制，避免首帧 blt 空白且不重试的问题。
+     */
+    Sprite_ServerNPC.prototype._updateNpcIcon = function () {
+        if (this._npcIconId <= 0) {
+            // 无图标 — 移除已有精灵。
+            if (this._npcIconSprite) {
+                if (this._npcIconSprite.parent) {
+                    this._npcIconSprite.parent.removeChild(this._npcIconSprite);
+                }
+                this._npcIconSprite = null;
+                this._npcIconDrawn = false;
+            }
+            return;
+        }
+        // 首次创建图标精灵。
+        if (!this._npcIconSprite) {
+            if (!this.parent) return; // 尚未加入容器
+            var pw = Window_Base._iconWidth || 32;
+            var ph = Window_Base._iconHeight || 32;
+            this._npcIconSprite = new Sprite();
+            this._npcIconSprite.bitmap = new Bitmap(pw, ph);
+            this._npcIconSprite.anchor.x = 0.5;
+            this._npcIconSprite.anchor.y = 1;
+            this._npcIconSprite.z = 6;
+            this._npcIconBitmap = ImageManager.loadSystem('IconSet');
+            this.parent.addChild(this._npcIconSprite);
+        }
+        // IconSet 加载完成后绘制图标（仅一次）。
+        if (!this._npcIconDrawn && this._npcIconBitmap && this._npcIconBitmap.isReady()) {
+            var pw = Window_Base._iconWidth || 32;
+            var ph = Window_Base._iconHeight || 32;
+            var sx = this._npcIconId % 16 * pw;
+            var sy = Math.floor(this._npcIconId / 16) * ph;
+            this._npcIconSprite.bitmap.clear();
+            this._npcIconSprite.bitmap.blt(this._npcIconBitmap, sx, sy, pw, ph, 0, 0);
+            this._npcIconDrawn = true;
+        }
+        // 每帧更新位置，跟随角色移动。
+        this._npcIconSprite.x = this.x;
+        this._npcIconSprite.y = this.y - this.height + 12;
     };
 
     // ═══════════════════════════════════════════════════════════
@@ -263,6 +321,10 @@
             var self = this;
             Object.keys(this._sprites).forEach(function (id) {
                 var sp = self._sprites[id];
+                // 图标精灵是 tilemap 的兄弟节点，需要单独移除。
+                if (sp && sp._npcIconSprite && sp._npcIconSprite.parent) {
+                    sp._npcIconSprite.parent.removeChild(sp._npcIconSprite);
+                }
                 if (sp && sp.parent) sp.parent.removeChild(sp);
             });
             this._sprites = {};
