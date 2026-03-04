@@ -299,6 +299,9 @@
     var _Game_Player_moveStraight = Game_Player.prototype.moveStraight;
     Game_Player.prototype.moveStraight = function (d) {
         _Game_Player_moveStraight.call(this, d);
+        // 移动路线触发的移动不发送 player_move — 服务器通过 npc_effect_ack 同步最终位置。
+        // 事件执行期间 EventMu 被锁定，发送 player_move 会被 move_reject，导致无限循环。
+        if (this._moveRouteForcing) return;
         if (this.isMovementSucceeded() && $MMO.isConnected()) {
             $MMO.send('player_move', { x: this._x, y: this._y, dir: this._direction });
         }
@@ -311,6 +314,7 @@
     var _Game_Player_moveDiagonally = Game_Player.prototype.moveDiagonally;
     Game_Player.prototype.moveDiagonally = function (horz, vert) {
         _Game_Player_moveDiagonally.call(this, horz, vert);
+        if (this._moveRouteForcing) return;
         if (this.isMovementSucceeded() && $MMO.isConnected()) {
             $MMO.send('player_move', { x: this._x, y: this._y, dir: this._direction });
         }

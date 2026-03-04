@@ -276,6 +276,53 @@ func TestHandleMove_MalformedPayload(t *testing.T) {
 	r.Dispatch(s, raw)
 }
 
+func TestHandleMove_RejectedDuringEvent(t *testing.T) {
+	// When EventMu is locked (event executing), player_move should be rejected.
+	// This is the baseline behavior that causes the move-route reject loop.
+	wm := world.NewWorldManager(nil, world.NewGameState(nil, nil), world.NewGlobalWhitelist(), nil, nop())
+	defer wm.StopAll()
+	wm.GetOrCreate(1)
+
+	r := NewRouter(nop())
+	gh := NewGameHandlers(nil, wm, nil, nil, nop())
+	gh.RegisterHandlers(r)
+
+	s := newSession(1, 10)
+	s.MapID = 1
+	s.SetPosition(5, 5, 2)
+
+	// Simulate event execution by locking EventMu.
+	s.EventMu.Lock()
+
+	raw := makePacket(t, 1, "player_move", map[string]interface{}{
+		"x": 5, "y": 6, "dir": 2,
+	})
+	r.Dispatch(s, raw)
+
+	// Should receive move_reject.
+	select {
+	case data := <-s.SendChan:
+		var pkt player.Packet
+		require.NoError(t, json.Unmarshal(data, &pkt))
+		assert.Equal(t, "move_reject", pkt.Type)
+
+		var payload map[string]interface{}
+		require.NoError(t, json.Unmarshal(pkt.Payload, &payload))
+		// Reject should contain the server's authoritative position.
+		assert.EqualValues(t, 5, payload["x"])
+		assert.EqualValues(t, 5, payload["y"])
+	case <-time.After(200 * time.Millisecond):
+		t.Error("expected move_reject when EventMu is locked")
+	}
+
+	// Position should remain unchanged.
+	x, y, _ := s.Position()
+	assert.Equal(t, 5, x)
+	assert.Equal(t, 5, y)
+
+	s.EventMu.Unlock()
+}
+
 // ---- BattleHandlers: HandleAttack ----
 
 func TestHandleAttack_NotInMap(t *testing.T) {

@@ -1116,6 +1116,13 @@
                                 return true;
                             }
                             return false;
+                        }, function () {
+                            // 玩家移动路线结束时附带最终位置，让服务器同步。
+                            // 移动路线期间 player_move 被跳过，需要通过 ack 补偿位置。
+                            if (cid === -1 && $gamePlayer) {
+                                return { x: $gamePlayer._x, y: $gamePlayer._y, dir: $gamePlayer._direction };
+                            }
+                            return {};
                         });
                     }, 33);
                 })();
@@ -1143,14 +1150,16 @@
      * 轮询检测条件满足后发送 effect ack。
      * 每 16ms（约 1 帧）检查一次条件函数，满足或超过 30 秒安全超时后发送。
      * @param {Function} checkFn - 条件函数，返回 true 表示效果已完成
+     * @param {Function} [ackDataFn] - 可选，返回附加到 ack 的数据（如移动路线结束后的玩家位置）
      */
-    function _pollEffectAck(checkFn) {
+    function _pollEffectAck(checkFn, ackDataFn) {
         var elapsed = 0;
         var pollId = setInterval(function () {
             elapsed += 16;
             if (checkFn() || elapsed > 30000) {
                 clearInterval(pollId);
-                $MMO.send('npc_effect_ack', {});
+                var data = (typeof ackDataFn === 'function') ? ackDataFn() : {};
+                $MMO.send('npc_effect_ack', data);
             }
         }, 16);
     }

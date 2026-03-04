@@ -215,8 +215,33 @@ func (h *NPCHandlers) HandleDialogAck(_ context.Context, s *player.PlayerSession
 	return nil
 }
 
+// effectAckRequest is the optional payload for npc_effect_ack.
+// When a move route targeting the player completes, the client includes
+// the player's final position so the server can stay in sync.
+// Pointer fields distinguish "absent" from "zero value".
+type effectAckRequest struct {
+	X   *int `json:"x"`
+	Y   *int `json:"y"`
+	Dir *int `json:"dir"`
+}
+
 // HandleEffectAck processes a client's acknowledgment that a visual effect has finished playing.
-func (h *NPCHandlers) HandleEffectAck(_ context.Context, s *player.PlayerSession, _ json.RawMessage) error {
+// If the ack includes position data (from a player move route), update the session position
+// to prevent stale-position issues (speed-hack false positives, wrong passability checks).
+func (h *NPCHandlers) HandleEffectAck(_ context.Context, s *player.PlayerSession, raw json.RawMessage) error {
+	// Parse optional position data from move route ack.
+	var req effectAckRequest
+	if len(raw) > 2 { // skip empty "{}"
+		_ = json.Unmarshal(raw, &req)
+	}
+	if req.X != nil && req.Y != nil {
+		dir := s.Dir
+		if req.Dir != nil {
+			dir = *req.Dir
+		}
+		s.SetPosition(*req.X, *req.Y, dir)
+	}
+
 	select {
 	case s.EffectAckCh <- struct{}{}:
 	default:
