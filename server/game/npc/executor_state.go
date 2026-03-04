@@ -22,9 +22,11 @@ func (e *Executor) applySwitches(s *player.PlayerSession, params []interface{}, 
 	endID := paramInt(params, 1)
 	val := paramInt(params, 2) == 0 // 0=ON
 	for id := startID; id <= endID; id++ {
-		opts.GameState.SetSwitch(id, val)
-		// 同步给客户端，确保并行公共事件读取到正确值
-		e.sendSwitchChange(s, id, val)
+		if opts.GameState.GetSwitch(id) != val {
+			opts.GameState.SetSwitch(id, val)
+			// 同步给客户端，确保并行公共事件读取到正确值
+			e.sendSwitchChange(s, id, val)
+		}
 	}
 }
 
@@ -53,27 +55,30 @@ func (e *Executor) applyVariables(s *player.PlayerSession, params []interface{},
 				val = val + rand.Intn(max-val+1)
 			}
 		}
+		newVal := current
 		switch op {
 		case 0: // 设置
-			current = val
+			newVal = val
 		case 1: // 加
-			current += val
+			newVal += val
 		case 2: // 减
-			current -= val
+			newVal -= val
 		case 3: // 乘
-			current *= val
+			newVal *= val
 		case 4: // 除（防止除零）
 			if val != 0 {
-				current /= val
+				newVal /= val
 			}
 		case 5: // 取模（防止除零）
 			if val != 0 {
-				current %= val
+				newVal %= val
 			}
 		}
-		opts.GameState.SetVariable(id, current)
-		// 同步给客户端，确保并行公共事件读取到正确值
-		e.sendVarChange(s, id, current)
+		if newVal != current {
+			opts.GameState.SetVariable(id, newVal)
+			// 同步给客户端，确保并行公共事件读取到正确值
+			e.sendVarChange(s, id, newVal)
+		}
 	}
 }
 
@@ -126,7 +131,7 @@ func (e *Executor) applyGold(ctx context.Context, s *player.PlayerSession, param
 		return fmt.Errorf("no inventory store configured")
 	}
 
-	// 扣除金币时检查余额是否充足
+	// RMMV 行为：金币扣除不足时钳位到 0，不拒绝操作。
 	if amount < 0 {
 		gold, err := e.store.GetGold(ctx, s.CharID)
 		if err != nil {
@@ -134,11 +139,14 @@ func (e *Executor) applyGold(ctx context.Context, s *player.PlayerSession, param
 			return err
 		}
 		if gold < -amount {
-			e.logger.Warn("applyGold: insufficient gold", zap.Int64("char_id", s.CharID), zap.Int64("have", gold), zap.Int64("need", -amount))
-			return fmt.Errorf("insufficient gold: have %d, need %d", gold, -amount)
+			// 钳位：将扣除量调整为实际持有量，使余额归零
+			amount = -gold
 		}
 	}
 
+	if amount == 0 {
+		return nil // 无变更
+	}
 	if err := e.store.UpdateGold(ctx, s.CharID, amount); err != nil {
 		e.logger.Warn("applyGold: failed to update gold", zap.Int64("char_id", s.CharID), zap.Error(err))
 		return err
@@ -171,15 +179,13 @@ func (e *Executor) applyItems(ctx context.Context, s *player.PlayerSession, para
 	}
 
 	if op == 1 {
-		// 减少物品
+		// RMMV 行为：物品不足时钳位到 0（移除实际持有量），不拒绝操作。
 		currentQty, err := e.store.GetItem(ctx, s.CharID, itemID)
-		if err != nil {
-			e.logger.Warn("applyItems: item not found for removal", zap.Int64("char_id", s.CharID), zap.Int("item_id", itemID))
-			return fmt.Errorf("item %d not found in inventory", itemID)
+		if err != nil || currentQty <= 0 {
+			return nil // 物品不存在，无需移除
 		}
 		if currentQty < qty {
-			e.logger.Warn("applyItems: insufficient quantity", zap.Int64("char_id", s.CharID), zap.Int("item_id", itemID), zap.Int("have", currentQty), zap.Int("need", qty))
-			return fmt.Errorf("insufficient quantity: have %d, need %d", currentQty, qty)
+			qty = currentQty // 钳位：仅移除实际持有量
 		}
 		if err := e.store.RemoveItem(ctx, s.CharID, itemID, qty); err != nil {
 			e.logger.Warn("applyItems: failed to remove items", zap.Int64("char_id", s.CharID), zap.Error(err))

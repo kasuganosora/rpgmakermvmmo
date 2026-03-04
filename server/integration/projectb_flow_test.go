@@ -115,7 +115,7 @@ func messagePump(t *testing.T, ws *WSClient, opts pumpOpts) *pumpResult {
 			res.Dialogs = append(res.Dialogs, pkt)
 			ws.Send("npc_dialog_ack", map[string]interface{}{})
 
-		case "npc_choices":
+		case "npc_choices", "npc_dialog_choices":
 			res.Choices = append(res.Choices, pkt)
 			lastChoice = time.Now()
 			idx := 0
@@ -531,8 +531,12 @@ func setupPlayerOnMap67(t *testing.T) (*TestServer, *WSClient, string, int64) {
 	ws2.Send("enter_map", map[string]interface{}{"char_id": charID})
 	ws2.RecvType("map_init", 10*time.Second)
 	ws2.Send("scene_ready", map[string]interface{}{})
-	// Drain initial parallel CE messages.
-	time.Sleep(1 * time.Second)
+	// Drain autorun messages (including dialogs that need ack) via messagePump.
+	messagePump(t, ws2, pumpOpts{
+		TotalTimeout: 10 * time.Second,
+		QuietTimeout: 3 * time.Second,
+		ChoiceReply:  []int{0},
+	})
 
 	return ts, ws2, token, charID
 }

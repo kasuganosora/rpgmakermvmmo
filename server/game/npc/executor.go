@@ -122,6 +122,11 @@ type InventoryStore interface {
 	AddItem(ctx context.Context, charID int64, itemID, qty int) error
 	// RemoveItem 减少物品数量，数量归零则删除记录。
 	RemoveItem(ctx context.Context, charID int64, itemID, qty int) error
+	// HasItemOfKind 检查角色是否拥有指定类型和 ID 的物品。
+	// kind: 1=消耗品, 2=武器, 3=防具。includeEquipped 为 true 时包含已装备物品。
+	HasItemOfKind(ctx context.Context, charID int64, itemID, kind int, includeEquipped bool) (bool, error)
+	// IsEquipped 检查角色是否装备了指定类型和 ID 的物品。
+	IsEquipped(ctx context.Context, charID int64, itemID, kind int) (bool, error)
 }
 
 // ---- 回调类型 ----
@@ -259,4 +264,29 @@ func (s *gormInventoryStore) RemoveItem(ctx context.Context, charID int64, itemI
 		return s.db.WithContext(ctx).Delete(&inv).Error
 	}
 	return s.db.WithContext(ctx).Model(&inv).Update("qty", newQty).Error
+}
+
+// HasItemOfKind 检查角色是否拥有指定类型和 ID 的物品。
+func (s *gormInventoryStore) HasItemOfKind(ctx context.Context, charID int64, itemID, kind int, includeEquipped bool) (bool, error) {
+	q := s.db.WithContext(ctx).Model(&model.Inventory{}).
+		Where("char_id = ? AND item_id = ? AND kind = ?", charID, itemID, kind)
+	if !includeEquipped {
+		q = q.Where("equipped = false")
+	}
+	var count int64
+	if err := q.Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// IsEquipped 检查角色是否装备了指定类型和 ID 的物品。
+func (s *gormInventoryStore) IsEquipped(ctx context.Context, charID int64, itemID, kind int) (bool, error) {
+	var count int64
+	if err := s.db.WithContext(ctx).Model(&model.Inventory{}).
+		Where("char_id = ? AND item_id = ? AND kind = ? AND equipped = true", charID, itemID, kind).
+		Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }

@@ -498,6 +498,8 @@
             var c = sp._character;
             if (Math.round(c._realX) === x && Math.round(c._realY) === y) {
                 if (triggers.indexOf(0) >= 0 || triggers.indexOf(1) >= 0 || triggers.indexOf(2) >= 0) {
+                    // 立即设置事件锁，防止在等待 event_start 期间继续移动/触发。
+                    $MMO._serverEventActive = true;
                     $MMO.send('npc_interact', { event_id: sp._npcData.event_id });
                     return;
                 }

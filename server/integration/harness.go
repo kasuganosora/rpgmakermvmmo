@@ -257,6 +257,7 @@ func NewTestServerWithResources(t *testing.T, dataPath string) *TestServer {
 	npcH.SetTransferFunc(gh.TransferPlayer)
 	npcH.RegisterHandlers(wsRouter)
 	gh.SetAutorunFunc(npcH.ExecuteAutoruns)
+	gh.SetTouchEventFunc(npcH.ExecuteTouchEvent)
 
 	tradeH := apows.NewTradeHandlers(db, tradeSvc, sm, logger)
 	tradeH.RegisterHandlers(wsRouter)
@@ -289,7 +290,7 @@ func NewTestServerWithResources(t *testing.T, dataPath string) *TestServer {
 	})
 
 	authH := apirest.NewAuthHandler(db, c, sec)
-	charH := apirest.NewCharacterHandler(db, nil, config.GameConfig{StartMapID: 1, StartX: 5, StartY: 5})
+	charH := apirest.NewCharacterHandler(db, res, config.GameConfig{StartMapID: 1, StartX: 5, StartY: 5})
 	invH := apirest.NewInventoryHandler(db)
 	socialH := apirest.NewSocialHandler(db, sm)
 	guildH := apirest.NewGuildHandler(db)

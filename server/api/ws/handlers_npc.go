@@ -71,6 +71,7 @@ func (h *NPCHandlers) HandleInteract(ctx context.Context, s *player.PlayerSessio
 		h.logger.Warn("npc_interact: NPC not found",
 			zap.Int("event_id", req.EventID),
 			zap.Int("map_id", s.MapID))
+		s.Send(&player.Packet{Type: "event_end"}) // 客户端已设置 _serverEventActive
 		return nil
 	}
 
@@ -89,6 +90,7 @@ func (h *NPCHandlers) HandleInteract(ctx context.Context, s *player.PlayerSessio
 			zap.Int64("char_id", s.CharID),
 			zap.Int("event_id", req.EventID),
 			zap.Int("dx", dx), zap.Int("dy", dy))
+		s.Send(&player.Packet{Type: "event_end"}) // 客户端已设置 _serverEventActive
 		return nil
 	}
 
@@ -96,12 +98,14 @@ func (h *NPCHandlers) HandleInteract(ctx context.Context, s *player.PlayerSessio
 	composite, err := h.wm.PlayerStateManager().GetComposite(s.CharID)
 	if err != nil {
 		h.logger.Error("failed to get player state", zap.Error(err), zap.Int64("char_id", s.CharID))
+		s.Send(&player.Packet{Type: "event_end"}) // 客户端已设置 _serverEventActive
 		return nil
 	}
 
 	// Get per-player active page instead of base ActivePage.
 	activePage := room.GetActivePageForPlayer(req.EventID, composite)
 	if activePage == nil {
+		s.Send(&player.Packet{Type: "event_end"}) // 客户端已设置 _serverEventActive
 		return nil
 	}
 
@@ -116,10 +120,12 @@ func (h *NPCHandlers) HandleInteract(ctx context.Context, s *player.PlayerSessio
 	// Handle action button (0), player touch (1), and event touch (2).
 	// Autorun (3) and parallel (4) are started by the server automatically.
 	if activePage.Trigger > 2 {
+		s.Send(&player.Packet{Type: "event_end"}) // 客户端已设置 _serverEventActive
 		return nil
 	}
 
 	// 防止并发事件：已有事件运行时拒绝新的交互。
+	// 不发送 event_end：已有事件正在运行，其结束时会发送 event_end。
 	if !s.EventMu.TryLock() {
 		h.logger.Info("npc_interact rejected: player already in event",
 			zap.Int64("char_id", s.CharID),
@@ -141,6 +147,9 @@ func (h *NPCHandlers) HandleInteract(ctx context.Context, s *player.PlayerSessio
 		defer s.EventMu.Unlock()
 		// 通知客户端事件开始，阻止移动和交互。
 		s.Send(&player.Packet{Type: "event_start"})
+		// 预设标志：假设可能发生 Transfer，autorun 需要接管 event_end。
+		// 如果没有发生 Transfer，在下方清除并发送 event_end。
+		s.SetNeedEventEnd(true)
 
 		h.executor.Execute(ctx, s, activePage, opts)
 		// After execution, send per-player page changes (not broadcast).
@@ -152,9 +161,14 @@ func (h *NPCHandlers) HandleInteract(ctx context.Context, s *player.PlayerSessio
 					h.sendPageChangesToPlayer(s, currentRoom, fc)
 				}
 			}
+			// Transfer 发生 — needEventEnd 保持为 true。
+			// autorun goroutine（由 EnterMapRoom 生成）将在完成后发送 event_end。
+			// 此处不发送 event_end，避免客户端在 autorun 开始前短暂解除移动锁。
+			return
 		}
 
-		// 通知客户端事件结束，恢复移动和交互。
+		// 未发生 Transfer — 清除标志并发送 event_end。
+		s.SetNeedEventEnd(false)
 		s.Send(&player.Packet{Type: "event_end"})
 	}()
 
@@ -215,8 +229,17 @@ func (h *NPCHandlers) HandleEffectAck(_ context.Context, s *player.PlayerSession
 // Called after a player enters a map via the autorunFn callback.
 // Waits for the client to signal scene_ready before executing.
 func (h *NPCHandlers) ExecuteAutoruns(s *player.PlayerSession, mapID int) {
+	// sendEventEndIfNeeded 清除 needEventEnd 标志并发送 event_end（如果需要）。
+	// 用于前一个事件（HandleInteract）发生了 Transfer 后未发送 event_end 的情况。
+	sendEventEndIfNeeded := func() {
+		if s.ClearNeedEventEnd() {
+			s.Send(&player.Packet{Type: "event_end"})
+		}
+	}
+
 	room := h.wm.Get(mapID)
 	if room == nil {
+		sendEventEndIfNeeded()
 		return
 	}
 
@@ -224,11 +247,13 @@ func (h *NPCHandlers) ExecuteAutoruns(s *player.PlayerSession, mapID int) {
 	if err != nil {
 		h.logger.Error("failed to get player state for autoruns", zap.Error(err),
 			zap.Int64("char_id", s.CharID))
+		sendEventEndIfNeeded()
 		return
 	}
 
 	autoruns := room.GetAutorunNPCsForPlayer(composite)
 	if len(autoruns) == 0 {
+		sendEventEndIfNeeded()
 		return
 	}
 
@@ -246,6 +271,7 @@ func (h *NPCHandlers) ExecuteAutoruns(s *player.PlayerSession, mapID int) {
 		h.logger.Warn("scene_ready timeout, running autoruns anyway",
 			zap.Int64("char_id", s.CharID))
 	case <-s.Done:
+		sendEventEndIfNeeded()
 		return // session closed
 	}
 
@@ -255,6 +281,7 @@ func (h *NPCHandlers) ExecuteAutoruns(s *player.PlayerSession, mapID int) {
 			zap.Int64("char_id", s.CharID),
 			zap.Int("expected_map", mapID),
 			zap.Int("current_map", s.MapID))
+		sendEventEndIfNeeded()
 		return
 	}
 
@@ -269,13 +296,19 @@ func (h *NPCHandlers) ExecuteAutoruns(s *player.PlayerSession, mapID int) {
 			zap.Int64("char_id", s.CharID),
 			zap.Int("expected_map", mapID),
 			zap.Int("current_map", s.MapID))
+		sendEventEndIfNeeded()
 		return
 	}
 
 	defer s.EventMu.Unlock()
 
-	// 通知客户端事件开始，阻止移动和交互。
-	s.Send(&player.Packet{Type: "event_start"})
+	// 检查是否继承了前一个事件的 event_start（Transfer 后未发送 event_end）。
+	inherited := s.ClearNeedEventEnd()
+	if !inherited {
+		// 正常的 autorun 调用 — 发送自己的 event_start。
+		s.Send(&player.Packet{Type: "event_start"})
+	}
+	// 无论是否继承，autorun 完成后都发送 event_end。
 	defer s.Send(&player.Packet{Type: "event_end"})
 
 	h.logger.Info("executing autorun events",
@@ -320,6 +353,68 @@ func (h *NPCHandlers) ExecuteAutoruns(s *player.PlayerSession, mapID int) {
 			}
 		}
 	}
+}
+
+// ExecuteTouchEvent runs a touch-trigger (trigger 1/2) event at (x, y) for a player.
+// Called by GameHandlers.HandleMove when the player steps onto an event that has
+// no top-level transfer command (conditional transfers, dialogs, etc.).
+func (h *NPCHandlers) ExecuteTouchEvent(s *player.PlayerSession, mapID, x, y int) {
+	room := h.wm.Get(mapID)
+	if room == nil {
+		return
+	}
+
+	composite, err := h.wm.PlayerStateManager().GetComposite(s.CharID)
+	if err != nil {
+		return
+	}
+
+	eventID, activePage := room.GetTouchEventAtForPlayer(x, y, composite)
+	if activePage == nil {
+		return
+	}
+
+	// Non-blocking lock — don't block movement if an event is already running.
+	if !s.EventMu.TryLock() {
+		return
+	}
+
+	h.logger.Info("touch event executing",
+		zap.Int64("char_id", s.CharID),
+		zap.Int("map_id", mapID),
+		zap.Int("event_id", eventID),
+		zap.Int("x", x), zap.Int("y", y),
+		zap.Int("trigger", activePage.Trigger))
+
+	opts := &npc.ExecuteOpts{
+		GameState:  composite,
+		MapID:      mapID,
+		EventID:    eventID,
+		TransferFn: h.transferFn,
+	}
+
+	startMapID := s.MapID
+	go func() {
+		defer s.EventMu.Unlock()
+		s.Send(&player.Packet{Type: "event_start"})
+		s.SetNeedEventEnd(true)
+
+		h.executor.Execute(context.Background(), s, activePage, opts)
+		h.sendPageChangesToPlayer(s, room, composite)
+
+		if s.MapID != startMapID {
+			if currentRoom := h.wm.Get(s.MapID); currentRoom != nil {
+				if fc, err := h.wm.PlayerStateManager().GetComposite(s.CharID); err == nil {
+					h.sendPageChangesToPlayer(s, currentRoom, fc)
+				}
+			}
+			// Transfer happened — needEventEnd stays true for autorun to pick up.
+			return
+		}
+
+		s.SetNeedEventEnd(false)
+		s.Send(&player.Packet{Type: "event_end"})
+	}()
 }
 
 // sendPageChangesToPlayer re-evaluates all NPC pages for a single player's state

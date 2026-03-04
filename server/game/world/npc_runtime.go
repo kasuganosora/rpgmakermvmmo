@@ -637,19 +637,9 @@ func (room *MapRoom) GetTransferAt(x, y int) *TransferData {
 			return nil
 		}
 
-		// Case 2: No active page (conditions not met) — fall back to scanning
-		// all pages for navigation safety so players can still navigate between maps.
-		for _, page := range n.MapEvent.Pages {
-			if page == nil {
-				continue
-			}
-			if page.Trigger != 1 && page.Trigger != 2 {
-				continue
-			}
-			if td := findTransferInPage(page); td != nil {
-				return td
-			}
-		}
+		// No active page (conditions not met) — event is completely inactive.
+		// RMMV behavior: no trigger, no graphic, no behavior.
+		// Do NOT fall back to scanning inactive pages for transfers.
 	}
 	return nil
 }
@@ -671,10 +661,16 @@ func hasCallOriginEvent(page *resource.EventPage) bool {
 	return false
 }
 
-// findTransferInPage looks for a Transfer Player command (code 201) in a page's command list.
+// findTransferInPage looks for a top-level Transfer Player command (code 201) in a page.
+// Only considers transfers at indent == 0 (unconditional, not inside if/else branches).
+// Conditional transfers depend on runtime state and must be executed by the event executor.
 func findTransferInPage(page *resource.EventPage) *TransferData {
 	for _, cmd := range page.List {
 		if cmd == nil || cmd.Code != 201 {
+			continue
+		}
+		// Skip transfers inside conditional branches — runtime-dependent.
+		if cmd.Indent > 0 {
 			continue
 		}
 		// RMMV command 201 parameters: [mode, mapId, x, y, direction, fadeType]
@@ -872,20 +868,40 @@ func (room *MapRoom) GetTransferAtForPlayer(x, y int, state GameStateReader) *Tr
 			return nil
 		}
 
-		// No active page fallback — scan all pages for navigation safety.
-		for _, page := range n.MapEvent.Pages {
-			if page == nil {
-				continue
-			}
-			if page.Trigger != 1 && page.Trigger != 2 {
-				continue
-			}
-			if td := findTransferInPage(page); td != nil {
-				return td
-			}
-		}
+		// No active page (conditions not met) — event is completely inactive.
+		// RMMV behavior: no trigger, no graphic, no behavior.
+		// Do NOT fall back to scanning inactive pages for transfers.
 	}
 	return nil
+}
+
+// GetTouchEventAtForPlayer finds a trigger 1/2 event at (x, y) using per-player state.
+// Returns the event ID and its active page, or (0, nil) if no touch event is found.
+// This is used by HandleMove to execute touch-trigger events that don't have a
+// top-level transfer command (those are handled by the auto-transfer shortcut).
+func (room *MapRoom) GetTouchEventAtForPlayer(x, y int, state GameStateReader) (int, *resource.EventPage) {
+	room.mu.RLock()
+	defer room.mu.RUnlock()
+	for _, n := range room.npcs {
+		if n.X != x || n.Y != y {
+			continue
+		}
+		if n.MapEvent == nil || len(n.MapEvent.Pages) == 0 {
+			continue
+		}
+		activePage := selectPage(n.MapEvent, room.MapID, state)
+		if activePage == nil {
+			continue
+		}
+		if activePage.Trigger != 1 && activePage.Trigger != 2 {
+			continue
+		}
+		if len(activePage.List) <= 1 {
+			continue // only end marker — no real commands
+		}
+		return n.EventID, activePage
+	}
+	return 0, nil
 }
 
 // GetActivePageForPlayer computes the per-player active page for a specific NPC.

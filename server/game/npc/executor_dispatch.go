@@ -121,7 +121,7 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 
 		case CmdConditionalStart:
 			// 条件分支：评估条件，为假则跳到 Else 或 End
-			if !e.evaluateCondition(cmd.Parameters, opts) {
+			if !e.evaluateCondition(ctx, s, cmd.Parameters, opts) {
 				i = e.skipToElseOrEnd(cmds, i, cmd.Indent)
 			}
 

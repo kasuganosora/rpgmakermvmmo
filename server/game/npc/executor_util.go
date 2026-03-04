@@ -50,6 +50,14 @@ func paramList(params []interface{}, idx int) []string {
 	return result
 }
 
+// truncateStr 截断字符串到指定长度，超过则追加 "..."。
+func truncateStr(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}
+
 // asBool 将 interface{} 转换为布尔值。
 // 支持 bool、float64、int、string 类型，用于处理 RMMV 中"等待完成"等标志参数。
 func asBool(v interface{}) bool {

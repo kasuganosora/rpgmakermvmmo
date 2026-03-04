@@ -183,6 +183,15 @@ func (m *mockInventoryStore) RemoveItem(_ context.Context, charID int64, itemID,
 	return nil
 }
 
+func (m *mockInventoryStore) HasItemOfKind(_ context.Context, charID int64, itemID, kind int, _ bool) (bool, error) {
+	k := itemKey(charID, itemID)
+	return m.items[k] > 0, nil
+}
+
+func (m *mockInventoryStore) IsEquipped(_ context.Context, _ int64, _ int, _ int) (bool, error) {
+	return false, nil
+}
+
 // ========================================================================
 // ShowText 对话显示测试
 // ========================================================================
@@ -1050,7 +1059,7 @@ func TestExecute_ChangeGold_Subtract(t *testing.T) {
 	assert.Equal(t, int64(70), store.gold[1], "Gold should decrease from 100 to 70")
 }
 
-// TestExecute_ChangeGold_InsufficientGold 测试余额不足时不扣除。
+// TestExecute_ChangeGold_InsufficientGold 测试余额不足时钳位到 0（RMMV 行为）。
 func TestExecute_ChangeGold_InsufficientGold(t *testing.T) {
 	store := newMockInventoryStore()
 	store.gold[1] = 10
@@ -1069,17 +1078,8 @@ func TestExecute_ChangeGold_InsufficientGold(t *testing.T) {
 
 	exec.Execute(context.Background(), s, page, &ExecuteOpts{})
 
-	assert.Equal(t, int64(10), store.gold[1], "Gold should remain unchanged when insufficient")
-
-	// 余额不足时不应发送 npc_effect 给客户端
-	pkts := drainPackets(t, s)
-	for _, pkt := range pkts {
-		if pkt.Type == "npc_effect" {
-			var data map[string]interface{}
-			json.Unmarshal(pkt.Payload, &data)
-			assert.NotEqual(t, float64(CmdChangeGold), data["code"], "Should NOT send gold effect on insufficient balance")
-		}
-	}
+	// RMMV 行为：扣除量超过余额时钳位到 0，不拒绝操作
+	assert.Equal(t, int64(0), store.gold[1], "Gold should be clamped to 0 when insufficient (RMMV behavior)")
 }
 
 // ========================================================================
@@ -1147,7 +1147,7 @@ func TestExecute_ChangeItems_Remove(t *testing.T) {
 	assert.Equal(t, 7, qty, "Should have 10 - 3 = 7 of item 5")
 }
 
-// TestExecute_ChangeItems_InsufficientQty 测试物品数量不足时不扣除。
+// TestExecute_ChangeItems_InsufficientQty 测试物品数量不足时钳位到 0（RMMV 行为）。
 func TestExecute_ChangeItems_InsufficientQty(t *testing.T) {
 	store := newMockInventoryStore()
 	store.items[itemKey(1, 5)] = 2
@@ -1166,8 +1166,10 @@ func TestExecute_ChangeItems_InsufficientQty(t *testing.T) {
 
 	exec.Execute(context.Background(), s, page, &ExecuteOpts{})
 
-	qty, _ := store.GetItem(context.Background(), 1, 5)
-	assert.Equal(t, 2, qty, "Should remain at 2 when insufficient")
+	// RMMV 行为：移除量超过持有量时钳位，仅移除实际持有量
+	qty, err := store.GetItem(context.Background(), 1, 5)
+	assert.Error(t, err, "Item should be fully removed from inventory")
+	assert.Equal(t, 0, qty, "Quantity should be 0 after clamped removal")
 }
 
 // ========================================================================

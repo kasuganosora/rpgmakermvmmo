@@ -23,14 +23,19 @@ const resetPosCooldown = 3 * time.Minute
 // AutorunFunc is called after a player enters a map to execute autorun events.
 type AutorunFunc func(s *player.PlayerSession, mapID int)
 
+// TouchEventFunc is called when a player steps onto a trigger 1/2 event
+// that has no top-level transfer command (requires full executor execution).
+type TouchEventFunc func(s *player.PlayerSession, mapID, x, y int)
+
 // GameHandlers bundles the dependencies needed by in-game WS message handlers.
 type GameHandlers struct {
-	db        *gorm.DB
-	wm        *world.WorldManager
-	sm        *player.SessionManager
-	res       *resource.ResourceLoader
-	logger    *zap.Logger
-	autorunFn AutorunFunc // called after entering a map to execute autorun events
+	db           *gorm.DB
+	wm           *world.WorldManager
+	sm           *player.SessionManager
+	res          *resource.ResourceLoader
+	logger       *zap.Logger
+	autorunFn    AutorunFunc    // called after entering a map to execute autorun events
+	touchEventFn TouchEventFunc // called when player steps on a touch-trigger event
 }
 
 // NewGameHandlers creates a new GameHandlers.
@@ -41,6 +46,11 @@ func NewGameHandlers(db *gorm.DB, wm *world.WorldManager, sm *player.SessionMana
 // SetAutorunFunc sets the callback for executing autorun events when a player enters a map.
 func (gh *GameHandlers) SetAutorunFunc(fn AutorunFunc) {
 	gh.autorunFn = fn
+}
+
+// SetTouchEventFunc sets the callback for executing touch-trigger events during movement.
+func (gh *GameHandlers) SetTouchEventFunc(fn TouchEventFunc) {
+	gh.touchEventFn = fn
 }
 
 // RegisterHandlers registers all in-game handlers on the given Router.
@@ -265,6 +275,11 @@ func (gh *GameHandlers) HandleMove(_ context.Context, s *player.PlayerSession, r
 				zap.Int("to_map", td.MapID),
 				zap.Int("to_x", td.X),
 				zap.Int("to_y", td.Y))
+		} else if gh.touchEventFn != nil {
+			// No top-level transfer found — check for touch-trigger events
+			// that need full executor execution (e.g., conditional transfers,
+			// dialog events with player touch trigger).
+			gh.touchEventFn(s, s.MapID, req.X, req.Y)
 		}
 	}
 

@@ -257,6 +257,7 @@ func (dh *DebugHandlers) HandleTriggerCE(_ context.Context, s *player.PlayerSess
 		TransferFn: dh.transferFn,
 	}
 
+	startMapID := s.MapID
 	go func() {
 		defer s.EventMu.Unlock()
 		defer func() {
@@ -268,8 +269,14 @@ func (dh *DebugHandlers) HandleTriggerCE(_ context.Context, s *player.PlayerSess
 			}
 		}()
 		s.Send(&player.Packet{Type: "event_start"})
+		s.SetNeedEventEnd(true)
 		executor.Execute(context.Background(), s, page, opts)
 		executor.SendStateSyncAfterExecution(context.Background(), s, opts)
+		if s.MapID != startMapID {
+			// Transfer 发生 — autorun 将发送 event_end。
+			return
+		}
+		s.SetNeedEventEnd(false)
 		s.Send(&player.Packet{Type: "event_end"})
 	}()
 

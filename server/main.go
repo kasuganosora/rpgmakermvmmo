@@ -159,6 +159,7 @@ func main() {
 	npcH.SetTransferFunc(gh.TransferPlayer)
 	npcH.RegisterHandlers(wsRouter)
 	gh.SetAutorunFunc(npcH.ExecuteAutoruns)
+	gh.SetTouchEventFunc(npcH.ExecuteTouchEvent)
 
 	tradeH := apows.NewTradeHandlers(db, tradeSvc, sm, logger)
 	tradeH.RegisterHandlers(wsRouter)
