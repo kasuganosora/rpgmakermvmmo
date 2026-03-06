@@ -21,12 +21,18 @@ func (e *Executor) applySwitches(s *player.PlayerSession, params []interface{}, 
 	startID := paramInt(params, 0)
 	endID := paramInt(params, 1)
 	val := paramInt(params, 2) == 0 // 0=ON
+	changed := false
 	for id := startID; id <= endID; id++ {
 		if opts.GameState.GetSwitch(id) != val {
 			opts.GameState.SetSwitch(id, val)
 			// 同步给客户端，确保并行公共事件读取到正确值
 			e.sendSwitchChange(s, id, val)
+			changed = true
 		}
+	}
+	// 开关变更后刷新 NPC 页面，使 mid-event 变更立即反映到 NPC 外观
+	if changed && opts.PageRefreshFn != nil {
+		opts.PageRefreshFn(s)
 	}
 }
 
@@ -96,13 +102,17 @@ func (e *Executor) sendSwitchChange(s *player.PlayerSession, id int, value bool)
 
 // applySelfSwitch 处理 RMMV 独立开关变更指令（代码 123）。
 // 参数格式：[0]=通道("A"-"D"), [1]=值(0=ON, 1=OFF)。
-func (e *Executor) applySelfSwitch(params []interface{}, opts *ExecuteOpts) {
+func (e *Executor) applySelfSwitch(s *player.PlayerSession, params []interface{}, opts *ExecuteOpts) {
 	if opts == nil || opts.GameState == nil {
 		return
 	}
 	ch := paramStr(params, 0)
 	val := paramInt(params, 1) == 0 // 0=ON
 	opts.GameState.SetSelfSwitch(opts.MapID, opts.EventID, ch, val)
+	// 独立开关变更后刷新 NPC 页面
+	if opts.PageRefreshFn != nil {
+		opts.PageRefreshFn(s)
+	}
 }
 
 // ---- 金币/物品 ----

@@ -149,6 +149,9 @@ func (h *NPCHandlers) HandleInteract(ctx context.Context, s *player.PlayerSessio
 		TransferFn:      h.transferFn,
 		EnterInstanceFn: h.enterInstanceFn,
 		LeaveInstanceFn: h.leaveInstanceFn,
+		PageRefreshFn: func(ps *player.PlayerSession) {
+			h.sendPageChangesToPlayer(ps, room, composite)
+		},
 	}
 
 	// Execute in a goroutine so the WS handler returns immediately.
@@ -384,6 +387,9 @@ func (h *NPCHandlers) ExecuteAutoruns(s *player.PlayerSession, mapID int) {
 			TransferFn:      h.transferFn,
 			EnterInstanceFn: h.enterInstanceFn,
 			LeaveInstanceFn: h.leaveInstanceFn,
+			PageRefreshFn: func(ps *player.PlayerSession) {
+				h.sendPageChangesToPlayer(ps, room, composite)
+			},
 		}
 		h.executor.Execute(context.Background(), s, activePage, opts)
 
@@ -488,6 +494,9 @@ func (h *NPCHandlers) StartParallelEvents(s *player.PlayerSession, mapID int, ge
 		TransferFn:      h.transferFn,
 		EnterInstanceFn: h.enterInstanceFn,
 		LeaveInstanceFn: h.leaveInstanceFn,
+		PageRefreshFn: func(ps *player.PlayerSession) {
+			h.sendPageChangesToPlayer(ps, room, composite)
+		},
 	}
 	h.executor.RunParallelEventsSynced(ctx, s, events, opts)
 
@@ -534,6 +543,9 @@ func (h *NPCHandlers) ExecuteTouchEvent(s *player.PlayerSession, mapID, x, y int
 		TransferFn:      h.transferFn,
 		EnterInstanceFn: h.enterInstanceFn,
 		LeaveInstanceFn: h.leaveInstanceFn,
+		PageRefreshFn: func(ps *player.PlayerSession) {
+			h.sendPageChangesToPlayer(ps, room, composite)
+		},
 	}
 
 	startMapID := s.MapID

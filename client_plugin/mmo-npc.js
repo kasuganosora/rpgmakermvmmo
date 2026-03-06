@@ -972,6 +972,43 @@
             }
             break;
 
+        // --- 设置事件位置 (code 203) ---
+        case 203:
+            var locCharId = paramInt(p, 0);
+            var locType = paramInt(p, 1);
+            if (locCharId === -1 && $gamePlayer) {
+                // 设置玩家位置
+                if (locType === 0) {
+                    $gamePlayer.locate(paramInt(p, 2), paramInt(p, 3));
+                } else if (locType === 1 && $gameVariables) {
+                    $gamePlayer.locate($gameVariables.value(paramInt(p, 2)), $gameVariables.value(paramInt(p, 3)));
+                }
+                if (paramInt(p, 4) > 0) $gamePlayer.setDirection(paramInt(p, 4));
+            } else if (locCharId > 0) {
+                var locNpc = NPCManager.get(locCharId);
+                if (locNpc) {
+                    var nx, ny;
+                    if (locType === 0) {
+                        nx = paramInt(p, 2); ny = paramInt(p, 3);
+                    } else if (locType === 1 && $gameVariables) {
+                        nx = $gameVariables.value(paramInt(p, 2));
+                        ny = $gameVariables.value(paramInt(p, 3));
+                    } else if (locType === 2) {
+                        // 交换位置 — 暂不支持
+                        break;
+                    }
+                    if (nx !== undefined) {
+                        locNpc._character.locate(nx, ny);
+                        locNpc._character._x = nx;
+                        locNpc._character._y = ny;
+                        locNpc._character._realX = nx;
+                        locNpc._character._realY = ny;
+                    }
+                    if (paramInt(p, 4) > 0) locNpc._character.setDirection(paramInt(p, 4));
+                }
+            }
+            break;
+
         // --- 显示动画/气泡 ---
         case 212: // 显示动画 — [角色ID, 动画ID, 等待]
             var animCharId = paramInt(p, 0);
@@ -1343,6 +1380,18 @@
             });
         }
     });
+
+    // ═══════════════════════════════════════════════════════════
+    //  YEP_MessageCore null-safe patch — escapeIconItem
+    //  \II[n], \IW[n], \IA[n] 引用不存在的物品时返回空字符串而非崩溃
+    // ═══════════════════════════════════════════════════════════
+    if (Window_Base.prototype.escapeIconItem) {
+        Window_Base.prototype.escapeIconItem = function (n, database) {
+            var item = database[n];
+            if (!item) return '';
+            return '\x1bI[' + item.iconIndex + ']' + item.name;
+        };
+    }
 
     // ═══════════════════════════════════════════════════════════
     //  导出全局对象

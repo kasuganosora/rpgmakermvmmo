@@ -40,6 +40,7 @@ const (
 	CmdChangeWeapons    = 127
 	CmdChangeArmors     = 128
 	CmdTransfer         = 201
+	CmdSetEventLocation = 203
 	CmdWait             = 230
 	CmdSetMoveRoute     = 205
 	CmdMoveRouteCont    = 505
@@ -144,6 +145,10 @@ type EnterInstanceFunc func(s *player.PlayerSession)
 // LeaveInstanceFunc 在事件执行中将玩家从副本实例切回共享地图。
 type LeaveInstanceFunc func(s *player.PlayerSession)
 
+// PageRefreshFunc 在事件执行中开关/变量变更后触发 NPC 页面刷新。
+// 使 mid-event 开关变更立即反映到 NPC 外观（行走图、可见性等）。
+type PageRefreshFunc func(s *player.PlayerSession)
+
 // ---- 执行选项 ----
 
 // ExecuteOpts 包含 Execute 方法的可选参数。
@@ -155,6 +160,7 @@ type ExecuteOpts struct {
 	BattleFn        BattleFunc        // 服务端战斗处理器
 	EnterInstanceFn EnterInstanceFunc // 进入副本回调
 	LeaveInstanceFn LeaveInstanceFunc // 离开副本回调
+	PageRefreshFn   PageRefreshFunc   // 开关/变量变更后刷新 NPC 页面
 }
 
 // ---- Executor 核心结构体 ----

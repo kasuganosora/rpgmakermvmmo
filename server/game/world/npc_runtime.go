@@ -668,6 +668,23 @@ func hasCallOriginEvent(page *resource.EventPage) bool {
 	return false
 }
 
+// countMeaningfulCommands counts non-trivial commands in a page.
+// Excludes code 0 (terminator), 108/408 (comments).
+func countMeaningfulCommands(page *resource.EventPage) int {
+	count := 0
+	for _, cmd := range page.List {
+		if cmd == nil {
+			continue
+		}
+		switch cmd.Code {
+		case 0, 108, 408:
+			continue
+		}
+		count++
+	}
+	return count
+}
+
 // findTransferInPage looks for a top-level Transfer Player command (code 201) in a page.
 // Only considers transfers at indent == 0 (unconditional, not inside if/else branches).
 // Conditional transfers depend on runtime state and must be executed by the event executor.
@@ -856,6 +873,13 @@ func (room *MapRoom) GetTransferAtForPlayer(x, y int, state GameStateReader) *Tr
 		if activePage != nil {
 			if activePage.Trigger != 1 && activePage.Trigger != 2 {
 				continue
+			}
+			// Count meaningful commands to distinguish simple door events
+			// from complex story events (dialogs, move routes, battles).
+			// Story events should go through the full executor, not auto-transfer.
+			meaningful := countMeaningfulCommands(activePage)
+			if meaningful > 3 {
+				return nil // complex event — let touchEventFn / executor handle it
 			}
 			if td := findTransferInPage(activePage); td != nil {
 				return td

@@ -274,10 +274,11 @@ func (gh *GameHandlers) HandleMove(_ context.Context, s *player.PlayerSession, r
 	// (trigger 1=Player Touch or 2=Event Touch with command 201=Transfer Player).
 	// Since the client no longer processes events (_events = []), the server
 	// must detect and execute map transfers.
-	if room != nil {
+	// Skip during grace period after map entry to prevent transfer loops
+	// (e.g., TE events that transfer to same map creating instant re-trigger).
+	if room != nil && !inGrace {
 		td := gh.getTransferForPlayer(s, room, req.X, req.Y)
-		if td != nil && td.MapID > 0 &&
-			!(td.MapID == s.MapID && td.X == req.X && td.Y == req.Y) {
+		if td != nil && td.MapID > 0 {
 			// Use exact coordinates from the map maker — do NOT adjust with
 			// findNearestPassable. The BFS ring search ignores walls and can
 			// place the player on the wrong side of a wall.

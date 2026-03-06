@@ -216,7 +216,7 @@ func (e *Executor) stepUntilWait(
 			ev.idx++
 
 		case CmdChangeSelfSwitch:
-			e.applySelfSwitch(cmd.Parameters, opts)
+			e.applySelfSwitch(s, cmd.Parameters, opts)
 			ev.idx++
 
 		case CmdCallCommonEvent:
@@ -256,14 +256,7 @@ func (e *Executor) stepUntilWait(
 				ev.idx++
 				continue
 			}
-			// 过滤立绘/演出指令（依赖复杂客户端状态）
-			// EraceStand/EraceCutin 必须转发以清除立绘。
-			if strings.HasPrefix(pluginStr, "CallStand") ||
-				strings.HasPrefix(pluginStr, "CallCutin") ||
-				strings.HasPrefix(pluginStr, "CallAM") {
-				ev.idx++
-				continue
-			}
+			// 转发插件指令给客户端（包括立绘 CallStand/CallCutin/CallAM）
 			sendParallelEffect(s, cmd, opts.MapID)
 			ev.idx++
 

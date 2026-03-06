@@ -171,7 +171,7 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 			e.applyVariables(s, cmd.Parameters, opts)
 
 		case CmdChangeSelfSwitch:
-			e.applySelfSwitch(cmd.Parameters, opts)
+			e.applySelfSwitch(s, cmd.Parameters, opts)
 
 		case CmdChangeGold:
 			if err := e.applyGold(ctx, s, cmd.Parameters, opts); err != nil {
@@ -196,6 +196,11 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 
 		case CmdTransfer:
 			e.transferPlayer(s, cmd.Parameters, opts)
+
+		case CmdSetEventLocation:
+			// 设置事件位置 — 解析 charId=0 为当前事件 ID，转发给客户端
+			resolved203 := e.resolveCharIDCommand(cmd, opts)
+			e.sendEffect(s, resolved203)
 
 		case CmdWait:
 			// 等待 N 帧；60fps 下 frames/60 秒
@@ -257,14 +262,7 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 				}
 				continue
 			}
-			// 过滤立绘/演出指令（依赖复杂客户端状态，转发会导致视觉异常）
-			// EraceStand/EraceCutin 必须转发以清除客户端并行 CE 显示的立绘。
-			if strings.HasPrefix(pluginStr, "CallStand") ||
-				strings.HasPrefix(pluginStr, "CallCutin") ||
-				strings.HasPrefix(pluginStr, "CallAM") {
-				continue
-			}
-			// 其他插件指令转发给客户端执行
+			// 转发插件指令给客户端执行（包括立绘 CallStand/CallCutin/CallAM）
 			e.sendEffect(s, cmd)
 
 		case CmdSetMoveRoute:
