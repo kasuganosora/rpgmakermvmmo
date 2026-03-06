@@ -58,6 +58,17 @@ func truncateStr(s string, n int) string {
 	return s[:n] + "..."
 }
 
+// extractPluginCmdName 从插件指令字符串中提取第一个单词（命令名称）。
+// 例如 "FaceId 1 30" → "FaceId", "ParaCheck" → "ParaCheck"。
+func extractPluginCmdName(s string) string {
+	for i, c := range s {
+		if c == ' ' {
+			return s[:i]
+		}
+	}
+	return s
+}
+
 // asBool 将 interface{} 转换为布尔值。
 // 支持 bool、float64、int、string 类型，用于处理 RMMV 中"等待完成"等标志参数。
 func asBool(v interface{}) bool {

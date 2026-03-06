@@ -266,18 +266,30 @@ func (e *Executor) stepUntilWait(
 				ev.idx++
 				continue
 			}
-			// 转发插件指令给客户端（包括立绘 CallStand/CallCutin/CallAM）
+			// 过滤不需要转发的插件指令
+			if pluginCmdName := extractPluginCmdName(pluginStr); blockedPluginCmds[pluginCmdName] {
+				ev.idx++
+				continue
+			}
+			// 转发插件指令给客户端
 			sendParallelEffect(s, cmd, opts.MapID)
 			ev.idx++
 
 		case CmdScript:
-			// 过滤脚本——只转发 $gameScreen. 和 AudioManager. 开头的行
-			script := paramStr(cmd.Parameters, 0)
 			// 合并续行（code 655）
+			script := paramStr(cmd.Parameters, 0)
 			for ev.idx+1 < len(cmds) && cmds[ev.idx+1] != nil && cmds[ev.idx+1].Code == CmdScriptCont {
 				ev.idx++
 				script += "\n" + paramStr(cmds[ev.idx].Parameters, 0)
 			}
+
+			// 先尝试服务端执行（变量/开关 _data 变更等）
+			if e.execScriptCommand(ctx, s, script, opts, 0) {
+				ev.idx++
+				continue
+			}
+
+			// 仅转发安全的视觉/音效指令行
 			var safeLines []string
 			for _, line := range strings.Split(script, "\n") {
 				trimmed := strings.TrimSpace(line)

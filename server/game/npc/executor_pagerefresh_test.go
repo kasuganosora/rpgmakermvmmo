@@ -435,8 +435,8 @@ func TestMap68_DialogWithSwitchChanges(t *testing.T) {
 	assert.True(t, refreshCalled, "PageRefreshFn should be called after switch change")
 }
 
-// TestPluginCommand_Forwarded verifies that plugin commands like CallStand
-// are forwarded as npc_effect (no longer filtered).
+// TestPluginCommand_Forwarded verifies that plugin commands like CallStand,
+// CallCutin, CallAM are forwarded as npc_effect (not in blockedPluginCmds).
 func TestPluginCommand_Forwarded(t *testing.T) {
 	resLoader := &resource.ResourceLoader{
 		CommonEvents: make([]*resource.CommonEvent, 2),
@@ -475,6 +475,7 @@ func TestPluginCommand_Forwarded(t *testing.T) {
 		}
 	}
 
+	// All 5 plugin commands should be forwarded (CallStand, CallCutin, EraceStand, EraceCutin, CallAM are not blocked)
 	assert.Equal(t, 5, effectCount, "all 5 plugin commands should be forwarded")
 	assert.Contains(t, cmdsForwarded, "CallStand 1 0 0")
 	assert.Contains(t, cmdsForwarded, "CallCutin 1")

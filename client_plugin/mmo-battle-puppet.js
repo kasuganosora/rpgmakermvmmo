@@ -193,11 +193,13 @@
             troop.makeUniqueNames();
         }
 
-        // 临时覆盖战场背景为空（使用透明/默认背景）。
+        // 使用服务端提供的战场背景（来自地图数据）。
         var _origBB1 = $gameMap.battleback1Name;
         var _origBB2 = $gameMap.battleback2Name;
-        $gameMap.battleback1Name = function () { return ''; };
-        $gameMap.battleback2Name = function () { return ''; };
+        var _serverBB1 = data.battleback1 || '';
+        var _serverBB2 = data.battleback2 || '';
+        $gameMap.battleback1Name = function () { return _serverBB1; };
+        $gameMap.battleback2Name = function () { return _serverBB2; };
 
         // 战斗结束回调：恢复战场背景。
         BattleManager.setEventCallback(function (result) {
@@ -963,14 +965,26 @@
 
     /**
      * 覆写攻击命令。
-     * 傀儡模式下打开敌人选择窗口而非本地处理。
+     * 傀儡模式下自动选择第一个存活敌人并发送输入。
+     * 跳过敌人选择窗口以避免与 YEP_BattleEngineCore 等插件冲突。
      */
     var _Scene_Battle_commandAttack = Scene_Battle.prototype.commandAttack;
     Scene_Battle.prototype.commandAttack = function () {
         if (_puppetMode) {
-            _puppetPendingSkillId = 0;
-            _puppetPendingItemId = 0;
-            _selectEnemyTarget.call(this);
+            // 自动选择第一个存活的敌人作为目标。
+            var enemies = $gameTroop.aliveMembers();
+            var targetIndex = enemies.length > 0 ? enemies[0].index() : 0;
+            console.log('[Puppet] 攻击 → 自动选择敌人 index=' + targetIndex);
+            $MMO.send('battle_input', {
+                actor_index: BattleManager._actorIndex,
+                action_type: 0,
+                skill_id: 0,
+                item_id: 0,
+                target_indices: [targetIndex],
+                target_is_actor: false,
+            });
+            BattleManager._phase = 'waiting';
+            if (this._actorCommandWindow) this._actorCommandWindow.close();
             return;
         }
         _Scene_Battle_commandAttack.call(this);

@@ -21,6 +21,7 @@ type NPCHandlers struct {
 	executor   *npc.Executor
 	logger     *zap.Logger
 	transferFn      npc.TransferFunc      // server-side map transfer callback
+	battleFn        npc.BattleFunc        // server-side battle callback
 	enterInstanceFn npc.EnterInstanceFunc // mid-event instance entry
 	leaveInstanceFn npc.LeaveInstanceFunc // mid-event instance exit
 }
@@ -39,6 +40,11 @@ func NewNPCHandlers(db *gorm.DB, res *resource.ResourceLoader, wm *world.WorldMa
 // SetTransferFunc sets the callback used when NPC events execute Transfer Player (command 201).
 func (h *NPCHandlers) SetTransferFunc(fn npc.TransferFunc) {
 	h.transferFn = fn
+}
+
+// SetBattleFn sets the callback used when NPC events execute Battle Processing (command 301).
+func (h *NPCHandlers) SetBattleFn(fn npc.BattleFunc) {
+	h.battleFn = fn
 }
 
 // SetInstanceFuncs sets the callbacks for mid-event instance enter/leave.
@@ -142,15 +148,17 @@ func (h *NPCHandlers) HandleInteract(ctx context.Context, s *player.PlayerSessio
 		return nil
 	}
 
+	lastSentPages := make(map[int]*resource.EventPage)
 	opts := &npc.ExecuteOpts{
 		GameState:  composite,
 		MapID:      s.MapID,
 		EventID:    req.EventID,
 		TransferFn:      h.transferFn,
+		BattleFn:        h.battleFn,
 		EnterInstanceFn: h.enterInstanceFn,
 		LeaveInstanceFn: h.leaveInstanceFn,
 		PageRefreshFn: func(ps *player.PlayerSession) {
-			h.sendPageChangesToPlayer(ps, room, composite)
+			h.sendPageChangesToPlayerDedup(ps, room, composite, lastSentPages)
 		},
 	}
 
@@ -250,26 +258,16 @@ func (h *NPCHandlers) HandleEffectAck(_ context.Context, s *player.PlayerSession
 	if len(raw) > 2 { // skip empty "{}"
 		_ = json.Unmarshal(raw, &req)
 	}
-	if req.X != nil && req.Y != nil {
-		if req.NPCID != nil {
-			// NPC move route — update NPC position in map room.
-			if room := h.wm.GetPlayerRoom(s); room != nil {
-				if npc := room.GetNPC(*req.NPCID); npc != nil {
-					npc.X = *req.X
-					npc.Y = *req.Y
-					if req.Dir != nil {
-						npc.Dir = *req.Dir
-					}
-				}
-			}
-		} else {
-			// Player move route — update session position.
-			dir := s.Dir
-			if req.Dir != nil {
-				dir = *req.Dir
-			}
-			s.SetPosition(*req.X, *req.Y, dir)
+	if req.X != nil && req.Y != nil && req.NPCID == nil {
+		// Player move route — update session position.
+		// NPC move routes are client-side visual effects during events;
+		// they must NOT modify the shared NPCRuntime position, as that
+		// would permanently relocate NPCs for all players in MMO mode.
+		dir := s.Dir
+		if req.Dir != nil {
+			dir = *req.Dir
 		}
+		s.SetPosition(*req.X, *req.Y, dir)
 	}
 
 	select {
@@ -371,6 +369,7 @@ func (h *NPCHandlers) ExecuteAutoruns(s *player.PlayerSession, mapID int) {
 		zap.Int("map_id", mapID),
 		zap.Int("count", len(autoruns)))
 
+	lastSentPages := make(map[int]*resource.EventPage)
 	for _, npcInst := range autoruns {
 		// If a previous autorun transferred the player, stop executing this map's autoruns.
 		if s.MapID != mapID {
@@ -385,10 +384,11 @@ func (h *NPCHandlers) ExecuteAutoruns(s *player.PlayerSession, mapID int) {
 			MapID:           mapID,
 			EventID:         npcInst.EventID,
 			TransferFn:      h.transferFn,
+			BattleFn:        h.battleFn,
 			EnterInstanceFn: h.enterInstanceFn,
 			LeaveInstanceFn: h.leaveInstanceFn,
 			PageRefreshFn: func(ps *player.PlayerSession) {
-				h.sendPageChangesToPlayer(ps, room, composite)
+				h.sendPageChangesToPlayerDedup(ps, room, composite, lastSentPages)
 			},
 		}
 		h.executor.Execute(context.Background(), s, activePage, opts)
@@ -488,14 +488,16 @@ func (h *NPCHandlers) StartParallelEvents(s *player.PlayerSession, mapID int, ge
 		}
 	}()
 
+	parallelLastSent := make(map[int]*resource.EventPage)
 	opts := &npc.ExecuteOpts{
 		GameState:  composite,
 		MapID:      mapID,
 		TransferFn:      h.transferFn,
+		BattleFn:        h.battleFn,
 		EnterInstanceFn: h.enterInstanceFn,
 		LeaveInstanceFn: h.leaveInstanceFn,
 		PageRefreshFn: func(ps *player.PlayerSession) {
-			h.sendPageChangesToPlayer(ps, room, composite)
+			h.sendPageChangesToPlayerDedup(ps, room, composite, parallelLastSent)
 		},
 	}
 	h.executor.RunParallelEventsSynced(ctx, s, events, opts)
@@ -536,15 +538,17 @@ func (h *NPCHandlers) ExecuteTouchEvent(s *player.PlayerSession, mapID, x, y int
 		zap.Int("x", x), zap.Int("y", y),
 		zap.Int("trigger", activePage.Trigger))
 
+	touchLastSent := make(map[int]*resource.EventPage)
 	opts := &npc.ExecuteOpts{
 		GameState:  composite,
 		MapID:      mapID,
 		EventID:    eventID,
 		TransferFn:      h.transferFn,
+		BattleFn:        h.battleFn,
 		EnterInstanceFn: h.enterInstanceFn,
 		LeaveInstanceFn: h.leaveInstanceFn,
 		PageRefreshFn: func(ps *player.PlayerSession) {
-			h.sendPageChangesToPlayer(ps, room, composite)
+			h.sendPageChangesToPlayerDedup(ps, room, composite, touchLastSent)
 		},
 	}
 
@@ -575,57 +579,89 @@ func (h *NPCHandlers) ExecuteTouchEvent(s *player.PlayerSession, mapID, x, y int
 // sendPageChangesToPlayer re-evaluates all NPC pages for a single player's state
 // and sends npc_page_change packets only to that player for any NPCs whose
 // per-player page differs from the base (global) page.
-func (h *NPCHandlers) sendPageChangesToPlayer(s *player.PlayerSession, room *world.MapRoom, state world.GameStateReader) {
-	// After a map transfer the player's MapID differs from this room's;
-	// skip sending page changes so stale data doesn't corrupt the new map's NPCs.
+// sendPageChangesToPlayerDedup is like sendPageChangesToPlayer but skips
+// sending if the same page was already sent (tracked via lastSent map).
+// This prevents flooding the client with identical npc_page_change messages
+// when switches/variables change many times during a single event execution.
+func (h *NPCHandlers) sendPageChangesToPlayerDedup(s *player.PlayerSession, room *world.MapRoom, state world.GameStateReader, lastSent map[int]*resource.EventPage) {
 	if room.MapID != s.MapID {
 		return
 	}
 	npcs := room.AllNPCs()
 	for _, npcInst := range npcs {
 		playerPage := room.GetActivePageForPlayer(npcInst.EventID, state)
-		// Compare with base page — if they differ, send update to this player.
+		if playerPage == npcInst.ActivePage {
+			// Page matches base — check if we previously sent a diff for this NPC
+			prev, hadPrev := lastSent[npcInst.EventID]
+			if !hadPrev {
+				continue // never sent a diff, base is correct, skip
+			}
+			if prev == npcInst.ActivePage {
+				continue // already sent base page, skip
+			}
+			// Previously sent a different page, now it's back to base — must update
+		} else {
+			// Page differs from base — check if we already sent this exact page
+			if prev, ok := lastSent[npcInst.EventID]; ok && prev == playerPage {
+				continue // already sent this page, skip
+			}
+		}
+		lastSent[npcInst.EventID] = playerPage
+		h.sendSinglePageChange(s, npcInst, playerPage)
+	}
+}
+
+func (h *NPCHandlers) sendPageChangesToPlayer(s *player.PlayerSession, room *world.MapRoom, state world.GameStateReader) {
+	if room.MapID != s.MapID {
+		return
+	}
+	npcs := room.AllNPCs()
+	for _, npcInst := range npcs {
+		playerPage := room.GetActivePageForPlayer(npcInst.EventID, state)
 		if playerPage == npcInst.ActivePage {
 			continue
 		}
-		data := map[string]interface{}{
-			"event_id": npcInst.EventID,
-			"dir":      npcInst.Dir,
-		}
-		if playerPage != nil {
-			img := playerPage.Image
-			walkName := img.CharacterName
-			// 图块事件（柜子、门等）使用 TileID 而非行走图。
-			if img.TileID > 0 {
-				walkName = ""
-				data["tile_id"] = img.TileID
-			}
-			h.logger.Debug("npc_page_change",
-				zap.Int("event_id", npcInst.EventID),
-				zap.String("walk_name", walkName),
-				zap.Int("tile_id", img.TileID))
-			data["walk_name"] = walkName
-			data["walk_index"] = img.CharacterIndex
-			data["priority_type"] = playerPage.PriorityType
-			data["step_anime"] = playerPage.StepAnime
-			data["direction_fix"] = playerPage.DirectionFix
-			data["through"] = playerPage.Through
-			data["walk_anime"] = playerPage.WalkAnime
-			// YEP_IconsOnEvents: extract <Icon on Event: N> from commands/note.
-			if icon := world.ExtractIconOnEvent(npcInst.MapEvent, playerPage); icon > 0 {
-				data["icon_on_event"] = icon
-			}
-		} else {
-			data["walk_name"] = ""
-			data["walk_index"] = 0
-			data["priority_type"] = 0
-			data["step_anime"] = false
-			data["direction_fix"] = false
-			data["through"] = false
-			data["walk_anime"] = false
-		}
-		payload, _ := json.Marshal(data)
-		pkt, _ := json.Marshal(&player.Packet{Type: "npc_page_change", Payload: payload})
-		s.SendRaw(pkt)
+		h.sendSinglePageChange(s, npcInst, playerPage)
 	}
+}
+
+// sendSinglePageChange sends a single npc_page_change message for one NPC.
+func (h *NPCHandlers) sendSinglePageChange(s *player.PlayerSession, npcInst *world.NPCRuntime, playerPage *resource.EventPage) {
+	data := map[string]interface{}{
+		"event_id": npcInst.EventID,
+		"dir":      npcInst.Dir,
+	}
+	if playerPage != nil {
+		img := playerPage.Image
+		walkName := img.CharacterName
+		if img.TileID > 0 {
+			walkName = ""
+			data["tile_id"] = img.TileID
+		}
+		h.logger.Debug("npc_page_change",
+			zap.Int("event_id", npcInst.EventID),
+			zap.String("walk_name", walkName),
+			zap.Int("tile_id", img.TileID))
+		data["walk_name"] = walkName
+		data["walk_index"] = img.CharacterIndex
+		data["priority_type"] = playerPage.PriorityType
+		data["step_anime"] = playerPage.StepAnime
+		data["direction_fix"] = playerPage.DirectionFix
+		data["through"] = playerPage.Through
+		data["walk_anime"] = playerPage.WalkAnime
+		if icon := world.ExtractIconOnEvent(npcInst.MapEvent, playerPage); icon > 0 {
+			data["icon_on_event"] = icon
+		}
+	} else {
+		data["walk_name"] = ""
+		data["walk_index"] = 0
+		data["priority_type"] = 0
+		data["step_anime"] = false
+		data["direction_fix"] = false
+		data["through"] = false
+		data["walk_anime"] = false
+	}
+	payload, _ := json.Marshal(data)
+	pkt, _ := json.Marshal(&player.Packet{Type: "npc_page_change", Payload: payload})
+	s.SendRaw(pkt)
 }

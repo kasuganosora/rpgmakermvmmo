@@ -17,6 +17,10 @@
     //  $MMO 全局单例
     //  所有 MMO 插件通过此对象进行 WebSocket 通信和状态共享。
     // ═══════════════════════════════════════════════════════════
+    // MyselfPlugins.js 的按键列表——在战斗中被 rpg_objects.js:3024 引用。
+    // 正常游戏中由 MyselfPlugins 初始化，但 MMO 流程可能跳过，需要提前确保存在。
+    if (!window.keyList) window.keyList = [];
+
     window.$MMO = {
         /** @type {string|null} JWT 认证令牌。 */
         token: null,

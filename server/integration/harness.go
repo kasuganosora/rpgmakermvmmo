@@ -253,8 +253,13 @@ func NewTestServerWithResources(t *testing.T, dataPath string) *TestServer {
 	sh := apows.NewSkillItemHandlers(db, res, wm, skillSvc, logger)
 	sh.RegisterHandlers(wsRouter)
 
+	// Battle session manager (must be created before npcH to wire BattleFn)
+	battleMgr := apows.NewBattleSessionManager(db, res, partyMgr, logger)
+	battleMgr.RegisterHandlers(wsRouter)
+
 	npcH := apows.NewNPCHandlers(db, res, wm, logger)
 	npcH.SetTransferFunc(gh.TransferPlayer)
+	npcH.SetBattleFn(battleMgr.RunBattle)
 	npcH.RegisterHandlers(wsRouter)
 	gh.SetAutorunFunc(npcH.ExecuteAutoruns)
 	gh.SetTouchEventFunc(npcH.ExecuteTouchEvent)
@@ -268,10 +273,6 @@ func NewTestServerWithResources(t *testing.T, dataPath string) *TestServer {
 
 	templateEventH := apows.NewTemplateEventHandlers(db, wm, sm, logger)
 	templateEventH.RegisterHandlers(wsRouter)
-
-	// Battle session manager
-	battleMgr := apows.NewBattleSessionManager(db, res, partyMgr, logger)
-	battleMgr.RegisterHandlers(wsRouter)
 
 	// Debug handlers
 	debugH := apows.NewDebugHandlers(wm, sm, res, db, logger)

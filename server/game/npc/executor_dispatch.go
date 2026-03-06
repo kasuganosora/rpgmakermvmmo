@@ -14,6 +14,14 @@ import (
 // maxCallDepth 防止公共事件之间的无限递归调用。
 const maxCallDepth = 10
 
+// blockedPluginCmds 列出不应转发给客户端的插件指令名称。
+// 这些插件要么是纯客户端计算（服务端转发无意义），要么依赖客户端状态。
+var blockedPluginCmds = map[string]bool{
+	// 纯参数计算插件 — 读写 $gameVariables/_data，服务端无对应数据
+	"ParaCheck": true, "CulSkillEffect": true, "CulPartLV": true,
+	"CulLustLV": true, "CulMiasmaLV": true,
+}
+
 // executeList 执行指令列表。返回 true 表示遇到终止指令（CmdEnd 或 CmdExitEvent）。
 // depth 参数追踪公共事件递归深度，超过 maxCallDepth 时停止执行。
 func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmds []*resource.EventCommand, opts *ExecuteOpts, depth int) bool {
@@ -221,6 +229,12 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 				i++
 				script += "\n" + paramStr(cmds[i].Parameters, 0)
 			}
+
+			// 先尝试服务端执行（setupChild、变量/开关 _data 变更等）
+			if e.execScriptCommand(ctx, s, script, opts, depth) {
+				continue
+			}
+
 			// 仅转发安全的视觉/音效指令行，过滤潜在的状态修改指令
 			var safeLines []string
 			for _, line := range strings.Split(script, "\n") {
@@ -266,7 +280,11 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 			if e.handleCallCommon(ctx, s, cmd, opts, depth) {
 				continue
 			}
-			// 转发插件指令给客户端执行（包括立绘 CallStand/CallCutin/CallAM）
+			// 过滤不需要转发的插件指令
+			if pluginCmdName := extractPluginCmdName(pluginStr); blockedPluginCmds[pluginCmdName] {
+				continue
+			}
+			// 转发插件指令给客户端
 			e.sendEffect(s, cmd)
 
 		case CmdSetMoveRoute:

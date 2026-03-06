@@ -95,13 +95,24 @@ func (bm *BattleSessionManager) RunBattle(
 	}
 	troop := bm.res.Troops[troopID]
 
+	// Look up battleback from map data.
+	var bb1, bb2 string
+	if bm.res != nil {
+		if mapData := bm.res.Maps[s.MapID]; mapData != nil {
+			bb1 = mapData.Battleback1Name
+			bb2 = mapData.Battleback2Name
+		}
+	}
+
 	// Create battle instance.
 	bi := battle.NewBattleInstance(battle.BattleConfig{
-		TroopID:   troopID,
-		CanEscape: canEscape,
-		CanLose:   canLose,
-		Res:       bm.res,
-		Logger:    bm.logger,
+		TroopID:     troopID,
+		CanEscape:   canEscape,
+		CanLose:     canLose,
+		Battleback1: bb1,
+		Battleback2: bb2,
+		Res:         bm.res,
+		Logger:      bm.logger,
 	})
 
 	// Build actor battlers.
@@ -174,6 +185,19 @@ func (bm *BattleSessionManager) RunBattle(
 		zap.Int("troop_id", troopID),
 		zap.Int("result", result),
 		zap.Int64("char_id", s.CharID))
+
+	// Wait for client to return to Scene_Map before allowing NPC executor to continue.
+	// The client sends scene_ready after Scene_Map is fully loaded.
+	// Drain any stale signal first, then wait for the fresh one.
+	select {
+	case <-s.SceneReadyCh:
+	default:
+	}
+	select {
+	case <-s.SceneReadyCh:
+	case <-s.Done:
+	case <-ctx.Done():
+	}
 
 	return result
 }

@@ -156,19 +156,44 @@ type EnemyAction struct {
 type Enemy struct {
 	ID     int    `json:"id"`
 	Name   string `json:"name"`
-	HP     int    `json:"mhp"`
-	MP     int    `json:"mmp"`
-	Atk    int    `json:"atk"`
-	Def    int    `json:"def"`
-	Mat    int    `json:"mat"`
-	Mdf    int    `json:"mdf"`
-	Agi    int    `json:"agi"`
-	Luk    int    `json:"luk"`
+	HP     int    // maxHP — populated from params[0]
+	MP     int    // maxMP — populated from params[1]
+	Atk    int    // populated from params[2]
+	Def    int    // populated from params[3]
+	Mat    int    // populated from params[4]
+	Mdf    int    // populated from params[5]
+	Agi    int    // populated from params[6]
+	Luk    int    // populated from params[7]
 	Exp       int           `json:"exp"`
 	Gold      int           `json:"gold"`
 	DropItems []EnemyDrop   `json:"dropItems"`
 	Actions   []EnemyAction `json:"actions"`
 	Traits    []Trait       `json:"traits"`
+}
+
+// UnmarshalJSON implements custom unmarshaling for Enemy.
+// RMMV stores enemy stats in a "params" array [maxHP, maxMP, atk, def, mat, mdf, agi, luk]
+// rather than individual named fields.
+func (e *Enemy) UnmarshalJSON(data []byte) error {
+	type EnemyAlias Enemy
+	aux := &struct {
+		*EnemyAlias
+		Params []int `json:"params"`
+	}{EnemyAlias: (*EnemyAlias)(e)}
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	if len(aux.Params) >= 8 {
+		e.HP = aux.Params[0]
+		e.MP = aux.Params[1]
+		e.Atk = aux.Params[2]
+		e.Def = aux.Params[3]
+		e.Mat = aux.Params[4]
+		e.Mdf = aux.Params[5]
+		e.Agi = aux.Params[6]
+		e.Luk = aux.Params[7]
+	}
+	return nil
 }
 
 // EnemyDrop represents one entry in the RMMV enemy drop table.
@@ -307,9 +332,11 @@ type MapData struct {
 	Events      []*MapEvent `json:"events"` // nil entries are possible (RMMV uses 1-based IDs)
 	AutoplayBgm bool        `json:"autoplayBgm"`
 	Bgm         *AudioFile  `json:"bgm"`
-	AutoplayBgs bool        `json:"autoplayBgs"`
-	Bgs         *AudioFile  `json:"bgs"`
-	Note        string      `json:"note"` // map note field for meta tags like <RandomPos>
+	AutoplayBgs      bool        `json:"autoplayBgs"`
+	Bgs              *AudioFile  `json:"bgs"`
+	Battleback1Name  string      `json:"battleback1Name"`
+	Battleback2Name  string      `json:"battleback2Name"`
+	Note             string      `json:"note"` // map note field for meta tags like <RandomPos>
 }
 
 // TransferTarget holds the destination of a map transfer event.

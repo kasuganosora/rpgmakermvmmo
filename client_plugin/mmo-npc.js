@@ -1150,7 +1150,7 @@
                 var command = args.shift();
                 // 过滤立绘/演出指令（依赖复杂客户端状态，服务端不应转发）
                 // EraceStand/EraceCutin 需要放行以清除客户端立绘。
-                var _blocked = ['CallStand','CallCutin','CallAM','FaceId','CallCommon','CCT'];
+                var _blocked = ['CallCommon','CCT'];
                 if (_blocked.indexOf(command) >= 0) break;
                 // 创建 Game_Interpreter 实例以便插件覆写
                 // （MPP_ChoiceEX、YEP_MessageCore 等）能访问其方法。

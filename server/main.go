@@ -155,8 +155,12 @@ func main() {
 	sh := apows.NewSkillItemHandlers(db, res, wm, skillSvc, logger)
 	sh.RegisterHandlers(wsRouter)
 
+	battleMgr := apows.NewBattleSessionManager(db, res, partyMgr, logger)
+	battleMgr.RegisterHandlers(wsRouter)
+
 	npcH := apows.NewNPCHandlers(db, res, wm, logger)
 	npcH.SetTransferFunc(gh.TransferPlayer)
+	npcH.SetBattleFn(battleMgr.RunBattle)
 	npcH.RegisterHandlers(wsRouter)
 	gh.SetAutorunFunc(npcH.ExecuteAutoruns)
 	gh.SetTouchEventFunc(npcH.ExecuteTouchEvent)

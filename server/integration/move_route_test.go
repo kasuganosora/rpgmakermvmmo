@@ -792,10 +792,10 @@ func TestScenario_MultiplePlayersIndependent(t *testing.T) {
 	assert.Equal(t, 21, x, "B normal move works")
 }
 
-// TestEffectAckNPCPosition verifies that npc_effect_ack with npc_id updates the
-// NPC's position in the map room (not the player's position).
-// This covers the scenario: server sends code 205 targeting an NPC, client executes
-// the move route locally, then sends ack with the NPC's final position.
+// TestEffectAckNPCPosition verifies that npc_effect_ack with npc_id does NOT
+// update the NPC's position in the map room. NPC move routes are client-side
+// visual effects; updating the shared NPCRuntime would permanently relocate
+// NPCs for all players in MMO mode.
 func TestEffectAckNPCPosition(t *testing.T) {
 	ts := NewTestServer(t)
 	defer ts.Close()
@@ -829,14 +829,14 @@ func TestEffectAckNPCPosition(t *testing.T) {
 	})
 	time.Sleep(100 * time.Millisecond)
 
-	// NPC position should be updated.
+	// NPC position should NOT be updated (shared state must not be mutated by client ack).
 	npc := room.GetNPC(17)
 	require.NotNil(t, npc)
-	assert.Equal(t, 15, npc.X, "NPC x updated")
-	assert.Equal(t, 20, npc.Y, "NPC y updated")
-	assert.Equal(t, 6, npc.Dir, "NPC dir updated")
+	assert.Equal(t, 10, npc.X, "NPC x unchanged")
+	assert.Equal(t, 10, npc.Y, "NPC y unchanged")
+	assert.Equal(t, 2, npc.Dir, "NPC dir unchanged")
 
-	// Player position should NOT be changed.
+	// Player position should NOT be changed either (ack had npc_id, not player).
 	x, y, dir := sess.Position()
 	assert.Equal(t, 5, x, "player x unchanged")
 	assert.Equal(t, 5, y, "player y unchanged")

@@ -129,14 +129,16 @@ func selfVariableKey(mapID, eventID, index int) string {
 // ---- mockInventoryStore：InventoryStore 的测试 mock ----
 
 type mockInventoryStore struct {
-	gold  map[int64]int64      // charID -> gold
-	items map[string]int       // "charID_itemID" -> qty
+	gold   map[int64]int64      // charID -> gold
+	items  map[string]int       // "charID_itemID" -> qty
+	skills map[string]bool      // "charID_skillID" -> learned
 }
 
 func newMockInventoryStore() *mockInventoryStore {
 	return &mockInventoryStore{
-		gold:  make(map[int64]int64),
-		items: make(map[string]int),
+		gold:   make(map[int64]int64),
+		items:  make(map[string]int),
+		skills: make(map[string]bool),
 	}
 }
 
@@ -190,6 +192,11 @@ func (m *mockInventoryStore) HasItemOfKind(_ context.Context, charID int64, item
 
 func (m *mockInventoryStore) IsEquipped(_ context.Context, _ int64, _ int, _ int) (bool, error) {
 	return false, nil
+}
+
+func (m *mockInventoryStore) HasSkill(_ context.Context, charID int64, skillID int) (bool, error) {
+	k := fmt.Sprintf("%d_%d", charID, skillID)
+	return m.skills[k], nil
 }
 
 // ========================================================================
@@ -431,6 +438,66 @@ func TestExecute_ConditionalBranch_Variable(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ========================================================================
+// Actor Condition: Skill Check (sub-type 3)
+// ========================================================================
+
+// TestExecute_ConditionalBranch_ActorSkill_HasSkill 测试角色习得技能条件。
+func TestExecute_ConditionalBranch_ActorSkill_HasSkill(t *testing.T) {
+	gs := newMockGameState()
+	store := newMockInventoryStore()
+	store.skills["1_808"] = true // charID=1 has skill 808
+
+	exec := New(store, &resource.ResourceLoader{}, nopLogger())
+	s := testSession(1)
+
+	page := &resource.EventPage{
+		List: []*resource.EventCommand{
+			// condType=4 (actor), actorID=1, subType=3 (skill), skillID=808
+			{Code: CmdConditionalStart, Indent: 0, Parameters: []interface{}{
+				float64(4), float64(1), float64(3), float64(808),
+			}},
+			// if true: set var[50] = 1
+			{Code: CmdChangeVars, Indent: 1, Parameters: []interface{}{
+				float64(50), float64(50), float64(0), float64(0), float64(1),
+			}},
+			{Code: CmdConditionalEnd, Indent: 0},
+			{Code: CmdEnd, Indent: 0},
+		},
+	}
+
+	exec.Execute(context.Background(), s, page, &ExecuteOpts{GameState: gs})
+	assert.Equal(t, 1, gs.variables[50], "var[50] should be 1 when actor has skill 808")
+}
+
+// TestExecute_ConditionalBranch_ActorSkill_NoSkill 测试角色未习得技能条件。
+func TestExecute_ConditionalBranch_ActorSkill_NoSkill(t *testing.T) {
+	gs := newMockGameState()
+	store := newMockInventoryStore()
+	// no skills added
+
+	exec := New(store, &resource.ResourceLoader{}, nopLogger())
+	s := testSession(1)
+
+	page := &resource.EventPage{
+		List: []*resource.EventCommand{
+			// condType=4 (actor), actorID=1, subType=3 (skill), skillID=808
+			{Code: CmdConditionalStart, Indent: 0, Parameters: []interface{}{
+				float64(4), float64(1), float64(3), float64(808),
+			}},
+			// if true: set var[50] = 1
+			{Code: CmdChangeVars, Indent: 1, Parameters: []interface{}{
+				float64(50), float64(50), float64(0), float64(0), float64(1),
+			}},
+			{Code: CmdConditionalEnd, Indent: 0},
+			{Code: CmdEnd, Indent: 0},
+		},
+	}
+
+	exec.Execute(context.Background(), s, page, &ExecuteOpts{GameState: gs})
+	assert.Equal(t, 0, gs.variables[50], "var[50] should remain 0 when actor lacks skill 808")
 }
 
 // ========================================================================
@@ -996,6 +1063,215 @@ func TestExecute_CallCommonEvent(t *testing.T) {
 }
 
 // ========================================================================
+// Script Command (code 355) 脚本命令测试
+// ========================================================================
+
+// TestExecute_Script_SetupChild 测试 this.setupChild() 触发公共事件调用。
+func TestExecute_Script_SetupChild(t *testing.T) {
+	gs := newMockGameState()
+	gs.variables[2503] = 5 // CE ID stored in variable
+
+	rl := &resource.ResourceLoader{}
+	rl.CommonEvents = make([]*resource.CommonEvent, 6)
+	rl.CommonEvents[5] = &resource.CommonEvent{
+		ID:   5,
+		Name: "ChildCE",
+		List: []*resource.EventCommand{
+			// Set var[100] = 42 to prove the child CE ran
+			{Code: CmdChangeVars, Indent: 0, Parameters: []interface{}{
+				float64(100), float64(100), float64(0), float64(0), float64(42),
+			}},
+			{Code: CmdEnd, Indent: 0},
+		},
+	}
+
+	exec := New(nil, rl, nopLogger())
+	s := testSession(1)
+
+	page := &resource.EventPage{
+		List: []*resource.EventCommand{
+			{Code: CmdScript, Indent: 0, Parameters: []interface{}{
+				"this.setupChild($dataCommonEvents[$gameVariables.value(2503)].list, 0)",
+			}},
+			{Code: CmdEnd, Indent: 0},
+		},
+	}
+
+	exec.Execute(context.Background(), s, page, &ExecuteOpts{GameState: gs})
+
+	assert.Equal(t, 42, gs.variables[100], "setupChild should execute child CE which sets var[100]=42")
+}
+
+// TestExecute_Script_VarDataIncrement 测试 $gameVariables._data[N] += 1。
+func TestExecute_Script_VarDataIncrement(t *testing.T) {
+	gs := newMockGameState()
+	gs.variables[2504] = 2633 // indirect variable ID
+	gs.variables[2633] = 10   // initial value
+
+	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	s := testSession(1)
+
+	page := &resource.EventPage{
+		List: []*resource.EventCommand{
+			{Code: CmdScript, Indent: 0, Parameters: []interface{}{
+				"$gameVariables._data[$gameVariables.value(2504)] += 1",
+			}},
+			{Code: CmdEnd, Indent: 0},
+		},
+	}
+
+	exec.Execute(context.Background(), s, page, &ExecuteOpts{GameState: gs})
+
+	assert.Equal(t, 11, gs.variables[2633], "var[2633] should be incremented from 10 to 11")
+}
+
+// TestExecute_Script_VarDataDecrement 测试 $gameVariables._data[N] -= 1。
+func TestExecute_Script_VarDataDecrement(t *testing.T) {
+	gs := newMockGameState()
+	gs.variables[2504] = 2633
+	gs.variables[2633] = 5
+
+	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	s := testSession(1)
+
+	page := &resource.EventPage{
+		List: []*resource.EventCommand{
+			{Code: CmdScript, Indent: 0, Parameters: []interface{}{
+				"$gameVariables._data[$gameVariables.value(2504)] -= 1",
+			}},
+			{Code: CmdEnd, Indent: 0},
+		},
+	}
+
+	exec.Execute(context.Background(), s, page, &ExecuteOpts{GameState: gs})
+
+	assert.Equal(t, 4, gs.variables[2633], "var[2633] should be decremented from 5 to 4")
+}
+
+// TestExecute_Script_VarDataDirectAssign 测试 $gameVariables._data[N] = value。
+func TestExecute_Script_VarDataDirectAssign(t *testing.T) {
+	gs := newMockGameState()
+
+	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	s := testSession(1)
+
+	page := &resource.EventPage{
+		List: []*resource.EventCommand{
+			{Code: CmdScript, Indent: 0, Parameters: []interface{}{
+				"$gameVariables._data[206] = 4",
+			}},
+			{Code: CmdEnd, Indent: 0},
+		},
+	}
+
+	exec.Execute(context.Background(), s, page, &ExecuteOpts{GameState: gs})
+
+	assert.Equal(t, 4, gs.variables[206], "var[206] should be set to 4")
+}
+
+// TestExecute_Script_SwitchDataSet 测试 $gameSwitches._data[N] = true/false。
+func TestExecute_Script_SwitchDataSet(t *testing.T) {
+	gs := newMockGameState()
+	gs.variables[2508] = 48 // indirect switch ID
+
+	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	s := testSession(1)
+
+	page := &resource.EventPage{
+		List: []*resource.EventCommand{
+			{Code: CmdScript, Indent: 0, Parameters: []interface{}{
+				"$gameSwitches._data[$gameVariables.value(2508)] = true;",
+			}},
+			{Code: CmdEnd, Indent: 0},
+		},
+	}
+
+	exec.Execute(context.Background(), s, page, &ExecuteOpts{GameState: gs})
+
+	assert.True(t, gs.switches[48], "switch[48] should be set to true")
+}
+
+// TestExecute_Script_VarDataMathExpr 测试复杂数学表达式 $gameVariables._data[N] = Math.round(...)。
+func TestExecute_Script_VarDataMathExpr(t *testing.T) {
+	gs := newMockGameState()
+	gs.variables[243] = 100
+
+	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	s := testSession(1)
+
+	page := &resource.EventPage{
+		List: []*resource.EventCommand{
+			{Code: CmdScript, Indent: 0, Parameters: []interface{}{
+				"$gameVariables._data[243] = Math.round($gameVariables.value(243) * 1.5);",
+			}},
+			{Code: CmdEnd, Indent: 0},
+		},
+	}
+
+	exec.Execute(context.Background(), s, page, &ExecuteOpts{GameState: gs})
+
+	assert.Equal(t, 150, gs.variables[243], "var[243] should be Math.round(100*1.5)=150")
+}
+
+// TestExecute_Script_VarDataSendsVarChange 测试脚本变更后同步到客户端。
+func TestExecute_Script_VarDataSendsVarChange(t *testing.T) {
+	gs := newMockGameState()
+
+	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	s := testSession(1)
+
+	page := &resource.EventPage{
+		List: []*resource.EventCommand{
+			{Code: CmdScript, Indent: 0, Parameters: []interface{}{
+				"$gameVariables._data[100] = 99",
+			}},
+			{Code: CmdEnd, Indent: 0},
+		},
+	}
+
+	exec.Execute(context.Background(), s, page, &ExecuteOpts{GameState: gs})
+
+	pkts := drainPackets(t, s)
+	found := false
+	for _, pkt := range pkts {
+		if pkt.Type == "var_change" {
+			var data map[string]interface{}
+			_ = json.Unmarshal(pkt.Payload, &data)
+			if data["id"] == float64(100) && data["value"] == float64(99) {
+				found = true
+			}
+		}
+	}
+	assert.True(t, found, "should send var_change packet for var[100]=99")
+}
+
+// TestExecute_Script_SafeForward 测试安全脚本仍然转发给客户端。
+func TestExecute_Script_SafeForward(t *testing.T) {
+	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	s := testSession(1)
+
+	page := &resource.EventPage{
+		List: []*resource.EventCommand{
+			{Code: CmdScript, Indent: 0, Parameters: []interface{}{
+				"$gameScreen.startTint([0,0,0,0], 60)",
+			}},
+			{Code: CmdEnd, Indent: 0},
+		},
+	}
+
+	exec.Execute(context.Background(), s, page, &ExecuteOpts{GameState: newMockGameState()})
+
+	pkts := drainPackets(t, s)
+	found := false
+	for _, pkt := range pkts {
+		if pkt.Type == "npc_effect" {
+			found = true
+		}
+	}
+	assert.True(t, found, "$gameScreen script should still be forwarded as npc_effect")
+}
+
+// ========================================================================
 // ChangeGold 金币变更测试
 // ========================================================================
 
@@ -1452,14 +1728,12 @@ func TestExecute_ChangeClass_ScalesHPMP(t *testing.T) {
 	exec.Execute(context.Background(), s, page, &ExecuteOpts{})
 
 	assert.Equal(t, 2, s.ClassID, "ClassID should change to 2")
-	// Warrior lv5 HP=250, Mage lv5 HP=200
-	// ratio = 200/250 = 0.8, new HP = 0.8 * 200 = 160
+	// Mage lv5: HP=200, MP=100
+	// After class change: HP fully restored to new maxHP, MP zeroed
 	assert.Equal(t, 200, s.MaxHP, "MaxHP should be set to Mage lv5=200")
-	assert.Equal(t, 160, s.HP, "HP should be scaled: 200/250 * 200 = 160")
-	// Warrior lv5 MP=50, Mage lv5 MP=100
-	// ratio = 40/50 = 0.8, new MP = 0.8 * 100 = 80
+	assert.Equal(t, 200, s.HP, "HP should be fully restored to new MaxHP")
 	assert.Equal(t, 100, s.MaxMP, "MaxMP should be set to Mage lv5=100")
-	assert.Equal(t, 80, s.MP, "MP should be scaled: 40/50 * 100 = 80")
+	assert.Equal(t, 0, s.MP, "MP should be zero after class change")
 }
 
 // TestExecute_ChangeClass_InvalidClassID 测试无效职业 ID 不变更。

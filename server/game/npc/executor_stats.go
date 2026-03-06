@@ -3,7 +3,6 @@ package npc
 
 import (
 	"context"
-	"math"
 
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/player"
 	"github.com/kasuganosora/rpgmakermvmmo/server/resource"
@@ -138,26 +137,16 @@ func (e *Executor) applyChangeClass(ctx context.Context, s *player.PlayerSession
 				level = 99
 			}
 			// 参数索引：[0]=最大HP, [1]=最大MP，按等级索引（1起始）
-			oldMHP := classParam(oldClass, 0, level)
 			newMHP := classParam(newClass, 0, level)
-			oldMMP := classParam(oldClass, 1, level)
 			newMMP := classParam(newClass, 1, level)
 
-			if oldMHP > 0 && newMHP > 0 {
-				ratio := float64(s.HP) / float64(oldMHP)
+			if newMHP > 0 {
 				s.MaxHP = newMHP
-				s.HP = int(math.Ceil(ratio * float64(newMHP)))
-				if s.HP < 1 {
-					s.HP = 1
-				}
+				s.HP = newMHP // 职业变更时完全恢复 HP（匹配 ProjectB 的 ParaCheck 行为）
 			}
-			if oldMMP > 0 && newMMP > 0 {
-				ratio := float64(s.MP) / float64(oldMMP)
+			if newMMP > 0 {
 				s.MaxMP = newMMP
-				s.MP = int(math.Ceil(ratio * float64(newMMP)))
-				if s.MP < 0 {
-					s.MP = 0
-				}
+				s.MP = 0 // MP 归零（魔法消耗型资源，变身后重新积累）
 			}
 		}
 	}

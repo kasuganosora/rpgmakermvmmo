@@ -46,6 +46,7 @@ type PlayerSession struct {
 	Level     int
 	Exp       int64
 	States    map[int]bool // active states (state ID → true)
+	Equips    map[int]int  // equipped items (slot index → item ID)
 
 	SendChan     chan []byte
 	Done         chan struct{}
@@ -237,6 +238,22 @@ func (s *PlayerSession) RemoveState(stateID int) {
 // ClearStates removes all states (used by RecoverAll).
 func (s *PlayerSession) ClearStates() {
 	s.States = nil
+}
+
+// SetEquip sets an equipped item for a slot.
+func (s *PlayerSession) SetEquip(slotIndex, itemID int) {
+	if s.Equips == nil {
+		s.Equips = make(map[int]int)
+	}
+	s.Equips[slotIndex] = itemID
+}
+
+// GetEquip returns the item ID for a slot (0 if empty).
+func (s *PlayerSession) GetEquip(slotIndex int) int {
+	if s.Equips == nil {
+		return 0
+	}
+	return s.Equips[slotIndex]
 }
 
 // ResetDirty clears the dirty flag and returns whether it was set.

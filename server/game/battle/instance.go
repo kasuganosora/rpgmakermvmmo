@@ -32,6 +32,8 @@ type BattleConfig struct {
 	TroopID     int
 	CanEscape   bool
 	CanLose     bool
+	Battleback1 string              // battleback1 image name from map data
+	Battleback2 string              // battleback2 image name from map data
 	Res         *resource.ResourceLoader
 	Logger      *zap.Logger
 	RNG         *rand.Rand          // injectable for testing
@@ -47,6 +49,8 @@ type BattleInstance struct {
 	troopID     int
 	canEscape   bool
 	canLose     bool
+	battleback1 string
+	battleback2 string
 	turnCount   int
 	escapeRatio float64
 
@@ -82,6 +86,8 @@ func NewBattleInstance(cfg BattleConfig) *BattleInstance {
 		troopID:     cfg.TroopID,
 		canEscape:   cfg.CanEscape,
 		canLose:     cfg.CanLose,
+		battleback1: cfg.Battleback1,
+		battleback2: cfg.Battleback2,
 		escapeRatio: 0.5,
 		res:         cfg.Res,
 		logger:      cfg.Logger,
@@ -135,7 +141,12 @@ func (b *BattleInstance) Run(ctx context.Context) int {
 	for i, e := range b.Enemies {
 		enemySnaps[i] = SnapshotBattler(e)
 	}
-	b.emitEvent(&EventBattleStart{Actors: actorSnaps, Enemies: enemySnaps})
+	b.emitEvent(&EventBattleStart{
+		Actors:      actorSnaps,
+		Enemies:     enemySnaps,
+		Battleback1: b.battleback1,
+		Battleback2: b.battleback2,
+	})
 
 	for {
 		b.turnCount++

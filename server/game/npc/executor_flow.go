@@ -287,8 +287,18 @@ func (e *Executor) evalActorCondition(ctx context.Context, s *player.PlayerSessi
 	case 6: // 状态
 		return s.HasState(compareVal)
 
-	case 1, 3:
-		// 1=名字, 3=技能 — 服务端暂不跟踪，默认不满足
+	case 3: // 技能
+		if e.store == nil {
+			return false
+		}
+		has, err := e.store.HasSkill(ctx, s.CharID, compareVal)
+		if err != nil {
+			return false
+		}
+		return has
+
+	case 1:
+		// 1=名字 — 服务端暂不跟踪，默认不满足
 		e.logger.Debug("actor condition sub-type not implemented",
 			zap.Int("sub_type", subType), zap.Int("compare", compareVal))
 		return false

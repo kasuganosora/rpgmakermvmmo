@@ -57,8 +57,10 @@ func RefBattler(b Battler) BattlerRef {
 // --- Concrete event types ---
 
 type EventBattleStart struct {
-	Actors  []BattlerSnapshot `json:"actors"`
-	Enemies []BattlerSnapshot `json:"enemies"`
+	Actors      []BattlerSnapshot `json:"actors"`
+	Enemies     []BattlerSnapshot `json:"enemies"`
+	Battleback1 string            `json:"battleback1,omitempty"`
+	Battleback2 string            `json:"battleback2,omitempty"`
 }
 
 func (EventBattleStart) EventType() string { return "battle_start" }

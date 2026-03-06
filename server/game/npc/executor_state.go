@@ -49,6 +49,13 @@ func (e *Executor) applyVariables(s *player.PlayerSession, params []interface{},
 	operandType := paramInt(params, 3)
 	operandVal := paramInt(params, 4)
 
+	// operandType=4: 脚本表达式（如 $gameActors._data[1]._equips[1]._itemId）
+	var scriptVal int
+	if operandType == 4 {
+		scriptStr := paramStr(params, 4)
+		scriptVal = e.evalScriptValue(scriptStr, s, opts)
+	}
+
 	for id := startID; id <= endID; id++ {
 		current := opts.GameState.GetVariable(id)
 		val := operandVal
@@ -60,6 +67,8 @@ func (e *Executor) applyVariables(s *player.PlayerSession, params []interface{},
 			if max >= val {
 				val = val + rand.Intn(max-val+1)
 			}
+		case 4: // 脚本
+			val = scriptVal
 		}
 		newVal := current
 		switch op {

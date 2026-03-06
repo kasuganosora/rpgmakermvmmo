@@ -595,6 +595,8 @@ func (gh *GameHandlers) EnterMapRoom(s *player.PlayerSession, mapID, x, y, dir i
 					"item_id":    inv.ItemID,
 					"kind":       inv.Kind, // 2=weapon, 3=armor
 				})
+				// Track on session for server-side script evaluation
+				s.SetEquip(inv.SlotIndex, inv.ItemID)
 			}
 		}
 		stats := player.CalcStats(&char, gh.res, equips)

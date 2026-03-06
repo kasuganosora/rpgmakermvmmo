@@ -314,6 +314,133 @@ func TestBattleInstance_RewardsOnWin(t *testing.T) {
 	}
 }
 
+func TestBattleInstance_BattlebackInStartEvent(t *testing.T) {
+	res := makeInstanceRes()
+
+	actor := NewActorBattler(ActorConfig{
+		CharID: 1, Name: "Hero", Index: 0, Level: 10,
+		HP: 500, MP: 50,
+		BaseParams: [8]int{500, 50, 50, 30, 20, 10, 20, 10},
+		ActorTraits: []resource.Trait{{Code: 22, DataID: 0, Value: 0.95}},
+		Res:         res,
+	})
+	enemy := NewEnemyBattler(&resource.Enemy{
+		ID: 1, Name: "Slime", HP: 5, MP: 0,
+		Atk: 1, Def: 1, Mat: 1, Mdf: 1, Agi: 1, Luk: 1,
+		Actions: []resource.EnemyAction{{SkillID: 1, ConditionType: 0, Rating: 5}},
+		Traits:  []resource.Trait{{Code: 22, DataID: 0, Value: 0.90}},
+	}, 0, res)
+
+	bi := NewBattleInstance(BattleConfig{
+		TroopID:      1,
+		Battleback1:  "Grassland",
+		Battleback2:  "Grassland",
+		Res:          res,
+		RNG:          rand.New(rand.NewSource(42)),
+		InputTimeout: 5 * time.Second,
+	})
+	bi.Actors = []Battler{actor}
+	bi.Enemies = []Battler{enemy}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var startEvt *EventBattleStart
+	go func() {
+		for evt := range bi.Events() {
+			if bs, ok := evt.(*EventBattleStart); ok {
+				startEvt = bs
+			}
+			if ir, ok := evt.(*EventInputRequest); ok {
+				bi.SubmitInput(&ActionInput{
+					ActorIndex:    ir.ActorIndex,
+					ActionType:    ActionAttack,
+					TargetIndices: []int{0},
+					TargetIsActor: false,
+				})
+			}
+		}
+	}()
+
+	result := bi.Run(ctx)
+	if result != ResultWin {
+		t.Fatalf("result = %d, want ResultWin", result)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	if startEvt == nil {
+		t.Fatal("no battle_start event received")
+	}
+	if startEvt.Battleback1 != "Grassland" {
+		t.Errorf("Battleback1 = %q, want %q", startEvt.Battleback1, "Grassland")
+	}
+	if startEvt.Battleback2 != "Grassland" {
+		t.Errorf("Battleback2 = %q, want %q", startEvt.Battleback2, "Grassland")
+	}
+}
+
+func TestBattleInstance_EmptyBattleback(t *testing.T) {
+	res := makeInstanceRes()
+
+	actor := NewActorBattler(ActorConfig{
+		CharID: 1, Name: "Hero", Index: 0, Level: 10,
+		HP: 500, MP: 50,
+		BaseParams: [8]int{500, 50, 50, 30, 20, 10, 20, 10},
+		ActorTraits: []resource.Trait{{Code: 22, DataID: 0, Value: 0.95}},
+		Res:         res,
+	})
+	enemy := NewEnemyBattler(&resource.Enemy{
+		ID: 1, Name: "Slime", HP: 5, MP: 0,
+		Atk: 1, Def: 1, Mat: 1, Mdf: 1, Agi: 1, Luk: 1,
+		Actions: []resource.EnemyAction{{SkillID: 1, ConditionType: 0, Rating: 5}},
+		Traits:  []resource.Trait{{Code: 22, DataID: 0, Value: 0.90}},
+	}, 0, res)
+
+	// No battleback specified — should remain empty.
+	bi := NewBattleInstance(BattleConfig{
+		TroopID:      1,
+		Res:          res,
+		RNG:          rand.New(rand.NewSource(42)),
+		InputTimeout: 5 * time.Second,
+	})
+	bi.Actors = []Battler{actor}
+	bi.Enemies = []Battler{enemy}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var startEvt *EventBattleStart
+	go func() {
+		for evt := range bi.Events() {
+			if bs, ok := evt.(*EventBattleStart); ok {
+				startEvt = bs
+			}
+			if ir, ok := evt.(*EventInputRequest); ok {
+				bi.SubmitInput(&ActionInput{
+					ActorIndex:    ir.ActorIndex,
+					ActionType:    ActionAttack,
+					TargetIndices: []int{0},
+					TargetIsActor: false,
+				})
+			}
+		}
+	}()
+
+	bi.Run(ctx)
+	time.Sleep(50 * time.Millisecond)
+
+	if startEvt == nil {
+		t.Fatal("no battle_start event received")
+	}
+	if startEvt.Battleback1 != "" {
+		t.Errorf("Battleback1 = %q, want empty", startEvt.Battleback1)
+	}
+	if startEvt.Battleback2 != "" {
+		t.Errorf("Battleback2 = %q, want empty", startEvt.Battleback2)
+	}
+}
+
 func TestBattleInstance_ContextCancellation(t *testing.T) {
 	res := makeInstanceRes()
 

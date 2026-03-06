@@ -128,6 +128,8 @@ type InventoryStore interface {
 	HasItemOfKind(ctx context.Context, charID int64, itemID, kind int, includeEquipped bool) (bool, error)
 	// IsEquipped 检查角色是否装备了指定类型和 ID 的物品。
 	IsEquipped(ctx context.Context, charID int64, itemID, kind int) (bool, error)
+	// HasSkill 检查角色是否习得了指定技能。
+	HasSkill(ctx context.Context, charID int64, skillID int) (bool, error)
 }
 
 // ---- 回调类型 ----
@@ -300,6 +302,17 @@ func (s *gormInventoryStore) IsEquipped(ctx context.Context, charID int64, itemI
 	var count int64
 	if err := s.db.WithContext(ctx).Model(&model.Inventory{}).
 		Where("char_id = ? AND item_id = ? AND kind = ? AND equipped = true", charID, itemID, kind).
+		Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// HasSkill 检查角色是否习得了指定技能。
+func (s *gormInventoryStore) HasSkill(ctx context.Context, charID int64, skillID int) (bool, error) {
+	var count int64
+	if err := s.db.WithContext(ctx).Model(&model.CharSkill{}).
+		Where("char_id = ? AND skill_id = ?", charID, skillID).
 		Count(&count).Error; err != nil {
 		return false, err
 	}
