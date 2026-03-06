@@ -118,6 +118,14 @@ func (b *BattleInstance) SubmitInput(input *ActionInput) {
 func (b *BattleInstance) Run(ctx context.Context) int {
 	defer close(b.events)
 
+	// RMMV: initTp() — initialize TP to random 0-25 for all battlers.
+	for _, a := range b.Actors {
+		a.SetTP(b.rng.Intn(26))
+	}
+	for _, e := range b.Enemies {
+		e.SetTP(b.rng.Intn(26))
+	}
+
 	// Emit start event.
 	actorSnaps := make([]BattlerSnapshot, len(b.Actors))
 	for i, a := range b.Actors {
@@ -271,6 +279,7 @@ func (b *BattleInstance) collectActions(ctx context.Context) error {
 			ItemID:        input.ItemID,
 			TargetIndices: input.TargetIndices,
 			TargetIsActor: input.TargetIsActor,
+			SpeedMod:      b.lookupActionSpeed(input),
 		}
 		actor.SetAction(action)
 	}
@@ -428,7 +437,7 @@ func (b *BattleInstance) emitBattleEnd(result int) {
 			if eb, ok := e.(*EnemyBattler); ok && eb.enemy != nil {
 				totalExp += eb.enemy.Exp
 				totalGold += eb.enemy.Gold
-				drops := CalculateDrops(eb.enemy)
+				drops := CalculateDropsRNG(eb.enemy, b.rng)
 				allDrops = append(allDrops, drops...)
 			}
 		}
@@ -456,6 +465,53 @@ func (b *BattleInstance) emitEvent(evt BattleEvent) {
 	default:
 		b.logger.Warn("battle event dropped (channel full)", zap.String("type", evt.EventType()))
 	}
+}
+
+// lookupActionSpeed returns the speed modifier for a player action input.
+// RMMV: skill.speed or item.speed determines turn order priority.
+func (b *BattleInstance) lookupActionSpeed(input *ActionInput) int {
+	if b.res == nil {
+		return 0
+	}
+	switch input.ActionType {
+	case ActionAttack:
+		if s := b.res.SkillByID(1); s != nil {
+			return s.Speed
+		}
+	case ActionSkill:
+		if s := b.res.SkillByID(input.SkillID); s != nil {
+			return s.Speed
+		}
+	case ActionItem:
+		if input.ItemID > 0 && input.ItemID < len(b.res.Items) && b.res.Items[input.ItemID] != nil {
+			return b.res.Items[input.ItemID].Speed
+		}
+	}
+	return 0
+}
+
+// calcStatsFromClass extracts base params from a class at a given level.
+// RMMV: params[paramID][level] where index 0 = level 0, index 1 = level 1, etc.
+// Returns [8]int for mhp, mmp, atk, def, mat, mdf, agi, luk; nil if class not found.
+func calcStatsFromClass(res *resource.ResourceLoader, classID, level int) []int {
+	cls := res.ClassByID(classID)
+	if cls == nil {
+		return nil
+	}
+	if level < 0 {
+		level = 0
+	}
+	result := make([]int, 8)
+	for p := 0; p < 8; p++ {
+		if p >= len(cls.Params) {
+			continue
+		}
+		row := cls.Params[p]
+		if level < len(row) {
+			result[p] = row[level]
+		}
+	}
+	return result
 }
 
 func boolToStr(v bool) string {

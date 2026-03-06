@@ -20,6 +20,7 @@ type Action struct {
 	ItemID        int
 	TargetIndices []int
 	TargetIsActor bool // true = targeting actors, false = targeting enemies
+	SpeedMod      int  // action speed modifier from skill/item data
 }
 
 // StateEntry tracks an active state on a battler.

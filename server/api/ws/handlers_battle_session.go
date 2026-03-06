@@ -8,14 +8,17 @@ import (
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/battle"
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/party"
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/player"
+	"github.com/kasuganosora/rpgmakermvmmo/server/model"
 	"github.com/kasuganosora/rpgmakermvmmo/server/resource"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 // BattleSessionManager manages server-authoritative battle sessions.
 type BattleSessionManager struct {
 	mu       sync.RWMutex
 	sessions map[int64]*activeBattle // charID → active battle
+	db       *gorm.DB
 	res      *resource.ResourceLoader
 	partyMgr *party.Manager
 	logger   *zap.Logger
@@ -27,9 +30,10 @@ type activeBattle struct {
 }
 
 // NewBattleSessionManager creates a new manager.
-func NewBattleSessionManager(res *resource.ResourceLoader, partyMgr *party.Manager, logger *zap.Logger) *BattleSessionManager {
+func NewBattleSessionManager(db *gorm.DB, res *resource.ResourceLoader, partyMgr *party.Manager, logger *zap.Logger) *BattleSessionManager {
 	return &BattleSessionManager{
 		sessions: make(map[int64]*activeBattle),
+		db:       db,
 		res:      res,
 		partyMgr: partyMgr,
 		logger:   logger,
@@ -228,11 +232,52 @@ func (bm *BattleSessionManager) buildActorBattler(s *player.PlayerSession, index
 		}
 	}
 
-	// TODO: Equipment bonuses and traits can be added when PlayerSession
-	// tracks equipped items. For now, equipment stat bonuses are already
-	// factored into the session's HP/MaxHP values.
+	// Load equipped items from DB and compute stat bonuses + traits.
 	var equipBonus [8]int
 	var equipTraits []resource.Trait
+	if bm.db != nil && bm.res != nil {
+		var invItems []model.Inventory
+		bm.db.Where("char_id = ? AND equipped = ?", s.CharID, true).Find(&invItems)
+		for _, inv := range invItems {
+			if inv.Kind == 2 { // weapon
+				for _, w := range bm.res.Weapons {
+					if w != nil && w.ID == inv.ItemID {
+						es := resource.EquipStatsFromParams(w.Params)
+						equipBonus[0] += es.MaxHP
+						equipBonus[1] += es.MaxMP
+						equipBonus[2] += es.Atk
+						equipBonus[3] += es.Def
+						equipBonus[4] += es.Mat
+						equipBonus[5] += es.Mdf
+						equipBonus[6] += es.Agi
+						equipBonus[7] += es.Luk
+						if w.Traits != nil {
+							equipTraits = append(equipTraits, w.Traits...)
+						}
+						break
+					}
+				}
+			} else if inv.Kind == 3 { // armor
+				for _, a := range bm.res.Armors {
+					if a != nil && a.ID == inv.ItemID {
+						es := resource.EquipStatsFromParams(a.Params)
+						equipBonus[0] += es.MaxHP
+						equipBonus[1] += es.MaxMP
+						equipBonus[2] += es.Atk
+						equipBonus[3] += es.Def
+						equipBonus[4] += es.Mat
+						equipBonus[5] += es.Mdf
+						equipBonus[6] += es.Agi
+						equipBonus[7] += es.Luk
+						if a.Traits != nil {
+							equipTraits = append(equipTraits, a.Traits...)
+						}
+						break
+					}
+				}
+			}
+		}
+	}
 
 	// Collect class traits.
 	var actorTraits []resource.Trait

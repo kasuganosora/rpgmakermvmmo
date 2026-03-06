@@ -111,20 +111,22 @@ func EquipStatsFromParams(params []int) EquipStats {
 }
 
 type Weapon struct {
-	ID      int    `json:"id"`
-	Name    string `json:"name"`
-	Price   int    `json:"price"`
-	Params  []int  `json:"params"`
-	WtypeID int    `json:"wtypeId"`
+	ID      int     `json:"id"`
+	Name    string  `json:"name"`
+	Price   int     `json:"price"`
+	Params  []int   `json:"params"`
+	WtypeID int     `json:"wtypeId"`
+	Traits  []Trait `json:"traits"`
 }
 
 type Armor struct {
-	ID      int    `json:"id"`
-	Name    string `json:"name"`
-	Price   int    `json:"price"`
-	Params  []int  `json:"params"`
-	EtypeID int    `json:"etypeId"` // 1=shield,2=helmet,3=body,4=accessory
-	AtypeID int    `json:"atypeId"`
+	ID      int     `json:"id"`
+	Name    string  `json:"name"`
+	Price   int     `json:"price"`
+	Params  []int   `json:"params"`
+	EtypeID int     `json:"etypeId"` // 1=shield,2=helmet,3=body,4=accessory
+	AtypeID int     `json:"atypeId"`
+	Traits  []Trait `json:"traits"`
 }
 
 // Trait represents an RMMV trait entry (used by actors, enemies, classes, equipment, states).

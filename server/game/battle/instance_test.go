@@ -165,7 +165,7 @@ func TestBattleInstance_Escape(t *testing.T) {
 		TroopID:      1,
 		CanEscape:    true,
 		Res:          res,
-		RNG:          rand.New(rand.NewSource(1)), // seed that produces escape on first try
+		RNG:          rand.New(rand.NewSource(0)), // seed that produces escape on first try (after TP init)
 		InputTimeout: 5 * time.Second,
 	})
 	bi.Actors = []Battler{actor}

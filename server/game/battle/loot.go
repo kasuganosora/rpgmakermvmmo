@@ -15,7 +15,18 @@ type DropResult struct {
 
 // CalculateDrops runs the RMMV drop probability table for an enemy.
 // Each entry has a probability = 1/denominator.
+// Deprecated: use CalculateDropsRNG for deterministic testing.
 func CalculateDrops(enemy *resource.Enemy) []DropResult {
+	return CalculateDropsRNG(enemy, nil)
+}
+
+// CalculateDropsRNG runs the RMMV drop probability table with an injectable RNG.
+// If rng is nil, uses the global math/rand.
+func CalculateDropsRNG(enemy *resource.Enemy, rng *rand.Rand) []DropResult {
+	intn := rand.Intn
+	if rng != nil {
+		intn = rng.Intn
+	}
 	var results []DropResult
 	for _, d := range enemy.DropItems {
 		if d.Kind == 0 {
@@ -24,7 +35,7 @@ func CalculateDrops(enemy *resource.Enemy) []DropResult {
 		if d.Denominator <= 0 {
 			continue
 		}
-		if rand.Intn(d.Denominator) == 0 {
+		if intn(d.Denominator) == 0 {
 			results = append(results, DropResult{
 				ItemType: d.Kind,
 				ItemID:   d.DataID,

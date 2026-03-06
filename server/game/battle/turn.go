@@ -60,9 +60,10 @@ func (DefaultTurnManager) MakeActionOrder(actors, enemies []Battler, rng *rand.R
 }
 
 // speed returns the action speed modifier (from skill/item).
-// Returns 0 if no action is set.
+// RMMV guard has speed 2000 (always goes first).
 func (a *Action) speed() int {
-	// Speed modifiers will be populated when the action is created
-	// from skill/item data. For now, return 0.
-	return 0
+	if a.Type == ActionGuard {
+		return 2000
+	}
+	return a.SpeedMod
 }

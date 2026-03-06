@@ -26,8 +26,8 @@ func CalcStats(char *model.Character, res *resource.ResourceLoader, equips []*re
 			if level < 1 {
 				level = 1
 			}
-			// params[paramIndex][level-1] (0-indexed level)
-			idx := level - 1
+			// RMMV: params[paramID][level] — index 0 is level 0 (unused placeholder).
+			idx := level
 			// Params layout: [paramID][level], paramID: 0=maxHP,1=maxMP,2=atk,3=def,4=mat,5=mdf,6=agi,7=luk
 			safeGet := func(paramID int) int {
 				if paramID >= len(cls.Params) {

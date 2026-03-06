@@ -270,7 +270,7 @@ func NewTestServerWithResources(t *testing.T, dataPath string) *TestServer {
 	templateEventH.RegisterHandlers(wsRouter)
 
 	// Battle session manager
-	battleMgr := apows.NewBattleSessionManager(res, partyMgr, logger)
+	battleMgr := apows.NewBattleSessionManager(db, res, partyMgr, logger)
 	battleMgr.RegisterHandlers(wsRouter)
 
 	// Debug handlers

@@ -33,10 +33,11 @@ func MakeEnemyAction(
 		SkillID: selected.SkillID,
 	}
 
-	// Resolve target based on skill scope.
+	// Resolve target and speed based on skill scope.
 	if res != nil {
 		skill := res.SkillByID(selected.SkillID)
 		if skill != nil {
+			action.SpeedMod = skill.Speed
 			action.TargetIndices, action.TargetIsActor = resolveAITarget(skill.Scope, enemy, actors, enemies, rng)
 		} else {
 			// Unknown skill → attack random actor.
