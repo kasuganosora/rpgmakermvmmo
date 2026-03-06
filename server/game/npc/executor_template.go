@@ -4,12 +4,18 @@ package npc
 import (
 	"context"
 	"encoding/json"
+	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/player"
 	"github.com/kasuganosora/rpgmakermvmmo/server/resource"
 	"go.uber.org/zap"
+)
+
+var (
+	reSvRef = regexp.MustCompile(`(?i)\\sv\[(\d+)\]`)
+	reVRef  = regexp.MustCompile(`(?i)\\v\[(\d+)\]`)
 )
 
 // handleTECallOriginEvent 检查插件指令（代码 356）是否为 TemplateEvent.js 需服务端处理的指令。
@@ -77,11 +83,12 @@ func (e *Executor) teCallOriginEvent(ctx context.Context, s *player.PlayerSessio
 		return true
 	}
 
-	// 可选的页面索引参数（默认为 0）
+	// TemplateEvent.js 使用 1 起始页面索引：pages[pageIndex - 1 || _pageIndex]
+	// arg=0 或缺省 → page 0；arg=1 → page 0（JS 中 0 为 falsy）；arg≥2 → page arg-1
 	pageIdx := 0
 	if len(args) > 0 {
-		if idx, err := strconv.Atoi(args[0]); err == nil && idx >= 0 {
-			pageIdx = idx
+		if idx, err := strconv.Atoi(args[0]); err == nil && idx >= 2 {
+			pageIdx = idx - 1
 		}
 	}
 	if pageIdx >= len(mapEvent.OriginalPages) {
@@ -107,10 +114,10 @@ func (e *Executor) teCallOriginEvent(ctx context.Context, s *player.PlayerSessio
 // 格式："TE_CALL_MAP_EVENT 模板名称 页面索引"（页面索引为 1 起始，与 TemplateEvent.js 一致）。
 func (e *Executor) teCallMapEvent(ctx context.Context, s *player.PlayerSession, args []string, opts *ExecuteOpts, depth int) bool {
 	if len(args) < 1 {
-		e.logger.Warn("TE_CALL_MAP_EVENT: missing template name")
+		e.logger.Warn("TE_CALL_MAP_EVENT: missing template name/id")
 		return true
 	}
-	tmplName := args[0]
+	tmplNameOrID := args[0]
 	pageIdx := 0
 	if len(args) > 1 {
 		if idx, err := strconv.Atoi(args[1]); err == nil && idx >= 0 {
@@ -118,33 +125,43 @@ func (e *Executor) teCallMapEvent(ctx context.Context, s *player.PlayerSession, 
 		}
 	}
 
-	// 在所有地图中按名称搜索模板事件
+	// TemplateEvent.js: 先按数值 eventId 查找当前地图，再按名称查找当前地图
 	var tmplEvent *resource.MapEvent
-	for _, md := range e.res.Maps {
-		if md == nil {
-			continue
-		}
-		for _, ev := range md.Events {
-			if ev != nil && ev.Name == tmplName {
-				tmplEvent = ev
-				break
+	if opts != nil && opts.MapID > 0 {
+		md := e.res.Maps[opts.MapID]
+		if md != nil {
+			// 尝试按数值 ID 查找
+			if numID, err := strconv.Atoi(tmplNameOrID); err == nil && numID > 0 {
+				for _, ev := range md.Events {
+					if ev != nil && ev.ID == numID {
+						tmplEvent = ev
+						break
+					}
+				}
 			}
-		}
-		if tmplEvent != nil {
-			break
+			// 按名称查找
+			if tmplEvent == nil {
+				for _, ev := range md.Events {
+					if ev != nil && ev.Name == tmplNameOrID {
+						tmplEvent = ev
+						break
+					}
+				}
+			}
 		}
 	}
 
 	if tmplEvent == nil {
 		e.logger.Warn("TE_CALL_MAP_EVENT: template not found",
-			zap.String("name", tmplName))
+			zap.String("name", tmplNameOrID))
 		return true
 	}
 
-	// TemplateEvent.js 插件指令中页面索引为 1 起始，数组为 0 起始
-	arrayIdx := pageIdx - 1
-	if arrayIdx < 0 {
-		arrayIdx = 0
+	// TemplateEvent.js 使用 1 起始页面索引：pages[pageIndex - 1 || _pageIndex]
+	// arg=0 或缺省 → page 0；arg=1 → page 0（JS 中 0 为 falsy）；arg≥2 → page arg-1
+	arrayIdx := 0
+	if pageIdx >= 2 {
+		arrayIdx = pageIdx - 1
 	}
 	if arrayIdx >= len(tmplEvent.Pages) {
 		arrayIdx = 0
@@ -156,7 +173,7 @@ func (e *Executor) teCallMapEvent(ctx context.Context, s *player.PlayerSession, 
 	}
 
 	e.logger.Info("TE_CALL_MAP_EVENT: executing template page",
-		zap.String("template", tmplName),
+		zap.String("template", tmplNameOrID),
 		zap.Int("page_idx", arrayIdx),
 		zap.Int("cmd_count", len(page.List)))
 
@@ -203,7 +220,8 @@ func (e *Executor) teSetSelfVariable(s *player.PlayerSession, args []string, opt
 	if err != nil {
 		return true
 	}
-	operand, err := strconv.Atoi(args[2])
+	// TemplateEvent.js convertAllSelfVariables: 解析 \sv[N] 和 \v[N] 引用
+	operand, err := e.resolveTEOperand(args[2], opts)
 	if err != nil {
 		return true
 	}
@@ -250,7 +268,7 @@ func (e *Executor) teSetRangeSelfVariable(s *player.PlayerSession, args []string
 	if err != nil {
 		return true
 	}
-	operand, err := strconv.Atoi(args[3])
+	operand, err := e.resolveTEOperand(args[3], opts)
 	if err != nil {
 		return true
 	}
@@ -282,6 +300,24 @@ func (e *Executor) sendSelfVarChange(s *player.PlayerSession, mapID, eventID, in
 		"value":    value,
 	})
 	s.Send(&player.Packet{Type: "self_var_change", Payload: payload})
+}
+
+// resolveTEOperand 解析 TE 操作数，支持 \sv[N]（独立变量引用）和 \v[N]（游戏变量引用）。
+// 对应 TemplateEvent.js 的 convertAllSelfVariables 行为。
+func (e *Executor) resolveTEOperand(raw string, opts *ExecuteOpts) (int, error) {
+	if opts != nil && opts.GameState != nil {
+		// \sv[N] → 独立变量值
+		if m := reSvRef.FindStringSubmatch(raw); len(m) == 2 {
+			idx, _ := strconv.Atoi(m[1])
+			return opts.GameState.GetSelfVariable(opts.MapID, opts.EventID, idx), nil
+		}
+		// \v[N] → 游戏变量值
+		if m := reVRef.FindStringSubmatch(raw); len(m) == 2 {
+			idx, _ := strconv.Atoi(m[1])
+			return opts.GameState.GetVariable(idx), nil
+		}
+	}
+	return strconv.Atoi(raw)
 }
 
 // operateSelfVariable 对独立变量执行算术操作。
