@@ -472,6 +472,13 @@ func (room *MapRoom) GetNPC(eventID int) *NPCRuntime {
 	return nil
 }
 
+// AddNPC appends an NPC to the room (used by tests and dynamic spawning).
+func (room *MapRoom) AddNPC(npc *NPCRuntime) {
+	room.mu.Lock()
+	defer room.mu.Unlock()
+	room.npcs = append(room.npcs, npc)
+}
+
 // iconOnEventRegex matches YEP_IconsOnEvents comment tags: <Icon on Event: N>
 var iconOnEventRegex = regexp.MustCompile(`(?i)<Icon On Event:\s*(\d+)>`)
 
@@ -924,6 +931,20 @@ func (room *MapRoom) GetAutorunNPCsForPlayer(state GameStateReader) []*NPCRuntim
 	for _, n := range room.npcs {
 		page := selectPage(n.MapEvent, room.MapID, state)
 		if page != nil && page.Trigger == 3 && len(page.List) > 1 {
+			result = append(result, n)
+		}
+	}
+	return result
+}
+
+// GetParallelNPCsForPlayer returns NPCs whose per-player active page has trigger=4.
+func (room *MapRoom) GetParallelNPCsForPlayer(state GameStateReader) []*NPCRuntime {
+	room.mu.RLock()
+	defer room.mu.RUnlock()
+	var result []*NPCRuntime
+	for _, n := range room.npcs {
+		page := selectPage(n.MapEvent, room.MapID, state)
+		if page != nil && page.Trigger == 4 && len(page.List) > 1 {
 			result = append(result, n)
 		}
 	}

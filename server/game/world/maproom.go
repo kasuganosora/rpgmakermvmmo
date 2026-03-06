@@ -36,8 +36,11 @@ type DropRuntimeEntry struct {
 // MapRoom manages a single map instance with its own game loop.
 type MapRoom struct {
 	MapID           int
-	mapWidth        int // map width in tiles (for NPC bounds when passMap is nil)
-	mapHeight       int // map height in tiles
+	IsInstance      bool  // true if this is a private instance room
+	InstanceID      int64 // unique instance ID (0 for shared rooms)
+	OwnerID         int64 // charID of instance creator/party leader
+	mapWidth        int   // map width in tiles (for NPC bounds when passMap is nil)
+	mapHeight       int   // map height in tiles
 	players         map[int64]*player.PlayerSession
 	npcs            []*NPCRuntime
 	monsters        []*MonsterInstance           // client-visible snapshot list

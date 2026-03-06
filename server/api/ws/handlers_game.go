@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/battle"
+	"github.com/kasuganosora/rpgmakermvmmo/server/game/party"
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/player"
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/world"
 	"github.com/kasuganosora/rpgmakermvmmo/server/model"
@@ -27,6 +28,9 @@ type AutorunFunc func(s *player.PlayerSession, mapID int)
 // that has no top-level transfer command (requires full executor execution).
 type TouchEventFunc func(s *player.PlayerSession, mapID, x, y int)
 
+// ParallelFunc is called after a player enters a map to start parallel events.
+type ParallelFunc func(s *player.PlayerSession, mapID int, gen uint64)
+
 // GameHandlers bundles the dependencies needed by in-game WS message handlers.
 type GameHandlers struct {
 	db           *gorm.DB
@@ -36,6 +40,8 @@ type GameHandlers struct {
 	logger       *zap.Logger
 	autorunFn    AutorunFunc    // called after entering a map to execute autorun events
 	touchEventFn TouchEventFunc // called when player steps on a touch-trigger event
+	parallelFn   ParallelFunc   // called after entering a map to start parallel events
+	partyMgr     *party.Manager // party manager for instance map support
 }
 
 // NewGameHandlers creates a new GameHandlers.
@@ -53,6 +59,16 @@ func (gh *GameHandlers) SetTouchEventFunc(fn TouchEventFunc) {
 	gh.touchEventFn = fn
 }
 
+// SetParallelFunc sets the callback for starting parallel map events when a player enters a map.
+func (gh *GameHandlers) SetParallelFunc(fn ParallelFunc) {
+	gh.parallelFn = fn
+}
+
+// SetPartyManager sets the party manager used for party instance lookups.
+func (gh *GameHandlers) SetPartyManager(pm *party.Manager) {
+	gh.partyMgr = pm
+}
+
 // RegisterHandlers registers all in-game handlers on the given Router.
 func (gh *GameHandlers) RegisterHandlers(r *Router) {
 	r.On("ping", gh.HandlePing)
@@ -60,6 +76,7 @@ func (gh *GameHandlers) RegisterHandlers(r *Router) {
 	r.On("player_move", gh.HandleMove)
 	r.On("map_transfer", gh.HandleMapTransfer)
 	r.On("reset_pos", gh.HandleResetPos)
+	r.On("client_log", gh.HandleClientLog)
 }
 
 // ------------------------------------------------------------------ ping
@@ -248,7 +265,7 @@ func (gh *GameHandlers) HandleMove(_ context.Context, s *player.PlayerSession, r
 		"state":     "normal",
 	})
 	syncPkt, _ := json.Marshal(&player.Packet{Type: "player_sync", Payload: syncPayload})
-	room := gh.wm.Get(s.MapID)
+	room := gh.wm.GetPlayerRoom(s)
 	if room != nil {
 		room.BroadcastExcept(syncPkt, s.CharID)
 	}
@@ -259,10 +276,12 @@ func (gh *GameHandlers) HandleMove(_ context.Context, s *player.PlayerSession, r
 	// must detect and execute map transfers.
 	if room != nil {
 		td := gh.getTransferForPlayer(s, room, req.X, req.Y)
-		if td != nil && td.MapID > 0 {
+		if td != nil && td.MapID > 0 &&
+			!(td.MapID == s.MapID && td.X == req.X && td.Y == req.Y) {
 			// Use exact coordinates from the map maker — do NOT adjust with
 			// findNearestPassable. The BFS ring search ignores walls and can
 			// place the player on the wrong side of a wall.
+			// Skip if destination == current position (prevents infinite loop).
 			destDir := td.Dir
 			if destDir <= 0 {
 				destDir = dir
@@ -418,7 +437,7 @@ func (gh *GameHandlers) HandleResetPos(_ context.Context, s *player.PlayerSessio
 		"state":   "normal",
 	})
 	syncPkt, _ := json.Marshal(&player.Packet{Type: "player_sync", Payload: syncPayload})
-	if room := gh.wm.Get(s.MapID); room != nil {
+	if room := gh.wm.GetPlayerRoom(s); room != nil {
 		room.BroadcastExcept(syncPkt, s.CharID)
 	}
 
@@ -473,7 +492,7 @@ func (gh *GameHandlers) TransferPlayer(s *player.PlayerSession, mapID, x, y, dir
 			"state":   "normal",
 		})
 		syncPkt, _ := json.Marshal(&player.Packet{Type: "player_sync", Payload: syncPayload})
-		if room := gh.wm.Get(s.MapID); room != nil {
+		if room := gh.wm.GetPlayerRoom(s); room != nil {
 			room.BroadcastExcept(syncPkt, s.CharID)
 		}
 
@@ -505,8 +524,23 @@ func (gh *GameHandlers) EnterMapRoom(s *player.PlayerSession, mapID, x, y, dir i
 	// Clear NPC channels to prevent stale dialog acks from previous map.
 	s.ClearNPCChannels()
 
-	// Join the target MapRoom.
-	room := gh.wm.GetOrCreate(mapID)
+	// Check if this map is an instance map (tagged with <instance> in map Note).
+	var room *world.MapRoom
+	instCfg := gh.getInstanceConfig(mapID)
+	if instCfg.Enabled {
+		ownerID := s.CharID
+		if instCfg.Party && gh.partyMgr != nil {
+			if p := gh.partyMgr.GetParty(s.CharID); p != nil {
+				ownerID = p.LeaderID
+			}
+		}
+		var instID int64
+		room, instID = gh.wm.GetOrCreateInstance(mapID, ownerID)
+		s.InstanceID = instID
+	} else {
+		room = gh.wm.GetOrCreate(mapID)
+		s.InstanceID = 0
+	}
 	room.AddPlayer(s)
 
 	// Push map_init to the joining player.
@@ -719,10 +753,11 @@ func (gh *GameHandlers) EnterMapRoom(s *player.PlayerSession, mapID, x, y, dir i
 		zap.Int64("char_id", s.CharID),
 		zap.Int("map_id", mapID))
 
+	gen := s.IncrMapGen()
+
 	// Execute autorun events (trigger=3) for this player on the new map.
 	if gh.autorunFn != nil {
 		autorunFn := gh.autorunFn
-		gen := s.IncrMapGen()
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
@@ -740,6 +775,22 @@ func (gh *GameHandlers) EnterMapRoom(s *player.PlayerSession, mapID, x, y, dir i
 				return
 			}
 			autorunFn(s, mapID)
+		}()
+	}
+
+	// Start parallel map events (trigger=4) independently from autoruns.
+	if gh.parallelFn != nil {
+		parallelFn := gh.parallelFn
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					gh.logger.Error("parallel event launcher panic",
+						zap.Int64("char_id", s.CharID),
+						zap.Int("map_id", mapID),
+						zap.Any("panic", r))
+				}
+			}()
+			parallelFn(s, mapID, gen)
 		}()
 	}
 }
@@ -783,8 +834,9 @@ func (gh *GameHandlers) findNearestPassable(mapID, x, y int) (int, int) {
 // ------------------------------------------------------------------ helpers
 
 // leaveMap removes the player from their current map room and broadcasts player_leave.
+// If the player was in an instance room, it is destroyed when empty (unless save mode).
 func leaveMap(s *player.PlayerSession, wm *world.WorldManager, logger *zap.Logger) {
-	room := wm.Get(s.MapID)
+	room := wm.GetPlayerRoom(s)
 	if room == nil {
 		return
 	}
@@ -793,6 +845,13 @@ func leaveMap(s *player.PlayerSession, wm *world.WorldManager, logger *zap.Logge
 	leavePayload, _ := json.Marshal(map[string]interface{}{"char_id": s.CharID})
 	leavePkt, _ := json.Marshal(&player.Packet{Type: "player_leave", Payload: leavePayload})
 	room.Broadcast(leavePkt)
+
+	// Clean up instance room if empty.
+	if s.InstanceID > 0 {
+		instID := s.InstanceID
+		s.InstanceID = 0
+		wm.DestroyInstance(instID) // no-op if players remain (party instance)
+	}
 
 	logger.Info("player left map",
 		zap.Int64("char_id", s.CharID),
@@ -816,6 +875,120 @@ func sendMoveReject(s *player.PlayerSession) {
 	s.Send(&player.Packet{Type: "move_reject", Payload: payload})
 }
 
+// getInstanceConfig returns the instance configuration for a map.
+func (gh *GameHandlers) getInstanceConfig(mapID int) world.InstanceConfig {
+	if gh.res == nil {
+		return world.InstanceConfig{}
+	}
+	md, ok := gh.res.Maps[mapID]
+	if !ok {
+		return world.InstanceConfig{}
+	}
+	return world.ParseInstanceConfig(md.Note)
+}
+
+// EnterInstanceMidEvent switches the player to an instance of the current map
+// without interrupting the running event. Called by the executor's EnterInstance
+// plugin command. Sends instance_enter to the client with fresh NPC state.
+func (gh *GameHandlers) EnterInstanceMidEvent(s *player.PlayerSession) {
+	if s.InstanceID > 0 {
+		return // already in an instance
+	}
+	mapID := s.MapID
+
+	// Remove from shared room.
+	if room := gh.wm.GetPlayerRoom(s); room != nil {
+		room.RemovePlayer(s.CharID)
+		// Broadcast player_leave to remaining players.
+		leavePayload, _ := json.Marshal(map[string]interface{}{"char_id": s.CharID})
+		leavePkt, _ := json.Marshal(&player.Packet{Type: "player_leave", Payload: leavePayload})
+		room.Broadcast(leavePkt)
+	}
+
+	// Determine instance owner.
+	ownerID := s.CharID
+	if gh.partyMgr != nil {
+		if p := gh.partyMgr.GetParty(s.CharID); p != nil {
+			ownerID = p.LeaderID
+		}
+	}
+
+	// Create/join instance room.
+	instRoom, instID := gh.wm.GetOrCreateInstance(mapID, ownerID)
+	s.InstanceID = instID
+	instRoom.AddPlayer(s)
+
+	// Send NPC snapshot from the clean instance room to the client.
+	npcSnapshot := gh.npcSnapshotForPlayer(s, instRoom)
+	payload, _ := json.Marshal(map[string]interface{}{
+		"npcs": npcSnapshot,
+	})
+	s.Send(&player.Packet{Type: "instance_enter", Payload: payload})
+
+	gh.logger.Info("player entered instance mid-event",
+		zap.Int64("char_id", s.CharID),
+		zap.Int("map_id", mapID),
+		zap.Int64("instance_id", instID))
+}
+
+// LeaveInstanceMidEvent switches the player back to the shared map room
+// without interrupting the running event. Called by the executor's LeaveInstance
+// plugin command. Sends instance_leave to the client with shared NPC/player state.
+func (gh *GameHandlers) LeaveInstanceMidEvent(s *player.PlayerSession) {
+	if s.InstanceID == 0 {
+		return // not in an instance
+	}
+	instID := s.InstanceID
+	mapID := s.MapID
+
+	// Remove from instance room.
+	if instRoom := gh.wm.GetInstance(instID); instRoom != nil {
+		instRoom.RemovePlayer(s.CharID)
+	}
+
+	// Clear instance state.
+	s.InstanceID = 0
+
+	// Destroy instance if empty.
+	gh.wm.DestroyInstance(instID)
+
+	// Join shared room.
+	sharedRoom := gh.wm.GetOrCreate(mapID)
+	sharedRoom.AddPlayer(s)
+
+	// Send updated NPC + player state from shared room to client.
+	npcSnapshot := gh.npcSnapshotForPlayer(s, sharedRoom)
+	payload, _ := json.Marshal(map[string]interface{}{
+		"npcs":    npcSnapshot,
+		"players": sharedRoom.PlayerSnapshot(),
+	})
+	s.Send(&player.Packet{Type: "instance_leave", Payload: payload})
+
+	// Broadcast player_join to other players in the shared room.
+	x, y, dir := s.Position()
+	joinPayload, _ := json.Marshal(map[string]interface{}{
+		"char_id":    s.CharID,
+		"name":       s.CharName,
+		"walk_name":  s.WalkName,
+		"walk_index": s.WalkIndex,
+		"x":          x,
+		"y":          y,
+		"dir":        dir,
+		"hp":         s.HP,
+		"max_hp":     s.MaxHP,
+		"mp":         s.MP,
+		"max_mp":     s.MaxMP,
+		"buffs":      []interface{}{},
+	})
+	joinPkt, _ := json.Marshal(&player.Packet{Type: "player_join", Payload: joinPayload})
+	sharedRoom.BroadcastExcept(joinPkt, s.CharID)
+
+	gh.logger.Info("player left instance mid-event",
+		zap.Int64("char_id", s.CharID),
+		zap.Int("map_id", mapID),
+		zap.Int64("instance_id", instID))
+}
+
 // npcSnapshotForPlayer returns NPC snapshots using the player's per-player state.
 // Falls back to the global snapshot on error.
 func (gh *GameHandlers) npcSnapshotForPlayer(s *player.PlayerSession, room *world.MapRoom) []map[string]interface{} {
@@ -835,4 +1008,35 @@ func (gh *GameHandlers) getTransferForPlayer(s *player.PlayerSession, room *worl
 		return room.GetTransferAt(x, y)
 	}
 	return room.GetTransferAtForPlayer(x, y, composite)
+}
+
+// ------------------------------------------------------------------ client_log
+
+type clientLogEntry struct {
+	T int64  `json:"t"` // timestamp ms
+	L string `json:"l"` // level: INFO, WARN, ERROR
+	M string `json:"m"` // message
+}
+
+type clientLogPayload struct {
+	Entries []clientLogEntry `json:"entries"`
+}
+
+// HandleClientLog receives batched console log entries from the client debug plugin.
+func (gh *GameHandlers) HandleClientLog(_ context.Context, s *player.PlayerSession, raw json.RawMessage) error {
+	var p clientLogPayload
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil // ignore malformed
+	}
+	for _, e := range p.Entries {
+		switch e.L {
+		case "ERROR":
+			gh.logger.Error("[CLIENT] "+e.M, zap.Int64("char_id", s.CharID))
+		case "WARN":
+			gh.logger.Warn("[CLIENT] "+e.M, zap.Int64("char_id", s.CharID))
+		default:
+			gh.logger.Info("[CLIENT] "+e.M, zap.Int64("char_id", s.CharID))
+		}
+	}
+	return nil
 }

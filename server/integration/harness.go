@@ -258,6 +258,7 @@ func NewTestServerWithResources(t *testing.T, dataPath string) *TestServer {
 	npcH.RegisterHandlers(wsRouter)
 	gh.SetAutorunFunc(npcH.ExecuteAutoruns)
 	gh.SetTouchEventFunc(npcH.ExecuteTouchEvent)
+	gh.SetParallelFunc(npcH.StartParallelEvents)
 
 	tradeH := apows.NewTradeHandlers(db, tradeSvc, sm, logger)
 	tradeH.RegisterHandlers(wsRouter)

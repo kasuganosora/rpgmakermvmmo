@@ -163,7 +163,7 @@ func (svc *SkillService) UseSkill(
 	// Build attack context using real character stats.
 	atkStats := svc.buildAttackerStats(s)
 
-	room := svc.wm.Get(s.MapID)
+	room := svc.wm.GetPlayerRoom(s)
 	if room == nil {
 		return errors.New("not in a map")
 	}

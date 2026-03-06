@@ -160,6 +160,9 @@ func main() {
 	npcH.RegisterHandlers(wsRouter)
 	gh.SetAutorunFunc(npcH.ExecuteAutoruns)
 	gh.SetTouchEventFunc(npcH.ExecuteTouchEvent)
+	gh.SetParallelFunc(npcH.StartParallelEvents)
+	gh.SetPartyManager(partyMgr)
+	npcH.SetInstanceFuncs(gh.EnterInstanceMidEvent, gh.LeaveInstanceMidEvent)
 
 	tradeH := apows.NewTradeHandlers(db, tradeSvc, sm, logger)
 	tradeH.RegisterHandlers(wsRouter)

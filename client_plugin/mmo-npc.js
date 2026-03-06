@@ -82,8 +82,22 @@
         this._npcIconId = data.icon_on_event || 0;
         this._npcIconSprite = null;
         this._npcIconDrawn = false;
-        // 无图像的事件（隐形传送触发器等）设为不可见。
+        // 无图像的事件初始设为不可见（updateVisibility 每帧持续维护此状态）。
         if (!walkName && tileId === 0) this.visible = false;
+    };
+
+    /**
+     * 可见性更新。
+     * RMMV 的 Sprite_Base.update → updateVisibility 每帧重置 visible = true，
+     * 覆盖构造函数和 pageChange 设置的 visible = false。
+     * 此覆写确保无图像事件（隐形触发器等）保持不可见。
+     */
+    Sprite_ServerNPC.prototype.updateVisibility = function () {
+        Sprite_Character.prototype.updateVisibility.call(this);
+        var c = this._character;
+        if (!c._characterName && c._tileId === 0) {
+            this.visible = false;
+        }
     };
 
     /**
@@ -144,8 +158,12 @@
         if (data.dir) c.setDirection(data.dir);
         c._priorityType = data.priority_type != null ? data.priority_type : 1;
         c._stepAnime = !!data.step_anime;
-        c._directionFix = !!data.direction_fix;
-        c._through = !!data.through;
+        // 移动路线执行中时保护 _through 和 _directionFix，
+        // 否则 npc_page_change 会重置 _through=false 导致路线卡死。
+        if (!c._moveRouteForcing) {
+            c._directionFix = !!data.direction_fix;
+            c._through = !!data.through;
+        }
         c._walkAnime = data.walk_anime != null ? data.walk_anime : true;
         // 更新事件图标。
         this._npcIconId = data.icon_on_event || 0;
@@ -248,6 +266,8 @@
             this._container = container;
             this._sprites = {};
             var toAdd = (this._initNPCs || []).concat(this._pending);
+            console.log('[NPCManager] init: _initNPCs=' + (this._initNPCs ? this._initNPCs.length : 'null') +
+                ', _pending=' + this._pending.length + ', toAdd=' + toAdd.length);
             this._initNPCs = null;
             this._pending = [];
             for (var i = 0; i < toAdd.length; i++) {
@@ -261,11 +281,14 @@
          * @param {Array} npcList - NPC 数据数组
          */
         populate: function (npcList) {
+            console.log('[NPCManager] populate: count=' + npcList.length + ', _container=' + !!this._container);
             this._initNPCs = npcList;
             this.clear();
             for (var i = 0; i < npcList.length; i++) {
                 this._addOne(npcList[i]);
             }
+            console.log('[NPCManager] populate done: sprites=' + Object.keys(this._sprites).length +
+                ', pending=' + this._pending.length);
         },
 
         /**
@@ -329,6 +352,16 @@
             });
             this._sprites = {};
             this._pending = [];
+        },
+
+        /**
+         * 完全重置（重新登录时调用）。
+         * 除清除精灵外，还清除容器引用，防止添加到已销毁的旧 tilemap。
+         */
+        reset: function () {
+            this.clear();
+            this._container = null;
+            this._initNPCs = null;
         }
     };
 
@@ -349,6 +382,8 @@
      */
     var _Scene_Map_terminate_npc = Scene_Map.prototype.terminate;
     Scene_Map.prototype.terminate = function () {
+        console.log('[NPCManager] terminate: _initNPCs=' + (NPCManager._initNPCs ? NPCManager._initNPCs.length : 'null') +
+            ', sprites=' + Object.keys(NPCManager._sprites).length);
         var savedNPCs = NPCManager._initNPCs;
         if (!savedNPCs) {
             var saved = [];
@@ -701,6 +736,11 @@
         if ($gameMessage && $gameMessage.isBusy()) {
             $gameMessage.clear();
         }
+        // 标记事件结束：关闭 switch 15（"事件进行中"标志）。
+        // 客户端并行 CE 201 依赖此开关决定是否显示立绘。
+        if ($gameSwitches) {
+            $gameSwitches._data[15] = false;
+        }
     });
 
     /**
@@ -739,8 +779,43 @@
      */
     var SCRIPT_WHITELIST = ['$gameScreen.', 'AudioManager.'];
 
+    // ── Effect Queue ──────────────────────────────────────────
+    // 效果立即同步处理，但设置 12ms 时间预算（约 75% 帧时间）。
+    // 超出预算时将剩余效果推迟到下一帧，防止初始化 CE 链
+    // 一次性发送 100+ 效果导致浏览器主线程冻结。
+    // 正常情况下（每次几个效果）零延迟处理，不影响移动路线同步。
+    var _effectQueue = [];
+    var _effectDraining = false;
+    var EFFECT_TIME_BUDGET = 12; // ms
+
+    function _drainEffectQueue() {
+        var start = performance.now();
+        while (_effectQueue.length) {
+            _executeEffect(_effectQueue.shift());
+            if (performance.now() - start > EFFECT_TIME_BUDGET) {
+                requestAnimationFrame(_drainEffectQueue);
+                return;
+            }
+        }
+        _effectDraining = false;
+    }
+
     $MMO.on('npc_effect', function (data) {
         if (!data) return;
+        if (data.map_id != null && $gameMap && data.map_id !== $gameMap.mapId()) return;
+        _effectQueue.push(data);
+        if (!_effectDraining) {
+            _effectDraining = true;
+            _drainEffectQueue();
+        }
+    });
+
+    // 地图切换时清空队列，防止旧地图效果泄漏到新地图
+    $MMO.on('map_init', function () {
+        _effectQueue.length = 0;
+    });
+
+    function _executeEffect(data) {
         var code = data.code;
         var p = data.params || [];
         var needAck = !!data.wait;
@@ -821,21 +896,25 @@
             var charId = paramInt(p, 0);
             var moveRoute = p[1];
             if (!moveRoute) break;
+            // _applyMoveRoute: 若已在强制路线中（平行事件重复发送），
+            // 直接替换路线而非调用 forceMoveRoute，避免 save/restore 链被污染。
+            var _applyMoveRoute = function (ch) {
+                // 服务端触发的移动路线（code 205）均为剧情演出，
+                // 需要 _through=true 以确保路线完成，避免被地形/NPC 阻挡而卡死。
+                ch._through = true;
+                if (ch._moveRouteForcing) {
+                    ch._moveRoute = moveRoute;
+                    ch._moveRouteIndex = 0;
+                } else {
+                    ch.forceMoveRoute(moveRoute);
+                }
+            };
             if (charId === -1 && $gamePlayer) {
-                // 强制玩家角色执行移动路线。
-                // 服务端已验证移动合法性，设置 through=true 绕过客户端通行检查，
-                // 防止不可通行地块导致 skippable=false 路线永久卡死。
-                $gamePlayer._through = true;
-                $gamePlayer.forceMoveRoute(moveRoute);
+                _applyMoveRoute($gamePlayer);
             } else if (charId > 0) {
-                // NPC 移动路线：找到 NPC 精灵并应用到其角色对象。
                 var npcSprite = NPCManager.get(charId);
                 if (npcSprite && npcSprite._character) {
-                    // NPC 精灵使用裸 Game_Character（非 Game_Event），
-                    // 地图通行检查会导致 moveStraight 失败 → 路线卡死。
-                    // 设置 through=true 绕过通行检查，NPC 位置由服务器权威管理。
-                    npcSprite._character._through = true;
-                    npcSprite._character.forceMoveRoute(moveRoute);
+                    _applyMoveRoute(npcSprite._character);
                 } else if (MMO_CONFIG.debug) {
                     console.warn('[MMO-NPC] 移动路线: 未找到 event_id=' + charId + ' 的 NPC 精灵');
                 }
@@ -1032,6 +1111,10 @@
             if (pluginCmd) {
                 var args = pluginCmd.split(' ');
                 var command = args.shift();
+                // 过滤立绘/演出指令（依赖复杂客户端状态，服务端不应转发）
+                // EraceStand/EraceCutin 需要放行以清除客户端立绘。
+                var _blocked = ['CallStand','CallCutin','CallAM'];
+                if (_blocked.indexOf(command) >= 0) break;
                 // 创建 Game_Interpreter 实例以便插件覆写
                 // （MPP_ChoiceEX、YEP_MessageCore 等）能访问其方法。
                 try {
@@ -1105,25 +1188,34 @@
             case 209: // 等待移动路线
                 (function () {
                     var cid = paramInt(p, 0);
+                    // 恢复 _through 的公共函数（正常完成和超时均需调用）
+                    var _resetThrough = function () {
+                        if (cid === -1 && $gamePlayer) {
+                            $gamePlayer._through = false;
+                        } else {
+                            var nch = _npcChar(cid);
+                            if (nch) nch._through = false;
+                        }
+                    };
                     setTimeout(function () {
                         _pollEffectAck(function () {
                             var ch = (cid === -1) ? $gamePlayer : _npcChar(cid);
                             if (!ch || !ch.isMoveRouteForcing()) {
-                                // 路线完成，恢复玩家通行检查
-                                if (cid === -1 && $gamePlayer) {
-                                    $gamePlayer._through = false;
-                                }
+                                _resetThrough();
                                 return true;
                             }
                             return false;
                         }, function () {
-                            // 玩家移动路线结束时附带最终位置，让服务器同步。
-                            // 移动路线期间 player_move 被跳过，需要通过 ack 补偿位置。
+                            // 移动路线结束时附带最终位置，让服务器同步。
                             if (cid === -1 && $gamePlayer) {
                                 return { x: $gamePlayer._x, y: $gamePlayer._y, dir: $gamePlayer._direction };
                             }
+                            var nch = _npcChar(cid);
+                            if (nch) {
+                                return { npc_id: cid, x: nch._x, y: nch._y, dir: nch._direction };
+                            }
                             return {};
-                        });
+                        }, _resetThrough); // 超时时也恢复 _through
                     }, 33);
                 })();
                 break;
@@ -1133,7 +1225,7 @@
                 break;
             }
         }
-    });
+    }
 
     /**
      * 按帧数延时发送 effect ack。
@@ -1152,12 +1244,19 @@
      * @param {Function} checkFn - 条件函数，返回 true 表示效果已完成
      * @param {Function} [ackDataFn] - 可选，返回附加到 ack 的数据（如移动路线结束后的玩家位置）
      */
-    function _pollEffectAck(checkFn, ackDataFn) {
+    function _pollEffectAck(checkFn, ackDataFn, timeoutFn) {
         var elapsed = 0;
         var pollId = setInterval(function () {
             elapsed += 16;
-            if (checkFn() || elapsed > 30000) {
+            if (checkFn()) {
                 clearInterval(pollId);
+                var data = (typeof ackDataFn === 'function') ? ackDataFn() : {};
+                $MMO.send('npc_effect_ack', data);
+            } else if (elapsed > 30000) {
+                // 安全超时：checkFn 未通过但不能永远阻塞。
+                // 执行超时回调清理状态（如恢复 _through）。
+                clearInterval(pollId);
+                if (typeof timeoutFn === 'function') timeoutFn();
                 var data = (typeof ackDataFn === 'function') ? ackDataFn() : {};
                 $MMO.send('npc_effect_ack', data);
             }
@@ -1213,6 +1312,36 @@
     /** 连接断开时清除所有 NPC 精灵。 */
     $MMO.on('_disconnected', function () {
         NPCManager.clear();
+    });
+
+    /**
+     * instance_enter — 进入副本实例（事件执行中）。
+     * 服务端发送干净的 NPC 列表，替换当前 NPC 精灵。
+     * 同时隐藏所有其他玩家（副本中只有自己）。
+     */
+    $MMO.on('instance_enter', function (data) {
+        var npcs = data.npcs || [];
+        NPCManager.populate(npcs);
+        if (window.OtherPlayerManager) {
+            OtherPlayerManager.clear();
+        }
+    });
+
+    /**
+     * instance_leave — 离开副本实例（事件执行中）。
+     * 服务端发送共享地图的 NPC 和玩家列表，恢复正常状态。
+     */
+    $MMO.on('instance_leave', function (data) {
+        var npcs = data.npcs || [];
+        NPCManager.populate(npcs);
+        if (window.OtherPlayerManager && data.players) {
+            OtherPlayerManager.clear();
+            data.players.forEach(function (p) {
+                if (p.char_id !== $MMO.charID) {
+                    OtherPlayerManager.add(p);
+                }
+            });
+        }
     });
 
     // ═══════════════════════════════════════════════════════════

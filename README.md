@@ -1,137 +1,261 @@
-# RPG Maker MV MMO Server
+# RPG Maker MV MMO Framework
 
-[![Go Version](https://img.shields.io/badge/Go-1.21%2B-blue)](https://golang.org/)
+[![Go Version](https://img.shields.io/badge/Go-1.26-blue)](https://golang.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-> ⚠️ **WARNING: EARLY DEVELOPMENT STAGE** ⚠️  
-> This project is in early alpha stage. APIs may change without notice, database schemas may be modified, and critical bugs may exist. **Not recommended for production use.**
+> **WARNING: EARLY DEVELOPMENT STAGE**
+> APIs may change without notice, database schemas may be modified, and critical bugs may exist. **Not recommended for production use.**
 
 ## What is this?
 
-This is a **Multiplayer Online (MMO) game server** for [RPG Maker MV](https://www.rpgmakerweb.com/products/rpg-maker-mv) games. It transforms single-player RMMV games into real-time multiplayer experiences.
+A **server-authoritative MMO framework** for [RPG Maker MV](https://www.rpgmakerweb.com/products/rpg-maker-mv) games. The server interprets RMMV event commands, manages all game state, and the client acts purely as a renderer — zero RMMV core file modifications, all via prototype hooks.
+
+### Core Architecture: Dual Interpreter
+
+The server executes **all** game logic (event commands, state changes, inventory, battles). The client receives results and renders them. This prevents cheating and ensures consistency across players.
+
+- **A-type commands** (server-only): Switches, variables, gold, items, equipment, transfers, battles
+- **B-type commands** (hybrid): Dialog, choices, move routes — server decides, client renders
+- **C-type commands** (client-render): Screen effects, pictures, sounds — forwarded to client as `npc_effect`
 
 ### Features
 
-- 🎮 **Real-time Multiplayer**: Players can see and interact with each other on the same maps
-- ⚔️ **Battle System**: Server-authoritative damage calculation with buff/debuff support
-- 💬 **Chat System**: Global, party, and nearby chat with cooldown management
-- 🤝 **Party System**: Form parties (up to 4 players) with shared experience
-- 🏪 **Trade System**: Secure player-to-player item and gold trading
-- 🏰 **Guild System**: Create and manage guilds with notices
-- 📦 **Inventory Management**: Full inventory system with equipment slots
-- 📬 **Mail System**: Send items and messages between players
-- 🗺️ **Map System**: Seamless map transfers with passability validation
-- 🤖 **NPC Events**: Server-side execution of RMMV event commands
-- 🛡️ **Anti-cheat**: Speed hack detection, movement validation
+- **Server-Authoritative Event Execution**: Full RMMV event command interpreter (90+ command codes)
+- **TemplateEvent.js Support**: `<TE:name/id>` resolution, OverrideTarget, self-variables, `\TE{cond}` page conditions
+- **Parallel Event Sync**: All parallel events (trigger=4) run in a single goroutine with frame-perfect synchronization
+- **Battle System**: Server-authoritative damage calculation with buff/debuff, escape, and class transformation
+- **Player State Isolation**: Per-player switches, variables, party, actors via PlayerStateVM
+- **Real-time Multiplayer**: Players see each other on maps with position sync and anti-cheat
+- **Chat/Party/Trade/Guild**: Full social systems with cooldown management
+- **Inventory & Equipment**: Persistent inventory with 14-slot equipment system
+- **Anti-cheat**: Speed hack detection, movement validation, EventMu locking
 
-### Architecture
+### Architecture Diagram
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Client (RMMV Game)                       │
-│              with MMO Client Plugin                         │
-└────────────────────┬────────────────────────────────────────┘
-                     │ WebSocket / HTTP
-                     ▼
-┌─────────────────────────────────────────────────────────────┐
-│                      MMO Server (Go)                        │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐    │
-│  │ REST API │  │  WebSocket│  │  Game    │  │  World   │    │
-│  │ (Gin)    │  │  Handler  │  │  Logic   │  │  Manager │    │
-│  └──────────┘  └──────────┘  └──────────┘  └──────────┘    │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐    │
-│  │  Battle  │  │  Party   │  │  Trade   │  │   Chat   │    │
-│  │  System  │  │  Manager │  │  Service │  │ Handler  │    │
-│  └──────────┘  └──────────┘  └──────────┘  └──────────┘    │
-└────────────────────┬────────────────────────────────────────┘
-                     │
-         ┌───────────┴───────────┐
-         ▼                       ▼
-┌─────────────────┐    ┌─────────────────┐
-│   Database      │    │     Cache       │
-│ (SQLite/MySQL/  │    │ (Redis/Local)   │
-│  Embedded XML)  │    │                 │
-└─────────────────┘    └─────────────────┘
+Client (RMMV + MMO Plugin)          Server (Go)
+========================           ==========================
+mmo-core.js    (WS, sync)         api/ws/     (WebSocket handlers)
+mmo-npc.js     (dialog, effects)  game/npc/   (event executor)
+mmo-battle.js  (battle render)    game/battle/(damage calc)
+mmo-party.js   (party UI)        game/world/ (map rooms, NPC runtime)
+mmo-trade.js   (trade UI)        game/player/(session, state VM)
+mmo-chat.js    (chat UI)         resource/   (RMMV data loader)
+...17 plugin files total          ...54 test files
+        │                                │
+        │◄──── WebSocket ────►│
+        │                                │
+        │  npc_dialog, npc_effect,       │
+        │  map_init, battle_*,           │
+        │  var_change, switch_change     │
+        │                                │
+                                  ┌──────┴──────┐
+                                  │  Database   │
+                                  │ SQLite/MySQL│
+                                  └─────────────┘
 ```
 
 ## Requirements
 
-- **Go**: 1.21 or higher
-- **RPG Maker MV**: A valid RMMV project (for game data)
+- **Go**: 1.26+
+- **RPG Maker MV**: A valid RMMV project (the `www` folder with data files)
 - **Database**: SQLite (default) or MySQL 5.7+/8.0+
 - **Cache** (optional): Redis 6.0+ or local cache
 
 ## Quick Start
 
-### 1. Installation
+### 1. Build
 
 ```bash
-# Clone the repository
-git clone <repository-url>
 cd mmo/server
-
-# Download dependencies
 go mod download
-
-# Build the server
 go build -o mmo-server.exe
 ```
 
-### 2. Configuration
-
-Copy the example configuration file and modify it for your environment:
+### 2. Configure
 
 ```bash
 cp config/config.yaml config/my-config.yaml
 ```
 
-Edit `config/my-config.yaml`:
+Key settings in `config/my-config.yaml`:
 
 ```yaml
 server:
-  port: 8080                    # Server port
-  debug: true                   # Debug mode (disable in production)
-  admin_key: "your-secret-key"  # Admin API key (change this!)
-  game_dir: "path/to/rmmv/www"  # Path to your RMMV game's www folder
+  port: 8080
+  debug: true
+  admin_key: "your-secret-key"
+  game_dir: "path/to/rmmv/www"    # Path to your RMMV game's www folder
 
 rpgmaker:
-  data_path: "path/to/rmmv/www/data"  # RMMV data files
-  img_path: "path/to/rmmv/www/img"    # RMMV image assets
+  data_path: "path/to/rmmv/www/data"
+  img_path: "path/to/rmmv/www/img"
 
 database:
-  mode: "sqlite"                # Options: sqlite, mysql, embedded_xml, embedded_memory
-  sqlite_path: "./data/game.db" # SQLite database file path
-  # For MySQL, uncomment and configure:
-  # mysql_dsn: "user:password@tcp(127.0.0.1:3306)/rpg_mmo?charset=utf8mb4&parseTime=True"
+  mode: "sqlite"                    # sqlite, mysql, embedded_xml, embedded_memory
+  sqlite_path: "./data/game.db"
 
 security:
-  jwt_secret: "your-jwt-secret-min-32-chars"  # JWT signing secret (must be >= 32 characters)
-  jwt_ttl_h: "72h"                            # JWT token expiration
+  jwt_secret: "your-jwt-secret-min-32-chars"
+  jwt_ttl_h: "72h"
 ```
 
-### 3. Prepare Your RMMV Game
+### 3. Install Client Plugin
 
-1. Copy your RMMV project's `www` folder to a known location
-2. Ensure the game can connect to your server (CORS configuration if needed)
-3. Install the MMO client plugin (if available) in your game's `js/plugins` folder
+Copy the contents of `mmo/client_plugin/` into your RMMV project's `js/plugins/` folder. The loader (`mmo-loader.js`) auto-loads all MMO plugin files. No RMMV core files are modified.
 
-### 4. Run the Server
+### 4. Run
 
 ```bash
-# Using default config path
-./mmo-server.exe
-
-# Or specify custom config
 ./mmo-server.exe config/my-config.yaml
 ```
 
-The server will start on the configured port (default: 8080).
+Access the game at `http://localhost:8080/`.
 
-### 5. Access the Game
+## Server-Side Event Execution
 
-- **Game Client**: Open `http://localhost:8080/` in a browser
-- **API Documentation**: The server exposes REST APIs at `/api/*`
-- **WebSocket Endpoint**: `ws://localhost:8080/ws?token=<jwt>`
+The executor (`game/npc/`) processes RMMV event commands server-side:
+
+| Category | Commands | Server Behavior |
+|----------|----------|-----------------|
+| Dialog | 101/401 (ShowText), 102/402/403 (Choices) | Sends to client, blocks for ack/choice response |
+| Flow Control | 111/411/412 (Conditional), 112/113/413 (Loop), 115 (Exit), 117 (CommonEvent), 118/119 (Label/Jump) | Full server-side evaluation |
+| State | 121 (Switches), 122 (Variables), 123 (SelfSwitch) | Immediate apply + incremental sync to client |
+| Inventory | 125 (Gold), 126 (Items), 127 (Weapons), 128 (Armors) | Persistent DB writes |
+| Actor | 311-322 (HP/MP/State/EXP/Level/Param/Skill/Equip/Name/Class/Image) | Server-authoritative with DB persistence |
+| Battle | 301 (BattleProcessing) | Creates server battle session, client renders |
+| Transfer | 201 (MapTransfer) | Server validates and executes room change |
+| Visual | 205 (MoveRoute), 230 (Wait), 221-225 (Screen effects), 231-235 (Pictures), 241-251 (Audio) | Forwarded as `npc_effect` to client |
+
+### Parallel Events
+
+Parallel events (trigger=4) run in a **single synchronized goroutine** per player, not separate goroutines. This ensures frame-perfect synchronization (e.g., player and NPC walking side-by-side on Map 110).
+
+- Tick interval derived from slowest event's `moveSpeed`
+- Wait frame countdown per event (RMMV-accurate)
+- `map_id` tagging prevents stale effects after map transfer
+- Player speed injection (`ROUTE_CHANGE_SPEED`) for synchronized movement
+
+### Event Tagging
+
+Tag events in RMMV editor notes to control server behavior:
+
+- `<server:global>` — Shared state, all players see the same result
+- `<server:player>` — Per-player state (default), each player gets independent execution
+- `<TE:name>` or `<TE:id>` — TemplateEvent resolution from template map
+
+### TemplateEvent.js Support
+
+Server-side implementation of TemplateEvent.js plugin features:
+
+- Template resolution (`<TE:name/id>`) from template map
+- OverrideTarget with AutoOverride and `<OverRide>` tags
+- Self-variables (indices 0-12 user, 13-17 reserved for RandomPos)
+- `\TE{cond}` page conditions with full expression evaluation
+- `TE_CALL_ORIGIN_EVENT`, `TE_CALL_MAP_EVENT`, `TE_SET_SELF_VARIABLE` plugin commands
+- IntegrateNote, OriginalPages support
+
+## WebSocket Protocol
+
+Connect: `ws://host:port/ws?token=<jwt_token>`
+
+### Client → Server
+
+| Type | Description |
+|------|-------------|
+| `enter_map` | Join map with character selection |
+| `player_move` | Position update (x, y, dir) |
+| `map_transfer` | Request map change |
+| `npc_interact` | Talk to NPC (event_id) |
+| `npc_dialog_ack` | Acknowledge dialog message |
+| `npc_choice` | Choose dialog option |
+| `npc_effect_ack` | Acknowledge visual effect (with optional position sync) |
+| `chat_send` | Send chat message |
+| `party_invite` | Invite to party |
+| `trade_request` | Request trade |
+| `player_skill` | Use skill |
+| `battle_action` | Submit battle command |
+
+### Server → Client
+
+| Type | Description |
+|------|-------------|
+| `map_init` | Full map state (players, NPCs, switches, variables, equipment) |
+| `player_join` / `player_leave` | Player enter/exit map |
+| `player_sync` | Position broadcast |
+| `npc_dialog` | Dialog text with face graphic |
+| `npc_choices` | Choice prompt |
+| `npc_effect` | Visual command to execute (code, params, map_id) |
+| `npc_dialog_end` | Event execution complete |
+| `event_end` | Event interaction ended (including lock rejection) |
+| `var_change` / `switch_change` | Incremental state sync |
+| `battle_start` / `battle_result` | Battle lifecycle |
+| `move_reject` | Movement rejected (anti-cheat) |
+
+## Development
+
+### Running Tests
+
+```bash
+cd mmo/server
+
+# Run all unit tests (no game data required)
+go test ./...
+
+# Run with race detection
+go test -race ./...
+
+# Run specific package tests
+go test -v ./game/npc/         # Event executor + parallel events
+go test -v ./game/battle/      # Battle system
+go test -v ./api/ws/           # WebSocket handlers
+go test -v ./game/world/       # Map rooms, NPC runtime
+
+# Run integration tests (requires ProjectB game data)
+go test -tags=projectb -v -timeout 300s ./integration/ -run TestProjectB
+```
+
+### Project Structure
+
+```
+mmo/
+├── server/                    # Go server (122 source files, 54 test files)
+│   ├── api/
+│   │   ├── rest/              # REST API (auth, characters, admin)
+│   │   ├── sse/               # Server-Sent Events
+│   │   └── ws/                # WebSocket handlers (game, NPC, battle)
+│   ├── game/
+│   │   ├── ai/                # Battle AI
+│   │   ├── battle/            # Damage calculation, buffs, turn management
+│   │   ├── chat/              # Chat system
+│   │   ├── npc/               # Event executor, parallel events, TemplateEvent
+│   │   ├── party/             # Party management
+│   │   ├── player/            # Player sessions, PlayerStateVM
+│   │   ├── quest/             # Quest tracking
+│   │   ├── script/            # Goja JS VM for script evaluation
+│   │   ├── skill/             # Skill system
+│   │   ├── trade/             # Trading system
+│   │   └── world/             # Map rooms, NPC runtime, page selection
+│   ├── model/                 # GORM database models
+│   ├── resource/              # RMMV data loader (maps, actors, items, plugins)
+│   ├── middleware/             # HTTP middleware (JWT, rate limit, CORS)
+│   ├── config/                # Configuration
+│   ├── integration/           # Integration tests (ProjectB flows)
+│   └── main.go
+├── client_plugin/             # RMMV client plugin (17 JS files)
+│   ├── mmo-loader.js          # Auto-loader for all MMO plugins
+│   ├── mmo-core.js            # WebSocket, position sync, state gates
+│   ├── mmo-npc.js             # Dialog rendering, effect execution
+│   ├── mmo-battle.js          # Battle UI bridge
+│   ├── mmo-party.js           # Party UI
+│   ├── mmo-trade.js           # Trade UI
+│   ├── mmo-chat.js            # Chat UI
+│   └── ...
+├── e2e/                       # Playwright E2E tests
+└── docs/                      # Design documents
+    ├── 服务器权威架构改造方案.md
+    └── 游戏设计者使用指南.md
+```
 
 ## Configuration Reference
 
@@ -139,205 +263,41 @@ The server will start on the configured port (default: 8080).
 
 | Mode | Description | Use Case |
 |------|-------------|----------|
-| `sqlite` | File-based SQLite database | Development, small servers |
-| `mysql` | MySQL/MariaDB database | Production, high concurrency |
-| `embedded_xml` | XML file storage (sqlexec) | Testing, legacy compatibility |
-| `embedded_memory` | In-memory only (data lost on restart) | Unit testing |
+| `sqlite` | File-based SQLite | Development, small servers |
+| `mysql` | MySQL/MariaDB | Production, high concurrency |
+| `embedded_xml` | XML file storage | Testing, legacy compatibility |
+| `embedded_memory` | In-memory only | Unit testing |
 
-### Game Configuration
+### Game Settings
 
 ```yaml
 game:
   map_tick_ms: 50              # Map update interval (20 TPS)
-  save_interval_s: 300         # Auto-save interval (seconds)
-  max_party_size: 4            # Maximum party members
-  pvp_enabled: false           # Enable PvP combat
+  save_interval_s: 300         # Auto-save interval
+  max_party_size: 4
+  pvp_enabled: false
   chat_nearby_range: 10        # Nearby chat range (tiles)
-  global_chat_cooldown_s: 180  # Global chat cooldown (seconds)
+  global_chat_cooldown_s: 180
 ```
 
-### Security Configuration
+## Known Limitations
 
-⚠️ **Important**: Change default secrets before deploying!
+1. **Database Schema**: May change between versions without migration
+2. **Plugin Compatibility**: Not all RMMV plugins are supported server-side
+3. **Performance**: Not optimized for >1000 concurrent players
+4. **TemplateEvent.js**: ~95% complete; some client-only features not on server (KeepEventId, message \sv[n] display)
 
-```yaml
-security:
-  jwt_secret: "minimum-32-characters-long-secret-key"
-  jwt_ttl_h: "72h"
-  rate_limit_rps: 100          # Requests per second limit
-  rate_limit_burst: 200        # Burst allowance
-  allowed_origins: []          # CORS origins (empty = allow all in dev)
-```
+## Tech Stack
 
-## API Overview
-
-### Authentication
-
-```bash
-# Login (auto-registers if username doesn't exist)
-POST /api/auth/login
-{"username": "player", "password": "secret"}
-
-# Response
-{"token": "eyJ...", "account_id": 1}
-```
-
-### Characters
-
-```bash
-# List characters
-GET /api/characters
-Authorization: Bearer <token>
-
-# Create character
-POST /api/characters
-{"name": "Hero", "class_id": 1, "walk_name": "Actor1", "face_name": "Actor1"}
-```
-
-### Admin Endpoints (requires `admin_key`)
-
-```bash
-# Get server metrics
-GET /admin/metrics?key=<admin_key>
-
-# List online players
-GET /admin/players?key=<admin_key>
-
-# Kick player
-POST /admin/kick/<char_id>?key=<admin_key>
-```
-
-## WebSocket Protocol
-
-Connect to `ws://host:port/ws?token=<jwt_token>`
-
-### Client → Server Messages
-
-| Type | Description |
-|------|-------------|
-| `enter_map` | Join a map with character |
-| `player_move` | Send movement update |
-| `map_transfer` | Request map change |
-| `chat_send` | Send chat message |
-| `party_invite` | Invite to party |
-| `trade_request` | Request trade |
-| `player_skill` | Use skill |
-
-### Server → Client Messages
-
-| Type | Description |
-|------|-------------|
-| `map_init` | Initial map state |
-| `player_join` | Player entered map |
-| `player_leave` | Player left map |
-| `player_sync` | Position update |
-| `chat_message` | Chat message |
-| `npc_dialog` | NPC dialog text |
-| `trade_request` | Incoming trade request |
-
-## Development
-
-### Running Tests
-
-```bash
-# Run all tests
-go test ./...
-
-# Run with race detection
-go test -race ./...
-
-# Run specific package
-go test ./game/trade/...
-```
-
-### Project Structure
-
-```
-mmo/server/
-├── api/              # HTTP and WebSocket handlers
-│   ├── rest/         # REST API endpoints
-│   ├── sse/          # Server-Sent Events
-│   └── ws/           # WebSocket handlers
-├── game/             # Game logic
-│   ├── battle/       # Damage calculation
-│   ├── npc/          # NPC event execution
-│   ├── party/        # Party management
-│   ├── player/       # Player sessions
-│   ├── skill/        # Skill system
-│   ├── trade/        # Trading system
-│   └── world/        # Map and world state
-├── model/            # Database models
-├── resource/         # RMMV data loading
-├── middleware/       # HTTP middleware
-├── config/           # Configuration
-└── main.go           # Entry point
-```
-
-## Known Limitations & Issues
-
-⚠️ **This is alpha software. Expect breaking changes.**
-
-### Current Limitations
-
-1. **Database Schema**: May change between versions without migration support
-2. **Plugin Compatibility**: Not all RMMV plugins are supported
-3. **Performance**: Not optimized for large-scale deployments (>1000 concurrent players)
-4. **Documentation**: API documentation is incomplete
-5. **Client Plugin**: Client-side plugin is under development
-
-### Planned Features
-
-- [ ] Full RMMV event command support
-- [ ] Instance dungeons
-- [ ] Guild wars
-- [ ] Auction house
-- [ ] Scripting API (Lua/JavaScript)
-- [ ] Web-based admin dashboard
-- [ ] Docker deployment support
-
-## Troubleshooting
-
-### Common Issues
-
-**Q: Server starts but clients can't connect**
-- Check `server.game_dir` points to valid RMMV www folder
-- Verify firewall allows connections on the server port
-- Check browser console for CORS errors
-
-**Q: Database errors on startup**
-- Ensure database directory exists and is writable
-- For SQLite, check disk space
-- For MySQL, verify connection string and permissions
-
-**Q: Movement is jittery or laggy**
-- Check `game.map_tick_ms` setting (lower = more responsive, more CPU)
-- Verify network latency between client and server
-- Check server CPU usage
-
-### Getting Help
-
-- Create an issue in the repository
-- Check existing issues for similar problems
-- Include server logs (run with `debug: true`)
-
-## Contributing
-
-This project is in early development. Contributions are welcome but please note:
-
-1. Large architectural changes should be discussed first
-2. Follow existing code style
-3. Add tests for new features
-4. Update documentation
+- **Server**: Go 1.26, [Gin](https://github.com/gin-gonic/gin), [GORM](https://gorm.io/), [Gorilla WebSocket](https://github.com/gorilla/websocket), [Goja](https://github.com/nicholasgasior/goja) (JS VM), [Zap](https://github.com/uber-go/zap) (logging)
+- **Client**: Vanilla JS (RMMV plugin format), zero core modifications
+- **Auth**: JWT with configurable TTL
+- **Testing**: Go testing + testify, 54 test files, integration tests with real game data
 
 ## License
 
 [MIT License](LICENSE)
 
-## Acknowledgments
-
-- Built with [Gin](https://github.com/gin-gonic/gin), [GORM](https://gorm.io/), and [Gorilla WebSocket](https://github.com/gorilla/websocket)
-- Inspired by the RPG Maker MV community
-
 ---
 
-**⚠️ DISCLAIMER**: This software is provided "as is" without warranty. Use at your own risk in production environments.
+**DISCLAIMER**: This software is provided "as is" without warranty. Use at your own risk in production environments.

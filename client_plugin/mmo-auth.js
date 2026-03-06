@@ -1011,6 +1011,15 @@
         AudioManager.stopBgs();
         AudioManager.stopMe();
 
+        // 清除上次会话的 MMO 状态，防止重新登录时残留数据干扰。
+        $MMO._serverEventActive = false;
+        $MMO._lastSelf = null;
+        if ($MMO._eventSafetyTimer) {
+            clearTimeout($MMO._eventSafetyTimer);
+            $MMO._eventSafetyTimer = null;
+        }
+        if (window.NPCManager) NPCManager.reset();
+
         // 重建所有游戏对象，清除上次会话的残留状态（地图、精灵、变量等）。
         // 不这样做的话，Scene_Map 创建 Spriteset_Map 时会用旧 $gameMap 数据
         // 渲染上一次的地图场景，在 map_init 到达前产生一帧闪现。

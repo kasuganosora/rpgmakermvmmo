@@ -243,11 +243,24 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 			if e.handleTECallOriginEvent(ctx, s, cmd, opts, depth) {
 				continue
 			}
+			pluginStr := paramStr(cmd.Parameters, 0)
+			// 副本地图插件命令：EnterInstance / LeaveInstance
+			if pluginStr == "EnterInstance" {
+				if opts != nil && opts.EnterInstanceFn != nil {
+					opts.EnterInstanceFn(s)
+				}
+				continue
+			}
+			if pluginStr == "LeaveInstance" {
+				if opts != nil && opts.LeaveInstanceFn != nil {
+					opts.LeaveInstanceFn(s)
+				}
+				continue
+			}
 			// 过滤立绘/演出指令（依赖复杂客户端状态，转发会导致视觉异常）
-			if pluginStr := paramStr(cmd.Parameters, 0); strings.HasPrefix(pluginStr, "CallStand") ||
+			// EraceStand/EraceCutin 必须转发以清除客户端并行 CE 显示的立绘。
+			if strings.HasPrefix(pluginStr, "CallStand") ||
 				strings.HasPrefix(pluginStr, "CallCutin") ||
-				strings.HasPrefix(pluginStr, "EraceStand") ||
-				strings.HasPrefix(pluginStr, "EraceCutin") ||
 				strings.HasPrefix(pluginStr, "CallAM") {
 				continue
 			}

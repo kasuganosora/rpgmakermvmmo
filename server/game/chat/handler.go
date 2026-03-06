@@ -138,7 +138,7 @@ func (h *Handler) sendMapWide(s *player.PlayerSession, content string) error {
 		return nil
 	}
 
-	room := h.wm.Get(s.MapID)
+	room := h.wm.GetPlayerRoom(s)
 	if room == nil {
 		return nil
 	}
@@ -153,7 +153,7 @@ func (h *Handler) sendMapWide(s *player.PlayerSession, content string) error {
 
 // sendNearby sends only to players within chat_nearby_range tiles on the same map.
 func (h *Handler) sendNearby(s *player.PlayerSession, content string) error {
-	room := h.wm.Get(s.MapID)
+	room := h.wm.GetPlayerRoom(s)
 	if room == nil {
 		return nil
 	}

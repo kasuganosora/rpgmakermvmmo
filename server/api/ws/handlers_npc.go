@@ -20,7 +20,9 @@ type NPCHandlers struct {
 	wm         *world.WorldManager
 	executor   *npc.Executor
 	logger     *zap.Logger
-	transferFn npc.TransferFunc // server-side map transfer callback
+	transferFn      npc.TransferFunc      // server-side map transfer callback
+	enterInstanceFn npc.EnterInstanceFunc // mid-event instance entry
+	leaveInstanceFn npc.LeaveInstanceFunc // mid-event instance exit
 }
 
 // NewNPCHandlers creates NPCHandlers.
@@ -37,6 +39,12 @@ func NewNPCHandlers(db *gorm.DB, res *resource.ResourceLoader, wm *world.WorldMa
 // SetTransferFunc sets the callback used when NPC events execute Transfer Player (command 201).
 func (h *NPCHandlers) SetTransferFunc(fn npc.TransferFunc) {
 	h.transferFn = fn
+}
+
+// SetInstanceFuncs sets the callbacks for mid-event instance enter/leave.
+func (h *NPCHandlers) SetInstanceFuncs(enter npc.EnterInstanceFunc, leave npc.LeaveInstanceFunc) {
+	h.enterInstanceFn = enter
+	h.leaveInstanceFn = leave
 }
 
 // RegisterHandlers registers NPC-related WS handlers on the router.
@@ -61,7 +69,7 @@ func (h *NPCHandlers) HandleInteract(ctx context.Context, s *player.PlayerSessio
 		return nil
 	}
 
-	room := h.wm.Get(s.MapID)
+	room := h.wm.GetPlayerRoom(s)
 	if room == nil {
 		return nil
 	}
@@ -125,11 +133,12 @@ func (h *NPCHandlers) HandleInteract(ctx context.Context, s *player.PlayerSessio
 	}
 
 	// 防止并发事件：已有事件运行时拒绝新的交互。
-	// 不发送 event_end：已有事件正在运行，其结束时会发送 event_end。
+	// 必须发送 event_end，否则客户端 _serverEventActive 永久卡住。
 	if !s.EventMu.TryLock() {
 		h.logger.Info("npc_interact rejected: player already in event",
 			zap.Int64("char_id", s.CharID),
 			zap.Int("event_id", req.EventID))
+		s.Send(&player.Packet{Type: "event_end"})
 		return nil
 	}
 
@@ -137,7 +146,9 @@ func (h *NPCHandlers) HandleInteract(ctx context.Context, s *player.PlayerSessio
 		GameState:  composite,
 		MapID:      s.MapID,
 		EventID:    req.EventID,
-		TransferFn: h.transferFn,
+		TransferFn:      h.transferFn,
+		EnterInstanceFn: h.enterInstanceFn,
+		LeaveInstanceFn: h.leaveInstanceFn,
 	}
 
 	// Execute in a goroutine so the WS handler returns immediately.
@@ -156,7 +167,7 @@ func (h *NPCHandlers) HandleInteract(ctx context.Context, s *player.PlayerSessio
 		h.sendPageChangesToPlayer(s, room, composite)
 		// 如果执行过程中发生了 Transfer，还需更新新地图的 NPC 页面。
 		if s.MapID != startMapID {
-			if currentRoom := h.wm.Get(s.MapID); currentRoom != nil {
+			if currentRoom := h.wm.GetPlayerRoom(s); currentRoom != nil {
 				if fc, err := h.wm.PlayerStateManager().GetComposite(s.CharID); err == nil {
 					h.sendPageChangesToPlayer(s, currentRoom, fc)
 				}
@@ -216,17 +227,19 @@ func (h *NPCHandlers) HandleDialogAck(_ context.Context, s *player.PlayerSession
 }
 
 // effectAckRequest is the optional payload for npc_effect_ack.
-// When a move route targeting the player completes, the client includes
-// the player's final position so the server can stay in sync.
+// When a move route completes, the client includes the final position so the server stays in sync.
+// For player move routes: x/y/dir update the session position.
+// For NPC move routes: npc_id + x/y/dir update the NPC position in the map room.
 // Pointer fields distinguish "absent" from "zero value".
 type effectAckRequest struct {
-	X   *int `json:"x"`
-	Y   *int `json:"y"`
-	Dir *int `json:"dir"`
+	NPCID *int `json:"npc_id"`
+	X     *int `json:"x"`
+	Y     *int `json:"y"`
+	Dir   *int `json:"dir"`
 }
 
 // HandleEffectAck processes a client's acknowledgment that a visual effect has finished playing.
-// If the ack includes position data (from a player move route), update the session position
+// If the ack includes position data (from a move route), update the relevant position
 // to prevent stale-position issues (speed-hack false positives, wrong passability checks).
 func (h *NPCHandlers) HandleEffectAck(_ context.Context, s *player.PlayerSession, raw json.RawMessage) error {
 	// Parse optional position data from move route ack.
@@ -235,11 +248,25 @@ func (h *NPCHandlers) HandleEffectAck(_ context.Context, s *player.PlayerSession
 		_ = json.Unmarshal(raw, &req)
 	}
 	if req.X != nil && req.Y != nil {
-		dir := s.Dir
-		if req.Dir != nil {
-			dir = *req.Dir
+		if req.NPCID != nil {
+			// NPC move route — update NPC position in map room.
+			if room := h.wm.GetPlayerRoom(s); room != nil {
+				if npc := room.GetNPC(*req.NPCID); npc != nil {
+					npc.X = *req.X
+					npc.Y = *req.Y
+					if req.Dir != nil {
+						npc.Dir = *req.Dir
+					}
+				}
+			}
+		} else {
+			// Player move route — update session position.
+			dir := s.Dir
+			if req.Dir != nil {
+				dir = *req.Dir
+			}
+			s.SetPosition(*req.X, *req.Y, dir)
 		}
-		s.SetPosition(*req.X, *req.Y, dir)
 	}
 
 	select {
@@ -262,7 +289,7 @@ func (h *NPCHandlers) ExecuteAutoruns(s *player.PlayerSession, mapID int) {
 		}
 	}
 
-	room := h.wm.Get(mapID)
+	room := h.wm.GetPlayerRoom(s)
 	if room == nil {
 		sendEventEndIfNeeded()
 		return
@@ -351,10 +378,12 @@ func (h *NPCHandlers) ExecuteAutoruns(s *player.PlayerSession, mapID int) {
 			continue
 		}
 		opts := &npc.ExecuteOpts{
-			GameState:  composite,
-			MapID:      mapID,
-			EventID:    npcInst.EventID,
-			TransferFn: h.transferFn,
+			GameState:       composite,
+			MapID:           mapID,
+			EventID:         npcInst.EventID,
+			TransferFn:      h.transferFn,
+			EnterInstanceFn: h.enterInstanceFn,
+			LeaveInstanceFn: h.leaveInstanceFn,
 		}
 		h.executor.Execute(context.Background(), s, activePage, opts)
 
@@ -370,7 +399,7 @@ func (h *NPCHandlers) ExecuteAutoruns(s *player.PlayerSession, mapID int) {
 	// 这里重新获取 composite（反映 autorun 中设置的最新开关/变量），
 	// 并对玩家当前所在地图发送 page changes。
 	if s.MapID != mapID {
-		currentRoom := h.wm.Get(s.MapID)
+		currentRoom := h.wm.GetPlayerRoom(s)
 		if currentRoom != nil {
 			freshComposite, err := h.wm.PlayerStateManager().GetComposite(s.CharID)
 			if err == nil {
@@ -378,13 +407,100 @@ func (h *NPCHandlers) ExecuteAutoruns(s *player.PlayerSession, mapID int) {
 			}
 		}
 	}
+
+}
+
+// StartParallelEvents 在单个 goroutine 中同步运行所有平行事件（trigger=4）。
+// 所有事件在同一个 tick 中推进，确保帧完美同步（如玩家与 NPC 并排行走）。
+func (h *NPCHandlers) StartParallelEvents(s *player.PlayerSession, mapID int, gen uint64) {
+	// 等待场景加载完成
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-s.Done:
+		return
+	}
+
+	if s.MapID != mapID || s.GetMapGen() != gen {
+		return
+	}
+
+	room := h.wm.GetPlayerRoom(s)
+	if room == nil {
+		return
+	}
+
+	composite, err := h.wm.PlayerStateManager().GetComposite(s.CharID)
+	if err != nil {
+		return
+	}
+
+	parallels := room.GetParallelNPCsForPlayer(composite)
+	if len(parallels) == 0 {
+		return
+	}
+
+	// 收集所有平行事件状态
+	var events []*npc.ParallelEventState
+	for _, npcInst := range parallels {
+		page := room.GetActivePageForPlayer(npcInst.EventID, composite)
+		if page == nil || page.Trigger != 4 || len(page.List) <= 1 {
+			continue
+		}
+		events = append(events, npc.NewParallelEventState(npcInst.EventID, page.List, page.MoveSpeed))
+	}
+	if len(events) == 0 {
+		return
+	}
+
+	h.logger.Info("starting synced parallel events",
+		zap.Int64("char_id", s.CharID),
+		zap.Int("map_id", mapID),
+		zap.Int("count", len(events)))
+
+	// 创建带取消的上下文，监控地图切换和断线
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-s.Done:
+				cancel()
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if s.GetMapGen() != gen {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+
+	opts := &npc.ExecuteOpts{
+		GameState:  composite,
+		MapID:      mapID,
+		TransferFn:      h.transferFn,
+		EnterInstanceFn: h.enterInstanceFn,
+		LeaveInstanceFn: h.leaveInstanceFn,
+	}
+	h.executor.RunParallelEventsSynced(ctx, s, events, opts)
+
+	h.logger.Info("parallel events finished",
+		zap.Int64("char_id", s.CharID),
+		zap.Int("map_id", mapID))
 }
 
 // ExecuteTouchEvent runs a touch-trigger (trigger 1/2) event at (x, y) for a player.
 // Called by GameHandlers.HandleMove when the player steps onto an event that has
 // no top-level transfer command (conditional transfers, dialogs, etc.).
 func (h *NPCHandlers) ExecuteTouchEvent(s *player.PlayerSession, mapID, x, y int) {
-	room := h.wm.Get(mapID)
+	room := h.wm.GetPlayerRoom(s)
 	if room == nil {
 		return
 	}
@@ -415,7 +531,9 @@ func (h *NPCHandlers) ExecuteTouchEvent(s *player.PlayerSession, mapID, x, y int
 		GameState:  composite,
 		MapID:      mapID,
 		EventID:    eventID,
-		TransferFn: h.transferFn,
+		TransferFn:      h.transferFn,
+		EnterInstanceFn: h.enterInstanceFn,
+		LeaveInstanceFn: h.leaveInstanceFn,
 	}
 
 	startMapID := s.MapID
@@ -428,7 +546,7 @@ func (h *NPCHandlers) ExecuteTouchEvent(s *player.PlayerSession, mapID, x, y int
 		h.sendPageChangesToPlayer(s, room, composite)
 
 		if s.MapID != startMapID {
-			if currentRoom := h.wm.Get(s.MapID); currentRoom != nil {
+			if currentRoom := h.wm.GetPlayerRoom(s); currentRoom != nil {
 				if fc, err := h.wm.PlayerStateManager().GetComposite(s.CharID); err == nil {
 					h.sendPageChangesToPlayer(s, currentRoom, fc)
 				}
@@ -446,6 +564,11 @@ func (h *NPCHandlers) ExecuteTouchEvent(s *player.PlayerSession, mapID, x, y int
 // and sends npc_page_change packets only to that player for any NPCs whose
 // per-player page differs from the base (global) page.
 func (h *NPCHandlers) sendPageChangesToPlayer(s *player.PlayerSession, room *world.MapRoom, state world.GameStateReader) {
+	// After a map transfer the player's MapID differs from this room's;
+	// skip sending page changes so stale data doesn't corrupt the new map's NPCs.
+	if room.MapID != s.MapID {
+		return
+	}
 	npcs := room.AllNPCs()
 	for _, npcInst := range npcs {
 		playerPage := room.GetActivePageForPlayer(npcInst.EventID, state)
@@ -465,12 +588,10 @@ func (h *NPCHandlers) sendPageChangesToPlayer(s *player.PlayerSession, room *wor
 				walkName = ""
 				data["tile_id"] = img.TileID
 			}
-			h.logger.Info("npc_page_change",
+			h.logger.Debug("npc_page_change",
 				zap.Int("event_id", npcInst.EventID),
 				zap.String("walk_name", walkName),
-				zap.Int("tile_id", img.TileID),
-				zap.Bool("playerPage_nil", playerPage == nil),
-				zap.Bool("globalPage_nil", npcInst.ActivePage == nil))
+				zap.Int("tile_id", img.TileID))
 			data["walk_name"] = walkName
 			data["walk_index"] = img.CharacterIndex
 			data["priority_type"] = playerPage.PriorityType

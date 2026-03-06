@@ -37,9 +37,10 @@ type PlayerSession struct {
 	ClassID   int
 
 	Conn     *websocket.Conn
-	MapID    int
-	X, Y     int
-	Dir      int // RPG Maker directions: 2=down 4=left 6=right 8=up
+	MapID      int
+	InstanceID int64 // 0 = shared room, >0 = private/party instance ID
+	X, Y       int
+	Dir        int // RPG Maker directions: 2=down 4=left 6=right 8=up
 	HP, MaxHP int
 	MP, MaxMP int
 	Level     int

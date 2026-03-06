@@ -137,15 +137,24 @@ type TransferFunc func(s *player.PlayerSession, mapID, x, y, dir int)
 // BattleFunc 在执行战斗处理指令（301）时由 Executor 调用，创建服务端权威战斗会话。
 type BattleFunc func(ctx context.Context, s *player.PlayerSession, troopID int, canEscape, canLose bool) int
 
+// EnterInstanceFunc 在事件执行中切换玩家到当前地图的副本实例。
+// 事件继续执行，后续 NPC 操作在副本中进行。
+type EnterInstanceFunc func(s *player.PlayerSession)
+
+// LeaveInstanceFunc 在事件执行中将玩家从副本实例切回共享地图。
+type LeaveInstanceFunc func(s *player.PlayerSession)
+
 // ---- 执行选项 ----
 
 // ExecuteOpts 包含 Execute 方法的可选参数。
 type ExecuteOpts struct {
-	GameState  GameStateAccessor // 当前执行的游戏状态访问器
-	MapID      int               // 当前地图 ID
-	EventID    int               // 当前事件 ID
-	TransferFn TransferFunc      // 服务端传送处理器
-	BattleFn   BattleFunc        // 服务端战斗处理器
+	GameState       GameStateAccessor // 当前执行的游戏状态访问器
+	MapID           int               // 当前地图 ID
+	EventID         int               // 当前事件 ID
+	TransferFn      TransferFunc      // 服务端传送处理器
+	BattleFn        BattleFunc        // 服务端战斗处理器
+	EnterInstanceFn EnterInstanceFunc // 进入副本回调
+	LeaveInstanceFn LeaveInstanceFunc // 离开副本回调
 }
 
 // ---- Executor 核心结构体 ----

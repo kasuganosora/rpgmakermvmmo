@@ -236,15 +236,8 @@ func (e *Executor) evaluateCondition(ctx context.Context, s *player.PlayerSessio
 
 	case 12: // 脚本条件
 		script := paramStr(params, 1)
-		result, ok := e.evalScriptCondition(script, opts)
-		if ok {
-			return result
-		}
-		// 脚本引用了服务端不可用的全局对象（$gameActors、$gameParty 等），
-		// 保持向后兼容默认通过。
-		e.logger.Debug("script condition not evaluable server-side, defaulting to true",
-			zap.String("script", truncateStr(script, 80)))
-		return true
+		result, _ := e.evalScriptCondition(script, s, opts)
+		return result
 
 	default:
 		// 类型 3(计时器), 5(敌人), 6(角色方向), 11(按键)

@@ -185,8 +185,7 @@ func TestGetTransferAt_NoActivePage_FallbackFindsTransfer(t *testing.T) {
 	room.npcs = append(room.npcs, npc)
 
 	td := room.GetTransferAt(10, 5)
-	require.NotNil(t, td, "GetTransferAt should fall back to scanning all pages when no active page")
-	assert.Equal(t, 3, td.MapID)
+	assert.Nil(t, td, "GetTransferAt should NOT fall back to inactive pages (prevents transfers from gated events)")
 }
 
 func TestGetTransferAt_ActionButtonTrigger_Skipped(t *testing.T) {

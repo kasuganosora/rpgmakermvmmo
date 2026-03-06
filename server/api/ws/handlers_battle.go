@@ -48,7 +48,7 @@ func (bh *BattleHandlers) HandleAttack(_ context.Context, s *player.PlayerSessio
 		return err
 	}
 
-	room := bh.wm.Get(s.MapID)
+	room := bh.wm.GetPlayerRoom(s)
 	if room == nil {
 		sendError(s, "not in a map")
 		return nil
@@ -275,7 +275,7 @@ func (bh *BattleHandlers) HandlePickup(_ context.Context, s *player.PlayerSessio
 		return err
 	}
 
-	room := bh.wm.Get(s.MapID)
+	room := bh.wm.GetPlayerRoom(s)
 	if room == nil {
 		sendError(s, "not in a map")
 		return nil

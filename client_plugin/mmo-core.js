@@ -80,7 +80,7 @@
          * @param {Object} payload - 消息载荷
          */
         _dispatch: function (type, payload) {
-            if (this._debug) console.log('[MMO] <-', type, payload);
+            if (this._debug && type !== 'var_change' && type !== 'switch_change') console.log('[MMO] <-', type, payload);
             var handlers = this._handlers[type];
             if (!handlers) return;
             var snapshot = handlers.slice();
@@ -351,10 +351,9 @@
     //  在初始登录、重新登录、服务端地图传送时触发。
     //  同步玩家位置、变量/开关、装备、音频到客户端。
     //
-    //  玩家透明度：遵循 $dataSystem.optTransparent 设置，
-    //  不强制设为可见。服务器会转发 code 211（改变透明度）
-    //  来显式控制可见性 — 例如地图 2 事件 156 params=[1]（设为可见）。
-    //  这保持了原始游戏在地图 20（难度选择/片头）玩家不可见的行为。
+    //  玩家透明度：map_init 强制 setTransparent(false) 使玩家可见。
+    //  原版游戏用 optTransparent + Map 2 code 211 控制，但 MMO 跳过了
+    //  Map 2 的片头演出，若不强制可见则玩家永远透明。
     // ═══════════════════════════════════════════════════════════
     $MMO.on('map_init', function (data) {
         if (!data || !data.self) return;
@@ -425,6 +424,16 @@
         }
 
         if ($gamePlayer && $gameMap) {
+            // 清除残留的移动路线强制状态（上次会话可能在 forceMoveRoute 中断开）。
+            if ($gamePlayer._moveRouteForcing) {
+                $gamePlayer._moveRouteForcing = false;
+                $gamePlayer._moveRoute = { list: [], repeat: false, skippable: false, wait: false };
+                $gamePlayer._moveRouteIndex = 0;
+                $gamePlayer._originalMoveRoute = null;
+            }
+            $gamePlayer._through = false;
+            $gamePlayer.setTransparent(false);
+
             if ($gameMap.mapId() !== mapId) {
                 // 跨地图传送：使用 RMMV 的 reserveTransfer 异步加载新地图。
                 $gamePlayer.reserveTransfer(mapId, x, y, dir, 0);

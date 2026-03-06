@@ -42,7 +42,9 @@
         'mmo-chat.js',
         'mmo-party.js',
         'mmo-social.js',
-        'mmo-trade.js'
+        'mmo-trade.js',
+        'mmo-battle-puppet.js',
+        'mmo-debug.js'
     ];
 
     /** 从 RMMV 插件管理器读取配置参数。 */

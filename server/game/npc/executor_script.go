@@ -6,15 +6,15 @@ import (
 	"time"
 
 	"github.com/dop251/goja"
+	"github.com/kasuganosora/rpgmakermvmmo/server/game/player"
 )
 
 var metaTagRe = regexp.MustCompile(`<([^<>:]+)(:?)([^>]*)>`)
 
 // evalScriptCondition 使用 Goja VM 评估 Script 条件（类型 12）。
-// 注入 $gameSwitches、$gameVariables、$dataMap.meta 等 RMMV 全局对象。
+// 注入 $gameSwitches、$gameVariables、$dataMap.meta、$gameActors 等 RMMV 全局对象。
 // 返回 (result, true) 表示评估成功，(false, false) 表示脚本引用了未知全局对象。
-// 调用方对未知脚本应默认返回 true 以保持向后兼容。
-func (e *Executor) evalScriptCondition(script string, opts *ExecuteOpts) (bool, bool) {
+func (e *Executor) evalScriptCondition(script string, s *player.PlayerSession, opts *ExecuteOpts) (bool, bool) {
 	vm := goja.New()
 
 	// 超时保护：100ms
@@ -31,6 +31,15 @@ func (e *Executor) evalScriptCondition(script string, opts *ExecuteOpts) (bool, 
 	// 注入 Math（确定性随机数）
 	injectScriptMath(vm)
 
+	// 注入 $gameTemp（isPlaytest 在服务端始终返回 false）
+	gt := vm.NewObject()
+	_ = gt.Set("isPlaytest", func() bool { return false })
+	vm.Set("$gameTemp", gt)
+
+	// 注入 ConfigManager（服务端默认值）
+	cm := vm.NewObject()
+	vm.Set("ConfigManager", cm)
+
 	// 注入 $gameSwitches 和 $gameVariables
 	if opts != nil && opts.GameState != nil {
 		gs := opts.GameState
@@ -44,14 +53,25 @@ func (e *Executor) evalScriptCondition(script string, opts *ExecuteOpts) (bool, 
 		})
 	}
 
+	// 注入 $gameActors（从会话数据构建最小对象）
+	if s != nil {
+		injectScriptGameActors(vm, s)
+	}
+
 	// 注入 $dataMap.meta（从地图 Note 字段解析）
+	// 始终注入 $dataMap（即使 note 为空），防止 $dataMap.meta[...] 抛出 ReferenceError。
 	if opts != nil && e.res != nil {
-		if md, ok := e.res.Maps[opts.MapID]; ok && md.Note != "" {
-			injectScriptDataMap(vm, md.Note)
+		note := ""
+		if md, ok := e.res.Maps[opts.MapID]; ok {
+			note = md.Note
 		}
+		injectScriptDataMap(vm, note)
+	} else {
+		injectScriptDataMap(vm, "")
 	}
 
 	// 执行脚本，将结果转为布尔值（匹配 RMMV 的 !!eval(script) 行为）
+	// 运行时错误（如访问 undefined 的属性）视为 false，与 RMMV 的 !!eval() 行为一致。
 	var v goja.Value
 	var runErr error
 	panicked := false
@@ -64,7 +84,7 @@ func (e *Executor) evalScriptCondition(script string, opts *ExecuteOpts) (bool, 
 		v, runErr = vm.RunString(script)
 	}()
 	if panicked || runErr != nil {
-		return false, false
+		return false, true // 运行时错误 = false（RMMV eval 抛出异常时条件不满足）
 	}
 	if v == nil || goja.IsUndefined(v) || goja.IsNull(v) {
 		return false, true
@@ -133,4 +153,30 @@ func injectScriptDataMap(vm *goja.Runtime, note string) {
 	}
 	_ = dm.Set("meta", meta)
 	vm.Set("$dataMap", dm)
+}
+
+// injectScriptGameActors 注入最小的 $gameActors 对象。
+// 支持 $gameActors.actor(1)._classId、$gameActors.actor(1).save 等常用脚本条件。
+// actor(1).save 不设置（undefined），使 !$gameActors.actor(1).save 为 true（新角色初始化检查）。
+// 访问 .save.key 等子属性时 JS 抛出 TypeError，evalScriptCondition 捕获后返回 false。
+func injectScriptGameActors(vm *goja.Runtime, s *player.PlayerSession) {
+	// 构建 actor 对象（仅 actor 1 = 当前玩家）
+	actor1 := vm.NewObject()
+	_ = actor1.Set("_classId", s.ClassID)
+
+	// $gameActors.actor(id) 方法
+	ga := vm.NewObject()
+	_ = ga.Set("actor", func(id int) goja.Value {
+		if id == 1 {
+			return actor1
+		}
+		return goja.Undefined()
+	})
+
+	// $gameActors._data[1] 直接访问模式
+	data := vm.NewObject()
+	_ = data.Set("1", actor1)
+	_ = ga.Set("_data", data)
+
+	vm.Set("$gameActors", ga)
 }
