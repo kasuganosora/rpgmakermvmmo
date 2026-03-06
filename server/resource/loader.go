@@ -560,6 +560,10 @@ type ResourceLoader struct {
 	// Changes star tile (flag & 0x10) behavior: star tiles CAN block passage
 	// if their direction bit is set.
 	CPStarPassFix bool
+
+	// CommonEventsByName maps CE name → CE ID for name-based lookups.
+	// Built during loadCommonEvents() to support CallCommon plugin commands.
+	CommonEventsByName map[string]int
 }
 
 // EntryPoint is a position where players arrive when transferring to a map.
@@ -718,7 +722,42 @@ func (rl *ResourceLoader) loadTilesets() error {
 func (rl *ResourceLoader) loadCommonEvents() error {
 	var err error
 	rl.CommonEvents, err = loadJSONArray[CommonEvent](rl.path("CommonEvents.json"))
-	return err
+	if err != nil {
+		return err
+	}
+	rl.buildCommonEventIndex()
+	return nil
+}
+
+// buildCommonEventIndex builds the CommonEventsByName lookup map.
+func (rl *ResourceLoader) buildCommonEventIndex() {
+	rl.CommonEventsByName = make(map[string]int, len(rl.CommonEvents))
+	for i, ce := range rl.CommonEvents {
+		if ce != nil && ce.Name != "" {
+			rl.CommonEventsByName[ce.Name] = i
+		}
+	}
+}
+
+// FindCommonEventByName returns the CE ID for the given name, or 0 if not found.
+func (rl *ResourceLoader) FindCommonEventByName(name string) int {
+	if rl.CommonEventsByName == nil {
+		return 0
+	}
+	return rl.CommonEventsByName[name]
+}
+
+// FindCommonEventByPrefix returns the CE ID for the first CE whose name starts
+// with the given prefix (matching MPP_CallCommonByName CCT behavior), or 0.
+func (rl *ResourceLoader) FindCommonEventByPrefix(prefix string) int {
+	// MPP_CallCommonByName searches from last to first, so we do the same.
+	for i := len(rl.CommonEvents) - 1; i > 0; i-- {
+		ce := rl.CommonEvents[i]
+		if ce != nil && len(ce.Name) >= len(prefix) && ce.Name[:len(prefix)] == prefix {
+			return i
+		}
+	}
+	return 0
 }
 
 var mapFileRegex = regexp.MustCompile(`^Map(\d+)\.json$`)

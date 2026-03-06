@@ -45,6 +45,7 @@ type PlayerSession struct {
 	MP, MaxMP int
 	Level     int
 	Exp       int64
+	States    map[int]bool // active states (state ID → true)
 
 	SendChan     chan []byte
 	Done         chan struct{}
@@ -210,6 +211,32 @@ func (s *PlayerSession) Stats() (hp, maxHP, mp, maxMP int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.HP, s.MaxHP, s.MP, s.MaxMP
+}
+
+// HasState returns whether the player has the given state active.
+func (s *PlayerSession) HasState(stateID int) bool {
+	if s.States == nil {
+		return false
+	}
+	return s.States[stateID]
+}
+
+// AddState adds a state to the player.
+func (s *PlayerSession) AddState(stateID int) {
+	if s.States == nil {
+		s.States = make(map[int]bool)
+	}
+	s.States[stateID] = true
+}
+
+// RemoveState removes a state from the player.
+func (s *PlayerSession) RemoveState(stateID int) {
+	delete(s.States, stateID)
+}
+
+// ClearStates removes all states (used by RecoverAll).
+func (s *PlayerSession) ClearStates() {
+	s.States = nil
 }
 
 // ResetDirty clears the dirty flag and returns whether it was set.

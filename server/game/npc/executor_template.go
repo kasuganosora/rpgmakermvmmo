@@ -346,3 +346,54 @@ func operateSelfVariable(current, opType, operand int) int {
 		return current
 	}
 }
+
+// ---------------------------------------------------------------------------
+// MPP_CallCommonByName: CallCommon / CCT
+// ---------------------------------------------------------------------------
+
+// handleCallCommon 检查插件指令是否为 CallCommon 或 CCT（按名称调用公共事件）。
+// 返回 true 表示已处理（服务端执行 CE），false 表示非 CallCommon 指令。
+func (e *Executor) handleCallCommon(ctx context.Context, s *player.PlayerSession, cmd *resource.EventCommand, opts *ExecuteOpts, depth int) bool {
+	if len(cmd.Parameters) == 0 {
+		return false
+	}
+	raw, _ := cmd.Parameters[0].(string)
+	if raw == "" {
+		return false
+	}
+
+	parts := strings.Fields(raw)
+	cmdName := parts[0]
+
+	switch cmdName {
+	case "CallCommon":
+		if len(parts) < 2 {
+			return true
+		}
+		ceName := strings.Join(parts[1:], " ")
+		ceID := e.res.FindCommonEventByName(ceName)
+		if ceID <= 0 {
+			e.logger.Warn("CallCommon: CE not found by name",
+				zap.String("name", ceName))
+			return true
+		}
+		e.callCommonEvent(ctx, s, ceID, opts, depth)
+		return true
+
+	case "CCT":
+		if len(parts) < 2 {
+			return true
+		}
+		prefix := strings.Join(parts[1:], " ")
+		ceID := e.res.FindCommonEventByPrefix(prefix)
+		if ceID <= 0 {
+			e.logger.Warn("CCT: CE not found by prefix",
+				zap.String("prefix", prefix))
+			return true
+		}
+		e.callCommonEvent(ctx, s, ceID, opts, depth)
+		return true
+	}
+
+	return false
+}

@@ -284,8 +284,11 @@ func (e *Executor) evalActorCondition(ctx context.Context, s *player.PlayerSessi
 		}
 		return has
 
-	case 1, 3, 6:
-		// 1=名字, 3=技能, 6=状态 — 服务端暂不跟踪，默认不满足
+	case 6: // 状态
+		return s.HasState(compareVal)
+
+	case 1, 3:
+		// 1=名字, 3=技能 — 服务端暂不跟踪，默认不满足
 		e.logger.Debug("actor condition sub-type not implemented",
 			zap.Int("sub_type", subType), zap.Int("compare", compareVal))
 		return false

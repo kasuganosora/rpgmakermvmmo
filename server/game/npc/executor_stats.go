@@ -60,8 +60,16 @@ func (e *Executor) applyChangeMP(ctx context.Context, s *player.PlayerSession, p
 
 // applyChangeState 处理 RMMV 状态变更指令（代码 313）。
 // 参数格式：[0]=固定角色, [1]=角色ID/变量ID, [2]=操作(0=附加,1=解除), [3]=状态ID。
-// 状态管理目前主要在客户端完成，服务端仅转发。
 func (e *Executor) applyChangeState(ctx context.Context, s *player.PlayerSession, params []interface{}, opts *ExecuteOpts) {
+	op := paramInt(params, 2)   // 0=附加, 1=解除
+	stateID := paramInt(params, 3)
+	if stateID > 0 {
+		if op == 0 {
+			s.AddState(stateID)
+		} else {
+			s.RemoveState(stateID)
+		}
+	}
 	e.sendEffect(s, &resource.EventCommand{Code: CmdChangeState, Parameters: params})
 }
 
@@ -71,6 +79,7 @@ func (e *Executor) applyChangeState(ctx context.Context, s *player.PlayerSession
 func (e *Executor) applyRecoverAll(ctx context.Context, s *player.PlayerSession, params []interface{}, opts *ExecuteOpts) {
 	s.HP = s.MaxHP
 	s.MP = s.MaxMP
+	s.ClearStates()
 	e.sendEffect(s, &resource.EventCommand{Code: CmdRecoverAll, Parameters: params})
 }
 

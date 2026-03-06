@@ -262,6 +262,10 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 				}
 				continue
 			}
+			// MPP_CallCommonByName: CallCommon / CCT — 服务端执行，不转发
+			if e.handleCallCommon(ctx, s, cmd, opts, depth) {
+				continue
+			}
 			// 转发插件指令给客户端执行（包括立绘 CallStand/CallCutin/CallAM）
 			e.sendEffect(s, cmd)
 

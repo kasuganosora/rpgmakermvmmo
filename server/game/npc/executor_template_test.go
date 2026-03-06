@@ -359,6 +359,179 @@ func TestTECallMapEvent_PageIndex1_UsesFirstPage(t *testing.T) {
 }
 
 // ========================================================================
+// Issue 4: CallCommon plugin command — server-side CE execution
+// MPP_CallCommonByName: "CallCommon <name>" resolves CE by name.
+// Server must intercept and execute, NOT forward to client.
+// ========================================================================
+
+func TestCallCommon_ExecutesByName(t *testing.T) {
+	// CE 5 named "MyTestCE" sets switch 400 ON
+	ceCmds := []*resource.EventCommand{
+		{Code: CmdChangeSwitches, Parameters: []interface{}{float64(400), float64(400), float64(0)}},
+		{Code: CmdEnd, Parameters: []interface{}{}},
+	}
+	ces := make([]*resource.CommonEvent, 10)
+	ces[5] = &resource.CommonEvent{ID: 5, Name: "MyTestCE", List: ceCmds}
+
+	resLoader := &resource.ResourceLoader{
+		Maps:           map[int]*resource.MapData{},
+		CommonEvents:   ces,
+		CommonEventsByName: map[string]int{"MyTestCE": 5},
+	}
+
+	e := New(nil, resLoader, nopLogger())
+	gs := newMockGameState()
+	s := testSession(1)
+
+	cmds := []*resource.EventCommand{
+		{Code: CmdPluginCommand, Parameters: []interface{}{"CallCommon MyTestCE"}},
+		{Code: CmdEnd, Parameters: []interface{}{}},
+	}
+	page := &resource.EventPage{List: cmds}
+	e.Execute(context.Background(), s, page, &ExecuteOpts{
+		GameState: gs, MapID: 1, EventID: 1,
+	})
+
+	assert.True(t, gs.GetSwitch(400), "CallCommon should execute CE by name (switch 400)")
+
+	// Verify NO npc_effect was sent (not forwarded to client)
+	pkts := drainPackets(t, s)
+	for _, p := range pkts {
+		if p.Type == "npc_effect" {
+			var data map[string]interface{}
+			json.Unmarshal(p.Payload, &data)
+			code := data["code"]
+			if codeF, ok := code.(float64); ok && int(codeF) == CmdPluginCommand {
+				t.Error("CallCommon should NOT be forwarded as npc_effect to client")
+			}
+		}
+	}
+}
+
+func TestCallCommon_NotFound_NoForward(t *testing.T) {
+	ces := make([]*resource.CommonEvent, 5)
+	resLoader := &resource.ResourceLoader{
+		Maps:               map[int]*resource.MapData{},
+		CommonEvents:       ces,
+		CommonEventsByName: map[string]int{},
+	}
+
+	e := New(nil, resLoader, nopLogger())
+	gs := newMockGameState()
+	s := testSession(1)
+
+	// CallCommon with non-existent name — should be absorbed, not forwarded
+	cmds := []*resource.EventCommand{
+		{Code: CmdPluginCommand, Parameters: []interface{}{"CallCommon NonExistentCE"}},
+		{Code: CmdEnd, Parameters: []interface{}{}},
+	}
+	page := &resource.EventPage{List: cmds}
+	e.Execute(context.Background(), s, page, &ExecuteOpts{
+		GameState: gs, MapID: 1, EventID: 1,
+	})
+
+	// No npc_effect for plugin command should be sent
+	pkts := drainPackets(t, s)
+	for _, p := range pkts {
+		if p.Type == "npc_effect" {
+			var data map[string]interface{}
+			json.Unmarshal(p.Payload, &data)
+			if codeF, ok := data["code"].(float64); ok && int(codeF) == CmdPluginCommand {
+				t.Error("CallCommon (not found) should NOT be forwarded to client")
+			}
+		}
+	}
+}
+
+func TestCCT_ExecutesByPrefix(t *testing.T) {
+	// CE 3 named "BattleStart_Boss" — CCT "BattleStart" should match
+	ceCmds := []*resource.EventCommand{
+		{Code: CmdChangeSwitches, Parameters: []interface{}{float64(450), float64(450), float64(0)}},
+		{Code: CmdEnd, Parameters: []interface{}{}},
+	}
+	ces := make([]*resource.CommonEvent, 10)
+	ces[3] = &resource.CommonEvent{ID: 3, Name: "BattleStart_Boss", List: ceCmds}
+
+	resLoader := &resource.ResourceLoader{
+		Maps:               map[int]*resource.MapData{},
+		CommonEvents:       ces,
+		CommonEventsByName: map[string]int{"BattleStart_Boss": 3},
+	}
+
+	e := New(nil, resLoader, nopLogger())
+	gs := newMockGameState()
+	s := testSession(1)
+
+	cmds := []*resource.EventCommand{
+		{Code: CmdPluginCommand, Parameters: []interface{}{"CCT BattleStart"}},
+		{Code: CmdEnd, Parameters: []interface{}{}},
+	}
+	page := &resource.EventPage{List: cmds}
+	e.Execute(context.Background(), s, page, &ExecuteOpts{
+		GameState: gs, MapID: 1, EventID: 1,
+	})
+
+	assert.True(t, gs.GetSwitch(450), "CCT should execute CE by prefix match (switch 450)")
+}
+
+func TestNonCallCommon_StillForwarded(t *testing.T) {
+	// A regular plugin command (not CallCommon/CCT/TE) should still be forwarded
+	ces := make([]*resource.CommonEvent, 5)
+	resLoader := &resource.ResourceLoader{
+		Maps:               map[int]*resource.MapData{},
+		CommonEvents:       ces,
+		CommonEventsByName: map[string]int{},
+	}
+
+	e := New(nil, resLoader, nopLogger())
+	s := testSession(1)
+
+	cmds := []*resource.EventCommand{
+		{Code: CmdPluginCommand, Parameters: []interface{}{"SomeOtherPlugin arg1"}},
+		{Code: CmdEnd, Parameters: []interface{}{}},
+	}
+	page := &resource.EventPage{List: cmds}
+	e.Execute(context.Background(), s, page, &ExecuteOpts{
+		GameState: newMockGameState(), MapID: 1, EventID: 1,
+	})
+
+	pkts := drainPackets(t, s)
+	found := false
+	for _, p := range pkts {
+		if p.Type == "npc_effect" {
+			found = true
+		}
+	}
+	assert.True(t, found, "non-CallCommon plugin commands should still be forwarded as npc_effect")
+}
+
+// ========================================================================
+// ResourceLoader.FindCommonEventByName / FindCommonEventByPrefix
+// ========================================================================
+
+func TestFindCommonEventByName(t *testing.T) {
+	rl := &resource.ResourceLoader{
+		CommonEventsByName: map[string]int{"TestCE": 7, "Another": 3},
+	}
+	assert.Equal(t, 7, rl.FindCommonEventByName("TestCE"))
+	assert.Equal(t, 3, rl.FindCommonEventByName("Another"))
+	assert.Equal(t, 0, rl.FindCommonEventByName("Missing"))
+}
+
+func TestFindCommonEventByPrefix(t *testing.T) {
+	ces := make([]*resource.CommonEvent, 10)
+	ces[2] = &resource.CommonEvent{ID: 2, Name: "Alpha_One"}
+	ces[5] = &resource.CommonEvent{ID: 5, Name: "Alpha_Two"}
+	ces[8] = &resource.CommonEvent{ID: 8, Name: "Beta_Three"}
+
+	rl := &resource.ResourceLoader{CommonEvents: ces}
+	// Searches from last to first, so "Alpha" prefix should match ces[5] first
+	assert.Equal(t, 5, rl.FindCommonEventByPrefix("Alpha"))
+	assert.Equal(t, 8, rl.FindCommonEventByPrefix("Beta"))
+	assert.Equal(t, 0, rl.FindCommonEventByPrefix("Gamma"))
+}
+
+// ========================================================================
 // Regression: dialog_end is sent after TE_CALL_ORIGIN_EVENT
 // ========================================================================
 func TestTECallOriginEvent_DialogEnd(t *testing.T) {

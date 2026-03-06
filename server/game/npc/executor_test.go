@@ -2331,3 +2331,77 @@ func TestExecute_MoveRoute_WaitAck(t *testing.T) {
 	}
 	assert.True(t, found, "MoveRoute should be sent")
 }
+
+// ========================================================================
+// ChangeState / Actor Condition sub-type 6 (state check)
+// ========================================================================
+
+func TestExecute_ChangeState_AddAndCheck(t *testing.T) {
+	gs := newMockGameState()
+	exec := New(nil, &resource.ResourceLoader{CommonEvents: make([]*resource.CommonEvent, 2)}, nopLogger())
+	s := testSession(1)
+
+	// Add state 184, then check actor has state 184 → set var[1]=1
+	cmds := []*resource.EventCommand{
+		// ChangeState: [0]=fixed, [1]=actorId(1), [2]=op(0=add), [3]=stateId(184)
+		{Code: CmdChangeState, Parameters: []interface{}{float64(0), float64(1), float64(0), float64(184)}},
+		// Conditional Branch: actor condition, sub-type 6 (state), state 184
+		// params: [0]=condType(4=actor), [1]=actorId(1), [2]=subType(6=state), [3]=stateId(184)
+		{Code: CmdConditionalStart, Parameters: []interface{}{float64(4), float64(1), float64(6), float64(184)}},
+		// Inside branch: set var[1] = 1
+		{Code: CmdChangeVars, Indent: 1, Parameters: []interface{}{float64(1), float64(1), float64(0), float64(0), float64(1)}},
+		{Code: CmdEnd, Indent: 1},
+		// Branch end
+		{Code: 0, Indent: 0},
+		{Code: CmdEnd},
+	}
+	page := &resource.EventPage{List: cmds}
+	exec.Execute(context.Background(), s, page, &ExecuteOpts{GameState: gs, MapID: 1, EventID: 1})
+
+	assert.True(t, s.HasState(184), "state 184 should be added")
+	assert.Equal(t, 1, gs.variables[1], "branch should execute: actor has state 184")
+}
+
+func TestExecute_ChangeState_RemoveAndCheck(t *testing.T) {
+	gs := newMockGameState()
+	exec := New(nil, &resource.ResourceLoader{CommonEvents: make([]*resource.CommonEvent, 2)}, nopLogger())
+	s := testSession(1)
+	s.AddState(184)
+
+	// Remove state 184, then check → branch should NOT execute
+	cmds := []*resource.EventCommand{
+		// ChangeState: remove state 184
+		{Code: CmdChangeState, Parameters: []interface{}{float64(0), float64(1), float64(1), float64(184)}},
+		// Conditional Branch: actor has state 184?
+		{Code: CmdConditionalStart, Parameters: []interface{}{float64(4), float64(1), float64(6), float64(184)}},
+		{Code: CmdChangeVars, Indent: 1, Parameters: []interface{}{float64(1), float64(1), float64(0), float64(0), float64(1)}},
+		{Code: CmdEnd, Indent: 1},
+		{Code: 0, Indent: 0},
+		{Code: CmdEnd},
+	}
+	page := &resource.EventPage{List: cmds}
+	exec.Execute(context.Background(), s, page, &ExecuteOpts{GameState: gs, MapID: 1, EventID: 1})
+
+	assert.False(t, s.HasState(184), "state 184 should be removed")
+	assert.Equal(t, 0, gs.variables[1], "branch should NOT execute: actor no longer has state 184")
+}
+
+func TestExecute_RecoverAll_ClearsStates(t *testing.T) {
+	gs := newMockGameState()
+	exec := New(nil, &resource.ResourceLoader{CommonEvents: make([]*resource.CommonEvent, 2)}, nopLogger())
+	s := testSessionWithStats(1, 50, 100, 20, 50, 1, 0)
+	s.AddState(184)
+	s.AddState(10)
+
+	cmds := []*resource.EventCommand{
+		{Code: CmdRecoverAll, Parameters: []interface{}{float64(0), float64(1)}},
+		{Code: CmdEnd},
+	}
+	page := &resource.EventPage{List: cmds}
+	exec.Execute(context.Background(), s, page, &ExecuteOpts{GameState: gs, MapID: 1, EventID: 1})
+
+	assert.Equal(t, 100, s.HP, "HP should be fully restored")
+	assert.Equal(t, 50, s.MP, "MP should be fully restored")
+	assert.False(t, s.HasState(184), "RecoverAll should clear state 184")
+	assert.False(t, s.HasState(10), "RecoverAll should clear state 10")
+}

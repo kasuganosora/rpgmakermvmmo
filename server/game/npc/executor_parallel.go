@@ -261,6 +261,11 @@ func (e *Executor) stepUntilWait(
 				ev.idx++
 				continue
 			}
+			// MPP_CallCommonByName: CallCommon / CCT — 服务端执行，不转发
+			if e.handleCallCommon(ctx, s, cmd, opts, 0) {
+				ev.idx++
+				continue
+			}
 			// 转发插件指令给客户端（包括立绘 CallStand/CallCutin/CallAM）
 			sendParallelEffect(s, cmd, opts.MapID)
 			ev.idx++
