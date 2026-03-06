@@ -193,3 +193,26 @@ func (e *Executor) sendMovePicture(ctx context.Context, s *player.PlayerSession,
 		e.sendEffect(s, cmd)
 	}
 }
+
+// sendMovePictureNoWait 解析变量坐标并转发移动图片指令（不等待，用于平行事件）。
+func (e *Executor) sendMovePictureNoWait(s *player.PlayerSession, params []interface{}, opts *ExecuteOpts) {
+	resolved := make([]interface{}, len(params))
+	copy(resolved, params)
+
+	designation := paramInt(params, 3)
+	if designation == 1 && opts != nil && opts.GameState != nil {
+		varX := paramInt(params, 4)
+		varY := paramInt(params, 5)
+		if len(resolved) > 4 {
+			resolved[4] = float64(opts.GameState.GetVariable(varX))
+		}
+		if len(resolved) > 5 {
+			resolved[5] = float64(opts.GameState.GetVariable(varY))
+		}
+		if len(resolved) > 3 {
+			resolved[3] = float64(0)
+		}
+	}
+
+	e.sendEffect(s, &resource.EventCommand{Code: CmdMovePicture, Parameters: resolved})
+}

@@ -240,6 +240,11 @@ func (e *Executor) stepUntilWait(
 			}
 
 		case CmdPluginCommand:
+			// 检查是否为 TemplateEvent.js 指令（需服务端处理）
+			if e.handleTECallOriginEvent(ctx, s, cmd, opts, 0) {
+				ev.idx++
+				continue
+			}
 			pluginStr := paramStr(cmd.Parameters, 0)
 			// 副本地图命令
 			if pluginStr == "EnterInstance" {
@@ -289,6 +294,76 @@ func (e *Executor) stepUntilWait(
 
 		case CmdScriptCont:
 			ev.idx++ // 已由 CmdScript 处理
+
+		// ---- 服务端状态变更（需 DB 持久化）----
+
+		case CmdChangeGold:
+			if err := e.applyGold(ctx, s, cmd.Parameters, opts); err == nil {
+				sendParallelEffect(s, cmd, opts.MapID)
+			}
+			ev.idx++
+
+		case CmdChangeItems:
+			if err := e.applyItems(ctx, s, cmd.Parameters, opts); err == nil {
+				sendParallelEffect(s, cmd, opts.MapID)
+			}
+			ev.idx++
+
+		case CmdChangeHP:
+			e.applyChangeHP(ctx, s, cmd.Parameters, opts)
+			ev.idx++
+
+		case CmdChangeMP:
+			e.applyChangeMP(ctx, s, cmd.Parameters, opts)
+			ev.idx++
+
+		case CmdChangeState:
+			e.applyChangeState(ctx, s, cmd.Parameters, opts)
+			ev.idx++
+
+		case CmdRecoverAll:
+			e.applyRecoverAll(ctx, s, cmd.Parameters, opts)
+			ev.idx++
+
+		case CmdChangeEXP:
+			e.applyChangeEXP(ctx, s, cmd.Parameters, opts)
+			ev.idx++
+
+		case CmdChangeLevel:
+			e.applyChangeLevel(ctx, s, cmd.Parameters, opts)
+			ev.idx++
+
+		case CmdChangeClass:
+			e.applyChangeClass(ctx, s, cmd.Parameters, opts)
+			ev.idx++
+
+		// ---- charID 解析（charId=0 → 当前事件 ID）----
+
+		case CmdSetEventLocation:
+			resolved := e.resolveCharIDCommand(cmd, opts)
+			sendParallelEffect(s, resolved, opts.MapID)
+			ev.idx++
+
+		case CmdShowAnimation:
+			resolved := e.resolveCharIDCommand(cmd, opts)
+			sendParallelEffect(s, resolved, opts.MapID)
+			ev.idx++
+
+		case CmdShowBalloon:
+			resolved := e.resolveCharIDCommand(cmd, opts)
+			sendParallelEffect(s, resolved, opts.MapID)
+			ev.idx++
+
+		// ---- 图片指令（需变量坐标解析）----
+
+		case CmdShowPicture:
+			e.sendShowPicture(s, cmd.Parameters, opts)
+			ev.idx++
+
+		case CmdMovePicture:
+			// 平行事件中解析变量坐标后转发（不等待动画完成）
+			e.sendMovePictureNoWait(s, cmd.Parameters, opts)
+			ev.idx++
 
 		default:
 			// 其他指令（音效、图片等）直接转发
