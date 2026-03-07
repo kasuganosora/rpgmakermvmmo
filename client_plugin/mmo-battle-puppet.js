@@ -526,10 +526,18 @@
         // 不依赖 RMMV 的 processVictory/processDefeat 异步流程，
         // 因为 puppet 模式下的窗口/动画状态可能导致 isBusy() 永远为 true。
         // 奖励（EXP/金币/掉落）已由服务端处理和持久化。
+        // 清除 _eventCallback 防止 endBattle 恢复客户端本地解释器
+        // （战后事件由服务端驱动，客户端解释器不应执行）。
+        BattleManager._eventCallback = null;
         BattleManager.endBattle(data.result);
         BattleManager._phase = null;
-        // 清理消息队列（processVictory 可能残留的奖励文本）。
+        // 清理消息队列（战斗中可能残留的文本/选项）。
+        // 必须在 endBattle 之后清理，因为 endBattle 可能触发回调设置消息。
         if ($gameMessage) $gameMessage.clear();
+        // 清除地图解释器残留状态，防止 Scene_Map 重建时恢复旧的选项/消息。
+        if ($gameMap && $gameMap._interpreter) {
+            $gameMap._interpreter.clear();
+        }
         // 恢复战前 BGM/BGS。
         BattleManager.replayBgmAndBgs();
         // 直接弹出 Scene_Battle 返回 Scene_Map。

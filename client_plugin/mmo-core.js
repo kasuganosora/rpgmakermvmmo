@@ -21,6 +21,23 @@
     // 正常游戏中由 MyselfPlugins 初始化，但 MMO 流程可能跳过，需要提前确保存在。
     if (!window.keyList) window.keyList = [];
 
+    // Window.contents getter 防御补丁：
+    // Window_ChoiceList.initialize → windowWidth → maxChoiceWidth → textWidthEx
+    //   → this.contents.height  (this.contents 是 _windowContentsSprite.bitmap)
+    // 在 Window.prototype.initialize 创建 _windowContentsSprite 之前被调用，
+    // 导致 this._windowContentsSprite 为 undefined → crash。
+    // YEP_MessageCore 覆盖了 textWidthEx 所以无法在那里 patch。
+    // 直接在 contents getter 层面防御：_windowContentsSprite 不存在时返回空 Bitmap。
+    var _origContentsGet = Object.getOwnPropertyDescriptor(Window.prototype, 'contents').get;
+    Object.defineProperty(Window.prototype, 'contents', {
+        get: function () {
+            if (!this._windowContentsSprite) return new Bitmap(1, 1);
+            return _origContentsGet.call(this);
+        },
+        set: Object.getOwnPropertyDescriptor(Window.prototype, 'contents').set,
+        configurable: true
+    });
+
     window.$MMO = {
         /** @type {string|null} JWT 认证令牌。 */
         token: null,
