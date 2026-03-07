@@ -17,9 +17,16 @@ const maxCallDepth = 10
 // blockedPluginCmds 列出不应转发给客户端的插件指令名称。
 // 这些插件要么是纯客户端计算（服务端转发无意义），要么依赖客户端状态。
 var blockedPluginCmds = map[string]bool{
-	// 纯参数计算插件 — 读写 $gameVariables/_data，服务端无对应数据
-	"ParaCheck": true, "CulSkillEffect": true, "CulPartLV": true,
-	"CulLustLV": true, "CulMiasmaLV": true,
+	// 纯参数计算插件 — CulSkillEffect/ParaCheck 现在服务端执行，
+	// 其余仍阻止转发
+	"CulPartLV": true, "CulLustLV": true, "CulMiasmaLV": true,
+}
+
+// serverExecPluginCmds 列出由服务端 Goja VM 执行的插件指令。
+// 这些插件读写 $gameVariables/_data 和 $dataArmors.meta，
+// 服务端已注入完整的数据数组和 kaeru.js meta 解析。
+var serverExecPluginCmds = map[string]bool{
+	"CulSkillEffect": true, "ParaCheck": true,
 }
 
 // executeList 执行指令列表。返回 true 表示遇到终止指令（CmdEnd 或 CmdExitEvent）。
@@ -280,8 +287,18 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 			if e.handleCallCommon(ctx, s, cmd, opts, depth) {
 				continue
 			}
+			// 服务端执行的插件指令（CulSkillEffect, ParaCheck）
+			pluginCmdName := extractPluginCmdName(pluginStr)
+			if pluginCmdName == "CulSkillEffect" {
+				e.execCulSkillEffect(s, opts)
+				continue
+			}
+			if pluginCmdName == "ParaCheck" {
+				e.execParaCheck(s, opts)
+				continue
+			}
 			// 过滤不需要转发的插件指令
-			if pluginCmdName := extractPluginCmdName(pluginStr); blockedPluginCmds[pluginCmdName] {
+			if blockedPluginCmds[pluginCmdName] {
 				continue
 			}
 			// 转发插件指令给客户端
