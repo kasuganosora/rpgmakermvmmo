@@ -459,8 +459,30 @@
         console.log('[Puppet] 战斗结束, result=' + data.result);
 
         _pendingInputRequest = null;
-        _puppetEventQueue = [];
         _processingAction = false;
+
+        // 立即应用队列中所有未处理的动作结果（跳过动画），
+        // 确保敌人 HP 正确归零、死亡状态被添加、倒下动画播放。
+        // 否则最后一击的 action_result 会被丢弃，敌人在客户端仍然"活着"。
+        for (var qi = 0; qi < _puppetEventQueue.length; qi++) {
+            var qevt = _puppetEventQueue[qi];
+            if (qevt.type === 'action' && qevt.data && qevt.data.targets) {
+                var targets = qevt.data.targets;
+                for (var ti = 0; ti < targets.length; ti++) {
+                    var tgt = targets[ti];
+                    var battler = _getBattler(tgt.target);
+                    if (!battler) continue;
+                    if (tgt.hp_after !== undefined) battler._hp = tgt.hp_after;
+                    if (tgt.mp_after !== undefined) battler._mp = tgt.mp_after;
+                    if (tgt.tp_after !== undefined) battler._tp = tgt.tp_after;
+                    if (battler.refresh) battler.refresh();
+                    if (battler.isDead && battler.isDead()) {
+                        battler.performCollapse();
+                    }
+                }
+            }
+        }
+        _puppetEventQueue = [];
 
         // 存储服务端奖励数据，供 makeRewards 覆写使用。
         // 不在此处手动应用，避免 processVictory.gainRewards 导致双重奖励。
@@ -500,17 +522,18 @@
             $gameTroop._interpreter.clear();
         }
 
-        // 根据结果调用对应的 BattleManager 流程。
-        // processVictory 会调用 makeRewards → displayRewards → gainRewards。
-        // result: 0=win, 1=escape, 2=lose, 3=abort(script)
-        if (data.result === 0) {
-            BattleManager.processVictory();
-        } else if (data.result === 1 || data.result === 3) {
-            // Escape and script-abort both use processEscape (exit battle cleanly).
-            BattleManager.processEscape();
-        } else {
-            BattleManager.processDefeat();
-        }
+        // 直接结束战斗并退出 Scene_Battle。
+        // 不依赖 RMMV 的 processVictory/processDefeat 异步流程，
+        // 因为 puppet 模式下的窗口/动画状态可能导致 isBusy() 永远为 true。
+        // 奖励（EXP/金币/掉落）已由服务端处理和持久化。
+        BattleManager.endBattle(data.result);
+        BattleManager._phase = null;
+        // 清理消息队列（processVictory 可能残留的奖励文本）。
+        if ($gameMessage) $gameMessage.clear();
+        // 恢复战前 BGM/BGS。
+        BattleManager.replayBgmAndBgs();
+        // 直接弹出 Scene_Battle 返回 Scene_Map。
+        SceneManager.pop();
 
         _puppetEndingBattle = false;
         _puppetRewards = null;
@@ -761,6 +784,8 @@
             if (tgtData.hp_after !== undefined) battler._hp = tgtData.hp_after;
             if (tgtData.mp_after !== undefined) battler._mp = tgtData.mp_after;
             if (tgtData.tp_after !== undefined) battler._tp = tgtData.tp_after;
+            // 触发 RMMV refresh：HP=0 时自动添加死亡状态，使 isDead() 返回 true。
+            if (battler.refresh) battler.refresh();
 
             // 添加状态。
             if (tgtData.added_states) {
