@@ -52,7 +52,7 @@ type BattleConfig struct {
 	Logger       *zap.Logger
 	RNG          *rand.Rand          // injectable for testing
 	TurnMgr      TurnManager         // nil = DefaultTurnManager
-	InputTimeout time.Duration       // 0 = 2 minutes
+	InputTimeout time.Duration       // deprecated: no longer used (waits indefinitely)
 	GameVars     map[int]int         // player variable snapshot for client UI (custom gauges etc.)
 	LevelCheckFn  LevelCheckFn        // nil = no level-up check
 	ItemCheckFn   ItemCheckFn        // nil = skip inventory check
@@ -602,17 +602,10 @@ func (b *BattleInstance) aliveEnemies() []Battler {
 }
 
 func (b *BattleInstance) waitForInput(ctx context.Context, actorIndex int) (*ActionInput, error) {
-	timer := time.NewTimer(b.inputTimeout)
-	defer timer.Stop()
-
 	for {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-timer.C:
-			// Timeout: auto-guard this actor instead of failing the entire battle.
-			b.logger.Warn("input timeout, auto-guarding actor", zap.Int("actor_index", actorIndex))
-			return &ActionInput{ActorIndex: actorIndex, ActionType: ActionGuard}, nil
 		case input := <-b.inputCh:
 			if input.ActorIndex == actorIndex {
 				return input, nil
