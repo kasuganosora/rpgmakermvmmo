@@ -56,6 +56,33 @@ func (e *Executor) applyVariables(s *player.PlayerSession, params []interface{},
 		scriptVal = e.evalScriptValue(scriptStr, s, opts)
 	}
 
+	// operandType=3: GameData（从游戏运行时数据读取）
+	// params: [startID, endID, op, 3, dataType, param1, param2]
+	// dataType=5: Character → param1=-1(player), param2: 0=x, 1=y, 2=dir
+	// dataType=7: Map ID
+	var gameDataVal int
+	if operandType == 3 {
+		dataType := paramInt(params, 4)
+		gdParam1 := paramInt(params, 5)
+		gdParam2 := paramInt(params, 6)
+		switch dataType {
+		case 7: // Map ID
+			gameDataVal = opts.MapID
+		case 5: // Character data
+			if gdParam1 == -1 { // Player
+				px, py, pdir := s.Position()
+				switch gdParam2 {
+				case 0:
+					gameDataVal = px
+				case 1:
+					gameDataVal = py
+				case 2:
+					gameDataVal = pdir
+				}
+			}
+		}
+	}
+
 	for id := startID; id <= endID; id++ {
 		current := opts.GameState.GetVariable(id)
 		val := operandVal
@@ -67,6 +94,8 @@ func (e *Executor) applyVariables(s *player.PlayerSession, params []interface{},
 			if max >= val {
 				val = val + rand.Intn(max-val+1)
 			}
+		case 3: // GameData
+			val = gameDataVal
 		case 4: // 脚本
 			val = scriptVal
 		}

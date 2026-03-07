@@ -21,22 +21,32 @@
     // 正常游戏中由 MyselfPlugins 初始化，但 MMO 流程可能跳过，需要提前确保存在。
     if (!window.keyList) window.keyList = [];
 
-    // Window.contents getter 防御补丁：
+    // Window.contents getter/setter 防御补丁：
     // Window_ChoiceList.initialize → windowWidth → maxChoiceWidth → textWidthEx
     //   → this.contents.height  (this.contents 是 _windowContentsSprite.bitmap)
     // 在 Window.prototype.initialize 创建 _windowContentsSprite 之前被调用，
     // 导致 this._windowContentsSprite 为 undefined → crash。
     // YEP_MessageCore 覆盖了 textWidthEx 所以无法在那里 patch。
-    // 直接在 contents getter 层面防御：_windowContentsSprite 不存在时返回空 Bitmap。
-    var _origContentsGet = Object.getOwnPropertyDescriptor(Window.prototype, 'contents').get;
-    Object.defineProperty(Window.prototype, 'contents', {
-        get: function () {
-            if (!this._windowContentsSprite) return new Bitmap(1, 1);
-            return _origContentsGet.call(this);
-        },
-        set: Object.getOwnPropertyDescriptor(Window.prototype, 'contents').set,
-        configurable: true
-    });
+    // 直接在 contents getter/setter 层面防御：_windowContentsSprite 不存在时使用临时 Bitmap。
+    var _contentsDesc = Object.getOwnPropertyDescriptor(Window.prototype, 'contents');
+    if (_contentsDesc && _contentsDesc.get) {
+        var _origContentsGet = _contentsDesc.get;
+        var _origContentsSet = _contentsDesc.set;
+        Object.defineProperty(Window.prototype, 'contents', {
+            get: function () {
+                if (!this._windowContentsSprite) {
+                    if (!this._fallbackBitmap) this._fallbackBitmap = new Bitmap(1, 1);
+                    return this._fallbackBitmap;
+                }
+                return _origContentsGet.call(this);
+            },
+            set: function (value) {
+                if (!this._windowContentsSprite) return;
+                _origContentsSet.call(this, value);
+            },
+            configurable: true
+        });
+    }
 
     window.$MMO = {
         /** @type {string|null} JWT 认证令牌。 */

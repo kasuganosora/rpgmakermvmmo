@@ -250,3 +250,26 @@ func TestExecScriptCommand_BestEffort(t *testing.T) {
 	exec.execScriptCommand(context.Background(), s, "$gameParty.gainItem(null, 1)", opts, 0)
 	// No assertion needed — just verify no panic/crash
 }
+
+// TestContainsClientOnlyPluginCmd verifies detection of client-only plugin commands.
+func TestContainsClientOnlyPluginCmd(t *testing.T) {
+	// Event with hzChoiceEvent should be detected
+	cmdsWithHz := []*resource.EventCommand{
+		{Code: CmdScript, Parameters: []interface{}{"window.keyTemp = 0;"}},
+		{Code: CmdPluginCommand, Parameters: []interface{}{"HzChoiceCustom foo disabled"}},
+		{Code: CmdPluginCommand, Parameters: []interface{}{"hzChoiceEvent list location 2931"}},
+		{Code: CmdEnd},
+	}
+	assert.True(t, ContainsClientOnlyPluginCmd(cmdsWithHz), "should detect hzChoiceEvent")
+
+	// Event without hzChoiceEvent should not be detected
+	cmdsWithout := []*resource.EventCommand{
+		{Code: CmdPluginCommand, Parameters: []interface{}{"HzChoiceCustom foo disabled"}},
+		{Code: CmdPluginCommand, Parameters: []interface{}{"CallCommon TestCE"}},
+		{Code: CmdEnd},
+	}
+	assert.False(t, ContainsClientOnlyPluginCmd(cmdsWithout), "should not detect without hzChoiceEvent")
+
+	// Empty list
+	assert.False(t, ContainsClientOnlyPluginCmd(nil), "nil should return false")
+}

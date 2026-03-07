@@ -128,49 +128,28 @@ func (h *CharacterHandler) Create(c *gin.Context) {
 		}
 	}
 
-	// Initialize essential game variables for a new character.
-	// Mirrors the original game's CE 1 + EV156 new-game initialization:
-	//   var[204] = 18 (hour = 6 PM) → CE 32 computes var[206] = 4 (dusk)
-	// Without this, var[204] defaults to 0 (midnight) → darkness overlay.
-	// Mirrors CE 1 variable initializations.
-	initVars := []model.CharVariable{
-		{CharID: char.ID, VariableID: 116, Value: 95},   // 好感度
-		{CharID: char.ID, VariableID: 204, Value: 18},   // hour = 6 PM
-		{CharID: char.ID, VariableID: 231, Value: 3},    // 天気
-		{CharID: char.ID, VariableID: 299, Value: 1},    // 地域タイプ
-		{CharID: char.ID, VariableID: 300, Value: 2},    // 地域サブ
-		{CharID: char.ID, VariableID: 802, Value: 100},  // 瘴気汚染/戦意 max
-		{CharID: char.ID, VariableID: 1028, Value: 200}, // 発情値 max
-		{CharID: char.ID, VariableID: 1029, Value: 100}, // 戦意 current (= max)
-		{CharID: char.ID, VariableID: 1031, Value: 2000}, // 敏感値 max
-		{CharID: char.ID, VariableID: 1033, Value: 1},   // ゲージ表示フラグ
-	}
-	// v[722..740] = 100 (clothing durability maxes)
-	for vid := 722; vid <= 740; vid++ {
-		initVars = append(initVars, model.CharVariable{CharID: char.ID, VariableID: vid, Value: 100})
-	}
-	// v[702] = v[722] = 100, v[741] = v[742] = v[722] = 100 (durability current/display)
-	initVars = append(initVars, model.CharVariable{CharID: char.ID, VariableID: 702, Value: 100})
-	initVars = append(initVars, model.CharVariable{CharID: char.ID, VariableID: 741, Value: 100})
-	initVars = append(initVars, model.CharVariable{CharID: char.ID, VariableID: 742, Value: 100})
-	for _, v := range initVars {
-		h.db.Create(&v)
-	}
-
-	// Initialize starting equipment (mirrors CE 1 plugin commands):
-	//   EquipChange Cloth 5      → armor 5  in slot 1  (school uniform)
-	//   EquipChange Leg 300      → armor 300 in slot 7  (stockings)
-	//   EquipChange Special5 82  → armor 82  in slot 12 (underwear)
-	// Without this, CallCutin.js sees _equips[1]._itemId < 5 → nude portrait.
-	// Slot indices match Actor 1's equipSlotEx: [1,3,4,5,7,7,9,10,16,17,18,19,20,21]
-	// etypeId 3→idx 1, etypeId 10→idx 7, etypeId 20→idx 12.
-	initEquips := []model.Inventory{
-		{CharID: char.ID, ItemID: 5, Kind: model.ItemKindArmor, Qty: 1, Equipped: true, SlotIndex: 1},
-		{CharID: char.ID, ItemID: 300, Kind: model.ItemKindArmor, Qty: 1, Equipped: true, SlotIndex: 7},
-		{CharID: char.ID, ItemID: 82, Kind: model.ItemKindArmor, Qty: 1, Equipped: true, SlotIndex: 12},
-	}
-	for _, eq := range initEquips {
-		h.db.Create(&eq)
+	// Initialize game variables and equipment from the original game's CE 1.
+	// ExtractCharInit statically parses CE 1 (and called sub-CEs) to extract
+	// Control Variables (code 122) and EquipChange plugin commands (code 356),
+	// replacing previously hardcoded values.
+	if h.res != nil {
+		if initData := h.res.ExtractCharInit(1); initData != nil {
+			for _, v := range initData.Variables {
+				h.db.Create(&model.CharVariable{
+					CharID: char.ID, VariableID: v.VariableID, Value: v.Value,
+				})
+			}
+			for _, eq := range initData.Equips {
+				h.db.Create(&model.Inventory{
+					CharID:    char.ID,
+					ItemID:    eq.ArmorID,
+					Kind:      model.ItemKindArmor,
+					Qty:       1,
+					Equipped:  true,
+					SlotIndex: eq.SlotIndex,
+				})
+			}
+		}
 	}
 
 	c.JSON(http.StatusCreated, char)

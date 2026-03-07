@@ -1,6 +1,32 @@
 // 工具函数：RMMV 事件指令参数提取与类型转换。
 package npc
 
+import (
+	"strings"
+
+	"github.com/kasuganosora/rpgmakermvmmo/server/resource"
+)
+
+// clientOnlyPluginCmds 列出需要客户端 Game_Interpreter 才能正确运行的插件指令。
+// 包含这些指令的自动运行事件应跳过服务端执行，交由客户端 RMMV 引擎处理。
+var clientOnlyPluginCmds = map[string]bool{
+	"hzchoiceevent": true,
+}
+
+// ContainsClientOnlyPluginCmd 检查事件指令列表中是否包含需要客户端解释器的插件指令。
+func ContainsClientOnlyPluginCmd(cmds []*resource.EventCommand) bool {
+	for _, cmd := range cmds {
+		if cmd != nil && cmd.Code == CmdPluginCommand {
+			s := paramStr(cmd.Parameters, 0)
+			name := extractPluginCmdName(s)
+			if clientOnlyPluginCmds[strings.ToLower(name)] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // paramStr 从参数列表中提取指定索引的字符串值。
 // 索引越界或类型不匹配时返回空字符串。
 func paramStr(params []interface{}, idx int) string {

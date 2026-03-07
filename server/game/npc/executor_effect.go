@@ -94,6 +94,24 @@ func (e *Executor) transferPlayer(s *player.PlayerSession, params []interface{},
 		dir = 2
 	}
 
+	// 跨地图传送时，保存当前位置到 v[421-423]（返回位置）。
+	// 模拟 CE 301（前往魔导书·娅露斯）的保存逻辑，确保 CE 302（回到现实）能正确返回。
+	// 仅在目标地图不同且 GameState 可用时保存。
+	if opts != nil && opts.GameState != nil && mapID != opts.MapID && mapID > 0 {
+		px, py, _ := s.Position()
+		opts.GameState.SetVariable(421, opts.MapID)
+		opts.GameState.SetVariable(422, px)
+		opts.GameState.SetVariable(423, py)
+		e.sendVarChange(s, 421, opts.MapID)
+		e.sendVarChange(s, 422, px)
+		e.sendVarChange(s, 423, py)
+		e.logger.Info("saved return position before transfer",
+			zap.Int64("char_id", s.CharID),
+			zap.Int("v421_mapID", opts.MapID),
+			zap.Int("v422_x", px),
+			zap.Int("v423_y", py))
+	}
+
 	e.logger.Info("executor transferPlayer",
 		zap.Int64("char_id", s.CharID),
 		zap.Int("mode", mode),
