@@ -70,6 +70,12 @@ type PlayerSession struct {
 	logger       *zap.Logger
 }
 
+// SetLogger sets the session's logger. Useful for tests that construct
+// sessions without NewPlayerSession.
+func (s *PlayerSession) SetLogger(l *zap.Logger) {
+	s.logger = l
+}
+
 // NewPlayerSession creates a new PlayerSession with write goroutine started.
 func NewPlayerSession(accountID, charID int64, conn *websocket.Conn, logger *zap.Logger) *PlayerSession {
 	s := &PlayerSession{

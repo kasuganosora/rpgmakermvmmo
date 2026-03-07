@@ -49,6 +49,7 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 		if cmd == nil {
 			continue
 		}
+		cmdStart := time.Now()
 		switch cmd.Code {
 		case CmdEnd:
 			// 代码 0 同时作为子块标记（条件块内缩进 > 0）和列表终止符（缩进 0，末尾指令）。
@@ -204,10 +205,11 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 				e.sendEffect(s, cmd)
 			}
 
-		case CmdChangeWeapons, CmdChangeArmors:
-			// 武器/防具变更 — 参数格式同物品变更，转发给客户端
-			// TODO: 服务端库存追踪（当前仅追踪普通物品）
-			e.sendEffect(s, cmd)
+		case CmdChangeWeapons:
+			e.applyChangeWeapons(ctx, s, cmd.Parameters, opts)
+
+		case CmdChangeArmors:
+			e.applyChangeArmors(ctx, s, cmd.Parameters, opts)
 
 		case CmdTransfer:
 			e.transferPlayer(s, cmd.Parameters, opts)
@@ -281,6 +283,16 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 				if opts != nil && opts.LeaveInstanceFn != nil {
 					opts.LeaveInstanceFn(s)
 				}
+				continue
+			}
+			// EquipChange 插件命令：更新装备槽位 + 持久化
+			if strings.HasPrefix(pluginStr, "EquipChange ") {
+				parts := strings.Fields(pluginStr)
+				if len(parts) >= 3 {
+					e.applyEquipChange(ctx, s, parts[1], parts[2], opts)
+				}
+				// 仍然转发给客户端执行 CE 838（changeEquipSlotEx_varID）
+				e.sendEffect(s, cmd)
 				continue
 			}
 			// MPP_CallCommonByName: CallCommon / CCT — 服务端执行，不转发
@@ -450,8 +462,7 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 			e.sendEffect(s, cmd)
 
 		case CmdChangeEquipment:
-			// 装备变更 — 转发给客户端
-			e.sendEffect(s, cmd)
+			e.applyChangeEquipment(ctx, s, cmd.Parameters, opts)
 
 		case CmdChangeName:
 			// 角色名变更 — 转发给客户端
@@ -507,6 +518,14 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 		case CmdComment, CmdCommentCont:
 			// 开发者注释，跳过
 		}
+		if elapsed := time.Since(cmdStart); elapsed > 50*time.Millisecond {
+			e.logger.Warn("[SLOW_CMD]",
+				zap.Int64("char_id", s.CharID),
+				zap.Int("code", cmd.Code),
+				zap.Int("index", i),
+				zap.Duration("elapsed", elapsed),
+				zap.Int("depth", depth))
+		}
 	}
 	return false
 }
@@ -521,6 +540,17 @@ func (e *Executor) callCommonEvent(ctx context.Context, s *player.PlayerSession,
 	if ce == nil || len(ce.List) == 0 {
 		return
 	}
+	ceStart := time.Now()
+	defer func() {
+		if elapsed := time.Since(ceStart); elapsed > 500*time.Millisecond {
+			e.logger.Warn("[SLOW_CE]",
+				zap.Int64("char_id", s.CharID),
+				zap.Int("ce_id", ceID),
+				zap.String("ce_name", ce.Name),
+				zap.Duration("elapsed", elapsed),
+				zap.Int("depth", depth))
+		}
+	}()
 	e.logger.Info("calling common event", zap.Int("ce_id", ceID), zap.String("name", ce.Name), zap.Int("depth", depth+1))
 	e.executeList(ctx, s, ce.List, opts, depth+1)
 }

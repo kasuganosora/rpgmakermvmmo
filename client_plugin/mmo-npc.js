@@ -584,6 +584,7 @@
      */
     $MMO.on('npc_dialog', function (data) {
         if (!data) return;
+
         $MMO._npcDialogActive = true;
         $MMO._npcDialogPending = true;
         var face = data.face || '';
@@ -658,6 +659,7 @@
      */
     $MMO.on('npc_dialog_choices', function (data) {
         if (!data) return;
+
         $MMO._npcDialogActive = true;
         var face = data.face || '';
         var faceIndex = data.face_index || 0;
@@ -703,6 +705,7 @@
      */
     $MMO.on('npc_choices', function (data) {
         if (!data || !data.choices) return;
+
         $MMO._npcDialogActive = true;
         var choices = data.choices;
         var choiceDefault = data.default_type || 0;
@@ -788,6 +791,11 @@
     var _effectDraining = false;
     var EFFECT_TIME_BUDGET = 12; // ms
 
+    // 暴露队列状态给 mmo-core.js，用于 event_end 延迟解锁
+    $MMO._effectDraining = function () {
+        return _effectDraining || _effectQueue.length > 0;
+    };
+
     function _drainEffectQueue() {
         var start = performance.now();
         while (_effectQueue.length) {
@@ -798,10 +806,27 @@
             }
         }
         _effectDraining = false;
+        // 队列排空后，检查是否有待处理的 event_end
+        if ($MMO._eventEndPending) {
+            $MMO._eventEndPending = false;
+            $MMO._serverEventActive = false;
+            // 同 event_end 即时处理：清理残留阻塞状态
+            if ($gamePlayer) {
+                if ($gamePlayer._moveRouteForcing) {
+                    $gamePlayer._moveRouteForcing = false;
+                    $gamePlayer._through = false;
+                }
+                $gamePlayer._waitCount = 0;
+            }
+            if ($gameMessage && $gameMessage.isBusy()) {
+                $gameMessage.clear();
+            }
+        }
     }
 
     $MMO.on('npc_effect', function (data) {
         if (!data) return;
+
         if (data.map_id != null && $gameMap && data.map_id !== $gameMap.mapId()) return;
         _effectQueue.push(data);
         if (!_effectDraining) {

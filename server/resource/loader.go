@@ -618,6 +618,19 @@ type ResourceLoader struct {
 	// CommonEventsByName maps CE name → CE ID for name-based lookups.
 	// Built during loadCommonEvents() to support CallCommon plugin commands.
 	CommonEventsByName map[string]int
+
+	// TagSkillList holds AddSkillEffectBase data from TagSkillList.json.
+	// Maps skill tag index (21-122) to base/add variable mappings.
+	// Used by CulSkillEffect plugin to compute base stat values from equipment effects.
+	TagSkillList map[int]*TagSkillEntry
+}
+
+// TagSkillEntry represents a single entry in TagSkillList.json.
+// AddSkillEffectBase logic: v[BaseVar] = BaseNum + v[AddVar]
+type TagSkillEntry struct {
+	BaseVar int `json:"BaseVar"` // target variable ID
+	AddVar  int `json:"AddVar"`  // source accumulator variable ID
+	BaseNum int `json:"BaseNum"` // base value before skill effects
 }
 
 // EntryPoint is a position where players arrive when transferring to a map.
@@ -666,6 +679,7 @@ func (rl *ResourceLoader) Load() error {
 	}
 	rl.buildPassability()
 	rl.buildIncomingTransfers()
+	rl.loadTagSkillList() // optional, ignore errors
 	return nil
 }
 
@@ -694,6 +708,27 @@ func loadJSONObject[T any](path string, out *T) error {
 		return fmt.Errorf("resource: parse %s: %w", path, err)
 	}
 	return nil
+}
+
+// loadTagSkillList loads TagSkillList.json (optional custom data file).
+// Used by CulSkillEffect's AddSkillEffectBase to compute base stat values.
+func (rl *ResourceLoader) loadTagSkillList() {
+	p := rl.path("TagSkillList.json")
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return // file doesn't exist — not an error
+	}
+	var raw map[string]*TagSkillEntry
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return
+	}
+	rl.TagSkillList = make(map[int]*TagSkillEntry, len(raw))
+	for k, v := range raw {
+		var id int
+		if _, err := fmt.Sscanf(k, "%d", &id); err == nil && v != nil {
+			rl.TagSkillList[id] = v
+		}
+	}
 }
 
 func (rl *ResourceLoader) loadSystem() error {

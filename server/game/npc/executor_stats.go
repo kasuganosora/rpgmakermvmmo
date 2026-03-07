@@ -3,6 +3,7 @@ package npc
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/player"
 	"github.com/kasuganosora/rpgmakermvmmo/server/resource"
@@ -206,6 +207,149 @@ func (e *Executor) processBattle(ctx context.Context, s *player.PlayerSession, p
 		zap.Int("troop_id", troopID))
 	e.sendEffect(s, &resource.EventCommand{Code: CmdBattleProcessing, Parameters: params})
 	return 0 // 默认胜利
+}
+
+// ---- 装备变更 ----
+
+// equipSlotTypeMap 将 EquipChange 插件命令的槽位类型名映射到槽位索引。
+// 映射来自 OriginalCommands.js 中 EquipChange 的 ETypeID 赋值。
+var equipSlotTypeMap = map[string]int{
+	"Weapon": 0, "武装": 0, "0": 0,
+	"Cloth": 1, "衣装": 1, "1": 1,
+	"ClothOption": 2, "衣装オプション": 2, "2": 2,
+	"Option": 3, "追加外装": 3, "3": 3,
+	"Other": 4, "その他": 4, "4": 4,
+	"Special": 6, "特殊": 6, "6": 6,
+	"Leg": 7, "脚": 7, "7": 7,
+	"Special1": 8, "13": 8,
+	"Special2": 9, "14": 9,
+	"Special3": 10, "15": 10,
+	"Special4": 11, "16": 11,
+	"Special5": 12, "17": 12,
+	"Special6": 13, "18": 13,
+}
+
+// applyEquipChange 处理 EquipChange 插件命令。
+// 格式：EquipChange <SlotType> <ArmorID>
+// 更新 session.Equips 并持久化到 DB，然后转发给客户端。
+func (e *Executor) applyEquipChange(ctx context.Context, s *player.PlayerSession, slotType string, armorIDStr string, opts *ExecuteOpts) {
+	slotIndex, ok := equipSlotTypeMap[slotType]
+	if !ok {
+		e.logger.Warn("applyEquipChange: unknown slot type", zap.String("slot_type", slotType))
+		return
+	}
+
+	armorID := 0
+	if _, err := fmt.Sscanf(armorIDStr, "%d", &armorID); err != nil {
+		e.logger.Warn("applyEquipChange: invalid armor ID", zap.String("raw", armorIDStr))
+		return
+	}
+
+	// 更新 session 内存状态
+	s.SetEquip(slotIndex, armorID)
+
+	// 设置变量 v[2701]=slotIndex, v[2703]=armorID（EquipChange 插件行为）
+	if opts != nil && opts.GameState != nil {
+		opts.GameState.SetVariable(2701, slotIndex)
+		e.sendVarChange(s, 2701, slotIndex)
+		opts.GameState.SetVariable(2703, armorID)
+		e.sendVarChange(s, 2703, armorID)
+	}
+
+	// 持久化到 DB
+	kind := 3 // 防具
+	if slotIndex == 0 {
+		kind = 2 // 武器
+	}
+	if e.store != nil {
+		if err := e.store.SetEquipSlot(ctx, s.CharID, slotIndex, armorID, kind); err != nil {
+			e.logger.Warn("applyEquipChange: DB persist failed",
+				zap.Int64("char_id", s.CharID), zap.Int("slot", slotIndex), zap.Int("armor_id", armorID), zap.Error(err))
+		}
+	}
+
+	e.logger.Info("equip change",
+		zap.Int64("char_id", s.CharID), zap.String("slot_type", slotType),
+		zap.Int("slot_index", slotIndex), zap.Int("armor_id", armorID))
+}
+
+// applyChangeArmors 处理 RMMV 防具变更指令（代码 128）。
+// 参数格式：[0]=armorId, [1]=op(0=add,1=remove), [2]=operandType(0=const,1=var), [3]=quantity, [4]=includeEquip。
+// 这是背包增减操作（非装备操作），持久化到 DB。
+func (e *Executor) applyChangeArmors(ctx context.Context, s *player.PlayerSession, params []interface{}, opts *ExecuteOpts) {
+	armorID := paramInt(params, 0)
+	op := paramInt(params, 1)
+	qty := e.resolveOperand(params, 2, 3, opts)
+	if armorID <= 0 || qty <= 0 {
+		return
+	}
+
+	if e.store != nil {
+		if op == 1 {
+			// 移除
+			if err := e.store.RemoveArmorOrWeapon(ctx, s.CharID, armorID, 3, qty); err != nil {
+				e.logger.Warn("applyChangeArmors: remove failed", zap.Int64("char_id", s.CharID), zap.Error(err))
+			}
+		} else {
+			// 添加
+			if err := e.store.AddArmorOrWeapon(ctx, s.CharID, armorID, 3, qty); err != nil {
+				e.logger.Warn("applyChangeArmors: add failed", zap.Int64("char_id", s.CharID), zap.Error(err))
+			}
+		}
+	}
+
+	e.sendEffect(s, &resource.EventCommand{Code: CmdChangeArmors, Parameters: params})
+}
+
+// applyChangeWeapons 处理 RMMV 武器变更指令（代码 127）。
+// 参数格式同防具变更。
+func (e *Executor) applyChangeWeapons(ctx context.Context, s *player.PlayerSession, params []interface{}, opts *ExecuteOpts) {
+	weaponID := paramInt(params, 0)
+	op := paramInt(params, 1)
+	qty := e.resolveOperand(params, 2, 3, opts)
+	if weaponID <= 0 || qty <= 0 {
+		return
+	}
+
+	if e.store != nil {
+		if op == 1 {
+			if err := e.store.RemoveArmorOrWeapon(ctx, s.CharID, weaponID, 2, qty); err != nil {
+				e.logger.Warn("applyChangeWeapons: remove failed", zap.Int64("char_id", s.CharID), zap.Error(err))
+			}
+		} else {
+			if err := e.store.AddArmorOrWeapon(ctx, s.CharID, weaponID, 2, qty); err != nil {
+				e.logger.Warn("applyChangeWeapons: add failed", zap.Int64("char_id", s.CharID), zap.Error(err))
+			}
+		}
+	}
+
+	e.sendEffect(s, &resource.EventCommand{Code: CmdChangeWeapons, Parameters: params})
+}
+
+// applyChangeEquipment 处理 RMMV 装备变更指令（代码 319）。
+// 参数格式：[0]=actorId, [1]=etypeId, [2]=itemId。
+// etypeId 在 RMMV 中是装备类型（1=武器,2=盾,3=头,4=身体,5=饰品）。
+// 对于 ProjectB 使用 TMEquipSlotEx，etypeId 直接映射到槽位索引（非标准）。
+func (e *Executor) applyChangeEquipment(ctx context.Context, s *player.PlayerSession, params []interface{}, opts *ExecuteOpts) {
+	etypeID := paramInt(params, 1)
+	itemID := paramInt(params, 2)
+
+	// etypeId 在 TMEquipSlotEx 下就是槽位索引
+	slotIndex := etypeID
+	s.SetEquip(slotIndex, itemID)
+
+	kind := 3 // 防具
+	if slotIndex == 0 {
+		kind = 2 // 武器
+	}
+	if e.store != nil && itemID > 0 {
+		if err := e.store.SetEquipSlot(ctx, s.CharID, slotIndex, itemID, kind); err != nil {
+			e.logger.Warn("applyChangeEquipment: DB persist failed",
+				zap.Int64("char_id", s.CharID), zap.Int("slot", slotIndex), zap.Int("item_id", itemID), zap.Error(err))
+		}
+	}
+
+	e.sendEffect(s, &resource.EventCommand{Code: CmdChangeEquipment, Parameters: params})
 }
 
 // resolveOperand 从参数中读取常量或变量引用的整数值。

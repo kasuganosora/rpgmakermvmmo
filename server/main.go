@@ -334,7 +334,7 @@ func main() {
 		logger.Info("Serving RMMV game files", zap.String("dir", cfg.Server.GameDir))
 	}
 
-	addr := fmt.Sprintf(":%d", cfg.Server.Port)
+	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	logger.Info("Server listening", zap.String("addr", addr))
 
 	// ---- Graceful Shutdown ----

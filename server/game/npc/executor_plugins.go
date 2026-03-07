@@ -254,6 +254,23 @@ func (e *Executor) execCulSkillEffect(s *player.PlayerSession, opts *ExecuteOpts
 		e.sendSwitchChange(s, id, val)
 	}
 
+	// AddSkillEffectBase: apply TagSkillList base values + accumulated effects.
+	// For each entry (index 21-122): v[BaseVar] = BaseNum + v[AddVar]
+	if e.res != nil && e.res.TagSkillList != nil {
+		for i := 21; i <= 122; i++ {
+			entry := e.res.TagSkillList[i]
+			if entry == nil {
+				continue
+			}
+			addVal := opts.GameState.GetVariable(entry.AddVar)
+			result := entry.BaseNum + addVal
+			if result != opts.GameState.GetVariable(entry.BaseVar) {
+				opts.GameState.SetVariable(entry.BaseVar, result)
+				e.sendVarChange(s, entry.BaseVar, result)
+			}
+		}
+	}
+
 	e.logger.Info("CulSkillEffect executed",
 		zap.Int64("char_id", s.CharID),
 		zap.Int("v1209", opts.GameState.GetVariable(1209)))

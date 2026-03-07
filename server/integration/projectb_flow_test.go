@@ -53,6 +53,7 @@ type pumpOpts struct {
 	ChoiceFn       func(choices []string) int             // if set, overrides ChoiceReply
 	TargetMapID    int                                    // if >0, switch to drain mode after seeing this map
 	DrainDuration  time.Duration                          // how long to drain after target map seen (default 3s)
+	OnMessage      func(pkt map[string]interface{})       // if set, called for every received message
 }
 
 // messagePump reads WS messages in a loop, automatically responding to
@@ -108,6 +109,9 @@ func messagePump(t *testing.T, ws *WSClient, opts pumpOpts) *pumpResult {
 		}
 
 		res.All = append(res.All, pkt)
+		if opts.OnMessage != nil {
+			opts.OnMessage(pkt)
+		}
 		msgType, _ := pkt["type"].(string)
 
 		switch msgType {
@@ -1014,6 +1018,51 @@ func TestProjectBOPTransferAudit(t *testing.T) {
 	}
 
 	t.Log("OP Transfer Audit: complete")
+}
+
+// ---------------------------------------------------------------------------
+// Test 15: OP Flow Performance — Map 20→67 autorun must complete within 5s
+// ---------------------------------------------------------------------------
+
+func TestProjectBOPFlowPerformance(t *testing.T) {
+	dataPath := projectBDataPath(t)
+	ts := NewTestServerWithResources(t, dataPath)
+	defer ts.Close()
+
+	user := UniqueID("perf")
+	token, _ := ts.Login(t, user, user+"pass")
+	charID := ts.CreateCharacter(t, token, UniqueID("hero"), 1)
+	ws := ts.ConnectWS(t, token)
+	ws.Send("enter_map", map[string]interface{}{"char_id": charID})
+	initPkt := ws.RecvType("map_init", 10*time.Second)
+	require.NotNil(t, initPkt)
+	ws.Send("scene_ready", map[string]interface{}{})
+
+	// Pump until we see event_end (full OP flow: Map 20 autorun → CE 1 → transfer → Map 67 autorun → CE 11 → event_end).
+	// Track event_end arrival time separately from pump total.
+	start := time.Now()
+	var eventEndTime time.Duration
+	res := messagePump(t, ws, pumpOpts{
+		TotalTimeout: 60 * time.Second,
+		QuietTimeout: 3 * time.Second,
+		ChoiceReply:  []int{0},
+		OnMessage: func(pkt map[string]interface{}) {
+			if mt, _ := pkt["type"].(string); mt == "event_end" && eventEndTime == 0 {
+				eventEndTime = time.Since(start)
+			}
+		},
+	})
+
+	require.True(t, hasMapInit(res, 67), "should transfer to map 67")
+	require.NotZero(t, eventEndTime, "should receive event_end")
+
+	t.Logf("OPFlow: event_end at %s, pump total=%s, msgs=%d, dialogs=%d, effects=%d",
+		eventEndTime, time.Since(start), len(res.All), len(res.Dialogs), len(res.Effects))
+
+	// Performance requirement: event_end should arrive within 5 seconds.
+	// Before VM caching fix: ~17s. After: should be <5s.
+	assert.Less(t, eventEndTime.Seconds(), 5.0,
+		"OP flow event_end took %.1fs — should be <5s", eventEndTime.Seconds())
 }
 
 // ---------------------------------------------------------------------------

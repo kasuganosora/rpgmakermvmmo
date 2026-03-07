@@ -488,22 +488,28 @@
     /** 处理 event_start — 服务器开始执行事件，阻止玩家移动和交互。 */
     $MMO.on('event_start', function () {
         $MMO._serverEventActive = true;
-        // 安全超时：若服务器 60 秒内未发送 event_end，自动清除以防永久卡住。
-        if ($MMO._eventSafetyTimer) clearTimeout($MMO._eventSafetyTimer);
-        $MMO._eventSafetyTimer = setTimeout(function () {
-            if ($MMO._serverEventActive) {
-                console.warn('[MMO] event_start safety timeout (60s) — forcing event_end');
-                $MMO._serverEventActive = false;
-            }
-        }, 60000);
     });
 
-    /** 处理 event_end — 服务器事件执行完毕，恢复玩家移动和交互。 */
+    /** 处理 event_end — 服务器事件执行完毕，恢复玩家移动和交互。
+     *  若客户端效果队列仍在处理，推迟解锁到队列排空后。 */
     $MMO.on('event_end', function () {
-        $MMO._serverEventActive = false;
-        if ($MMO._eventSafetyTimer) {
-            clearTimeout($MMO._eventSafetyTimer);
-            $MMO._eventSafetyTimer = null;
+        var draining = typeof $MMO._effectDraining === 'function' && $MMO._effectDraining();
+        if (draining) {
+            $MMO._eventEndPending = true;
+        } else {
+            $MMO._serverEventActive = false;
+        }
+        // 强制清理可能阻塞 canMove() 的残留状态：
+        // 移动路线强制、穿透、等待计数、消息窗口。
+        if ($gamePlayer) {
+            if ($gamePlayer._moveRouteForcing) {
+                $gamePlayer._moveRouteForcing = false;
+                $gamePlayer._through = false;
+            }
+            $gamePlayer._waitCount = 0;
+        }
+        if ($gameMessage && $gameMessage.isBusy()) {
+            $gameMessage.clear();
         }
     });
 
@@ -575,10 +581,7 @@
     $MMO.on('_disconnected', function () {
         // 清除事件锁状态。
         $MMO._serverEventActive = false;
-        if ($MMO._eventSafetyTimer) {
-            clearTimeout($MMO._eventSafetyTimer);
-            $MMO._eventSafetyTimer = null;
-        }
+        $MMO._eventEndPending = false;
         // 仅在游戏内（非登录/角色选择/创建场景）时显示断线提示。
         if (!SceneManager._scene || SceneManager._scene instanceof Scene_Title) return;
         if (typeof Scene_Login !== 'undefined' && SceneManager._scene instanceof Scene_Login) return;

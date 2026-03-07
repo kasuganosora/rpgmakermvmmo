@@ -21,7 +21,7 @@ func nopLogger() *zap.Logger { return zap.NewNop() }
 // testSession 创建无真实 WebSocket 连接的 PlayerSession，用于单元测试。
 // 使用缓冲 SendChan 便于检查发送的数据包。
 func testSession(charID int64) *player.PlayerSession {
-	return &player.PlayerSession{
+	s := &player.PlayerSession{
 		CharID:       charID,
 		AccountID:    1,
 		SendChan:     make(chan []byte, 64),
@@ -31,6 +31,8 @@ func testSession(charID int64) *player.PlayerSession {
 		EffectAckCh:  make(chan struct{}, 1),
 		SceneReadyCh: make(chan struct{}, 1),
 	}
+	s.SetLogger(zap.NewNop())
+	return s
 }
 
 // testSessionWithStats 创建带有 HP/MP/Level/Exp 初始值的测试会话。
@@ -197,6 +199,31 @@ func (m *mockInventoryStore) IsEquipped(_ context.Context, _ int64, _ int, _ int
 func (m *mockInventoryStore) HasSkill(_ context.Context, charID int64, skillID int) (bool, error) {
 	k := fmt.Sprintf("%d_%d", charID, skillID)
 	return m.skills[k], nil
+}
+
+func (m *mockInventoryStore) SetEquipSlot(_ context.Context, _ int64, _, _, _ int) error {
+	return nil
+}
+
+func (m *mockInventoryStore) AddArmorOrWeapon(_ context.Context, charID int64, itemID, kind, qty int) error {
+	k := itemKey(charID, itemID)
+	m.items[k] += qty
+	return nil
+}
+
+func (m *mockInventoryStore) RemoveArmorOrWeapon(_ context.Context, charID int64, itemID, kind, qty int) error {
+	k := itemKey(charID, itemID)
+	cur := m.items[k]
+	if cur < qty {
+		return fmt.Errorf("insufficient: have %d, need %d", cur, qty)
+	}
+	newQty := cur - qty
+	if newQty <= 0 {
+		delete(m.items, k)
+	} else {
+		m.items[k] = newQty
+	}
+	return nil
 }
 
 // ========================================================================

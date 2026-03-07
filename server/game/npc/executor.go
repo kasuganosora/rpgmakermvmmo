@@ -130,6 +130,13 @@ type InventoryStore interface {
 	IsEquipped(ctx context.Context, charID int64, itemID, kind int) (bool, error)
 	// HasSkill 检查角色是否习得了指定技能。
 	HasSkill(ctx context.Context, charID int64, skillID int) (bool, error)
+	// SetEquipSlot 更新角色装备槽位（slot→itemID），同时更新 DB inventory 记录。
+	// itemID=0 表示卸下该槽位装备。kind: 2=武器, 3=防具。
+	SetEquipSlot(ctx context.Context, charID int64, slotIndex, itemID, kind int) error
+	// AddArmorOrWeapon 向背包添加武器/防具（不装备）。kind: 2=武器, 3=防具。
+	AddArmorOrWeapon(ctx context.Context, charID int64, itemID, kind, qty int) error
+	// RemoveArmorOrWeapon 从背包移除武器/防具。kind: 2=武器, 3=防具。
+	RemoveArmorOrWeapon(ctx context.Context, charID int64, itemID, kind, qty int) error
 }
 
 // ---- 回调类型 ----
@@ -168,6 +175,10 @@ type ExecuteOpts struct {
 	// Used by kaeru.js meta tags like <Skill01;[40,10]> where arrays are
 	// stored in game variables and read back in child CEs.
 	TransientVars   map[int]interface{}
+	// cachedCondVM is a reusable Goja VM for evalScriptCondition.
+	// Created lazily on first use, reused to avoid ~125ms/call VM setup cost.
+	// Safe because all injected state uses live closures (not snapshots).
+	cachedCondVM *gojaCondVM
 }
 
 // ---- Executor 核心结构体 ----
@@ -322,4 +333,66 @@ func (s *gormInventoryStore) HasSkill(ctx context.Context, charID int64, skillID
 		return false, err
 	}
 	return count > 0, nil
+}
+
+// SetEquipSlot 更新角色装备槽位。卸下旧装备、装上新装备。
+func (s *gormInventoryStore) SetEquipSlot(ctx context.Context, charID int64, slotIndex, itemID, kind int) error {
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 卸下该槽位当前装备
+		tx.Model(&model.Inventory{}).
+			Where("char_id = ? AND slot_index = ? AND equipped = true", charID, slotIndex).
+			Updates(map[string]interface{}{"equipped": false, "slot_index": -1})
+
+		if itemID <= 0 {
+			return nil // 仅卸下
+		}
+
+		// 查找背包中该物品并标记为已装备
+		var inv model.Inventory
+		err := tx.Where("char_id = ? AND item_id = ? AND kind = ?", charID, itemID, kind).
+			First(&inv).Error
+		if err != nil {
+			// 背包中没有该物品，创建一条已装备记录
+			inv = model.Inventory{
+				CharID:    charID,
+				ItemID:    itemID,
+				Kind:      kind,
+				Qty:       1,
+				Equipped:  true,
+				SlotIndex: slotIndex,
+			}
+			return tx.Create(&inv).Error
+		}
+		inv.Equipped = true
+		inv.SlotIndex = slotIndex
+		return tx.Save(&inv).Error
+	})
+}
+
+// AddArmorOrWeapon 向背包添加武器/防具。
+func (s *gormInventoryStore) AddArmorOrWeapon(ctx context.Context, charID int64, itemID, kind, qty int) error {
+	var inv model.Inventory
+	err := s.db.WithContext(ctx).
+		Where("char_id = ? AND item_id = ? AND kind = ?", charID, itemID, kind).
+		First(&inv).Error
+	if err != nil {
+		inv = model.Inventory{CharID: charID, ItemID: itemID, Kind: kind, Qty: qty}
+		return s.db.WithContext(ctx).Create(&inv).Error
+	}
+	return s.db.WithContext(ctx).Model(&inv).Update("qty", inv.Qty+qty).Error
+}
+
+// RemoveArmorOrWeapon 从背包移除武器/防具。
+func (s *gormInventoryStore) RemoveArmorOrWeapon(ctx context.Context, charID int64, itemID, kind, qty int) error {
+	var inv model.Inventory
+	if err := s.db.WithContext(ctx).
+		Where("char_id = ? AND item_id = ? AND kind = ?", charID, itemID, kind).
+		First(&inv).Error; err != nil {
+		return fmt.Errorf("armor/weapon %d (kind %d) not found", itemID, kind)
+	}
+	newQty := inv.Qty - qty
+	if newQty <= 0 {
+		return s.db.WithContext(ctx).Delete(&inv).Error
+	}
+	return s.db.WithContext(ctx).Model(&inv).Update("qty", newQty).Error
 }

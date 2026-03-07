@@ -19,6 +19,7 @@ type Config struct {
 }
 
 type ServerConfig struct {
+	Host      string `mapstructure:"host"`
 	Port      int    `mapstructure:"port"`
 	Debug     bool   `mapstructure:"debug"`
 	DebugPort int    `mapstructure:"debug_port"`
@@ -90,6 +91,7 @@ func Load(path string) (*Config, error) {
 	v.SetConfigType("yaml")
 
 	// Defaults
+	v.SetDefault("server.host", "127.0.0.1")
 	v.SetDefault("server.port", 8080)
 	v.SetDefault("server.debug", false)
 	v.SetDefault("database.mode", "embedded_xml")
