@@ -163,6 +163,11 @@ type ExecuteOpts struct {
 	EnterInstanceFn EnterInstanceFunc // 进入副本回调
 	LeaveInstanceFn LeaveInstanceFunc // 离开副本回调
 	PageRefreshFn   PageRefreshFunc   // 开关/变量变更后刷新 NPC 页面
+	// TransientVars stores non-integer variable values (arrays, strings) that
+	// persist across CE calls within a single event execution chain.
+	// Used by kaeru.js meta tags like <Skill01;[40,10]> where arrays are
+	// stored in game variables and read back in child CEs.
+	TransientVars   map[int]interface{}
 }
 
 // ---- Executor 核心结构体 ----

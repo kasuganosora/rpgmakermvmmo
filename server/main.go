@@ -156,6 +156,13 @@ func main() {
 	sh.RegisterHandlers(wsRouter)
 
 	battleMgr := apows.NewBattleSessionManager(db, res, partyMgr, logger)
+	battleMgr.SetVarSnapshotFn(func(charID int64) map[int]int {
+		ps, err := wm.PlayerStateManager().GetOrLoad(charID)
+		if err != nil {
+			return nil
+		}
+		return ps.VariablesSnapshot()
+	})
 	battleMgr.RegisterHandlers(wsRouter)
 
 	npcH := apows.NewNPCHandlers(db, res, wm, logger)

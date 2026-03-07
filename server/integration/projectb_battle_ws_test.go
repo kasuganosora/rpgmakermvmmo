@@ -482,7 +482,7 @@ func TestProjectBBattle_WSSnapshotFields(t *testing.T) {
 	a, _ := actors[0].(map[string]interface{})
 	require.NotNil(t, a)
 
-	requiredActorFields := []string{"index", "is_actor", "name", "hp", "max_hp", "mp", "max_mp", "tp", "states", "class_id", "level"}
+	requiredActorFields := []string{"index", "is_actor", "name", "hp", "max_hp", "mp", "max_mp", "tp", "states", "class_id", "level", "params"}
 	for _, field := range requiredActorFields {
 		_, exists := a[field]
 		assert.True(t, exists, "actor snapshot should have field: %s (got: %v)", field, a)
@@ -490,13 +490,21 @@ func TestProjectBBattle_WSSnapshotFields(t *testing.T) {
 	assert.True(t, a["class_id"].(float64) > 0, "actor should have class_id > 0")
 	assert.True(t, a["level"].(float64) > 0, "actor should have level > 0")
 
+	// Verify params array has 8 elements with non-zero MHP.
+	params, _ := a["params"].([]interface{})
+	assert.Equal(t, 8, len(params), "params should have 8 elements")
+	if len(params) >= 8 {
+		mhp, _ := params[0].(float64)
+		assert.True(t, mhp > 0, "params[0] (MHP) should be > 0, got %v", mhp)
+	}
+
 	// Verify enemy snapshot fields.
 	enemies := payloadSlice(battleStart, "enemies")
 	require.True(t, len(enemies) > 0)
 	e, _ := enemies[0].(map[string]interface{})
 	require.NotNil(t, e)
 
-	requiredEnemyFields := []string{"index", "is_actor", "name", "hp", "max_hp", "mp", "max_mp", "tp", "states", "enemy_id"}
+	requiredEnemyFields := []string{"index", "is_actor", "name", "hp", "max_hp", "mp", "max_mp", "tp", "states", "enemy_id", "params"}
 	for _, field := range requiredEnemyFields {
 		_, exists := e[field]
 		assert.True(t, exists, "enemy snapshot should have field: %s (got: %v)", field, e)

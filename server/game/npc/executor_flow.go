@@ -191,6 +191,13 @@ func (e *Executor) evaluateCondition(ctx context.Context, s *player.PlayerSessio
 		refVal := paramInt(params, 3)
 		op := paramInt(params, 4) // 0=等于, 1=大于等于, 2=小于等于, 3=大于, 4=小于, 5=不等于
 		varVal := gs.GetVariable(varID)
+		// Check transient vars (non-integer values like arrays from kaeru.js meta)
+		// If a transient var exists, treat it as non-zero for comparison purposes
+		if varVal == 0 && opts != nil && opts.TransientVars != nil {
+			if tv, ok := opts.TransientVars[varID]; ok && tv != nil {
+				varVal = 1 // non-nil transient value is "truthy"
+			}
+		}
 		compareVal := refVal
 		if refType == 1 {
 			compareVal = gs.GetVariable(refVal)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -63,6 +64,7 @@ type PlayerSession struct {
 
 	mu           sync.Mutex
 	EventMu      sync.Mutex // 序列化每个玩家的事件执行（与 mu 分离：EventMu 持有秒级，mu 持有微秒级）
+	inBattle     int32      // atomic: 1 = in battle, 0 = not
 	mapGen       uint64     // incremented on each map entry; used to cancel stale autorun goroutines
 	needEventEnd bool       // set when event transferred player; autorun should send event_end
 	logger       *zap.Logger
@@ -343,6 +345,20 @@ func (s *PlayerSession) ClearNeedEventEnd() bool {
 	v := s.needEventEnd
 	s.needEventEnd = false
 	return v
+}
+
+// InBattle returns true if the player is currently in a battle.
+func (s *PlayerSession) InBattle() bool {
+	return atomic.LoadInt32(&s.inBattle) == 1
+}
+
+// SetInBattle sets or clears the in-battle flag atomically.
+func (s *PlayerSession) SetInBattle(v bool) {
+	if v {
+		atomic.StoreInt32(&s.inBattle, 1)
+	} else {
+		atomic.StoreInt32(&s.inBattle, 0)
+	}
 }
 
 // GetContext returns a background context (convenience helper).

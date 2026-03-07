@@ -3,16 +3,20 @@ package npc
 
 import (
 	"context"
+	"encoding/json"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/dop251/goja"
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/player"
+	"github.com/kasuganosora/rpgmakermvmmo/server/resource"
 	"go.uber.org/zap"
 )
 
-var metaTagRe = regexp.MustCompile(`<([^<>:]+)(:?)([^>]*)>`)
+// metaTagRe matches RMMV meta tags including kaeru.js semicolon extension.
+// Format: <key> → true, <key:value> → string, <key;json> → JSON.parse(json).
+var metaTagRe = regexp.MustCompile(`<([^<>:;]+)([:;]?)([^>]*)>`)
 
 // setupChildRe 匹配 this.setupChild($dataCommonEvents[EXPR].list, 0) 模式。
 var setupChildRe = regexp.MustCompile(`this\.setupChild\(\s*\$dataCommonEvents\[(.+?)\]\.list\s*,\s*\d+\s*\)`)
@@ -66,6 +70,12 @@ func (e *Executor) evalSetupChildTarget(expr string, s *player.PlayerSession, op
 	if s != nil {
 		injectScriptGameActors(vm, s)
 	}
+	if e.res != nil {
+		injectScriptDataArrays(vm, e.res)
+	}
+	if opts != nil {
+		injectTransientVars(vm, opts.TransientVars)
+	}
 
 	v, err := vm.RunString(expr)
 	if err != nil {
@@ -101,9 +111,17 @@ func (e *Executor) execMutableScript(script string, s *player.PlayerSession, opt
 	}
 	injectScriptMath(vm)
 
+	// Ensure TransientVars is initialized for cross-CE non-integer variable storage
+	if opts != nil && opts.TransientVars == nil {
+		opts.TransientVars = make(map[int]interface{})
+	}
 	mutations := &scriptMutations{
 		varChanges:    make(map[int]int),
 		switchChanges: make(map[int]bool),
+		varAnyChanges: opts.TransientVars,
+	}
+	if mutations.varAnyChanges == nil {
+		mutations.varAnyChanges = make(map[int]interface{})
 	}
 
 	injectScriptGameStateMutable(vm, gs, true, mutations)
@@ -116,6 +134,7 @@ func (e *Executor) execMutableScript(script string, s *player.PlayerSession, opt
 			note = md.Note
 		}
 		injectScriptDataMap(vm, note)
+		injectScriptDataArrays(vm, e.res)
 	}
 
 	// 注入常用全局变量（用于某些脚本中的临时变量如 i, value 等）
@@ -225,6 +244,11 @@ func (e *Executor) evalScriptCondition(script string, s *player.PlayerSession, o
 		injectScriptGameActors(vm, s)
 	}
 
+	// 注入 transient vars（跨 CE 调用的非整数变量值）
+	if opts != nil {
+		injectTransientVars(vm, opts.TransientVars)
+	}
+
 	// 注入 $dataMap.meta（从地图 Note 字段解析）
 	// 始终注入 $dataMap（即使 note 为空），防止 $dataMap.meta[...] 抛出 ReferenceError。
 	if opts != nil && e.res != nil {
@@ -233,6 +257,7 @@ func (e *Executor) evalScriptCondition(script string, s *player.PlayerSession, o
 			note = md.Note
 		}
 		injectScriptDataMap(vm, note)
+		injectScriptDataArrays(vm, e.res)
 	} else {
 		injectScriptDataMap(vm, "")
 	}
@@ -280,6 +305,12 @@ func (e *Executor) evalScriptValue(script string, s *player.PlayerSession, opts 
 	}
 	if s != nil {
 		injectScriptGameActors(vm, s)
+	}
+	if e.res != nil {
+		injectScriptDataArrays(vm, e.res)
+	}
+	if opts != nil {
+		injectTransientVars(vm, opts.TransientVars)
 	}
 
 	var v goja.Value
@@ -342,10 +373,39 @@ func injectScriptGameState(vm *goja.Runtime, gs GameStateAccessor) {
 	injectScriptGameStateMutable(vm, gs, false, nil)
 }
 
+// injectTransientVars patches $gameVariables.value() to also check transient vars
+// (non-integer values like arrays stored during script execution chains).
+func injectTransientVars(vm *goja.Runtime, transient map[int]interface{}) {
+	if len(transient) == 0 {
+		return
+	}
+	// Store lookup function accessible from JS — returns the value or undefined
+	vm.Set("__getTransient", func(id int) interface{} {
+		if v, ok := transient[id]; ok {
+			return v
+		}
+		return goja.Undefined()
+	})
+	// Wrap existing value() to check transient vars first
+	_, _ = vm.RunString(`
+		(function() {
+			var origValue = $gameVariables.value.bind($gameVariables);
+			$gameVariables.value = function(id) {
+				var tv = __getTransient(id);
+				if (tv !== undefined) return tv;
+				return origValue(id);
+			};
+		})();
+	`)
+}
+
 // scriptMutations 收集脚本执行期间的变量/开关变更。
 type scriptMutations struct {
 	varChanges    map[int]int
 	switchChanges map[int]bool
+	// varAnyChanges stores non-integer variable values (arrays, strings etc.)
+	// used by scripts like CE 937 that store arrays in game variables.
+	varAnyChanges map[int]interface{}
 }
 
 // injectScriptGameStateMutable 注入 $gameSwitches 和 $gameVariables。
@@ -387,6 +447,10 @@ func injectScriptGameStateMutable(vm *goja.Runtime, gs GameStateAccessor, mutabl
 	vars := vm.NewObject()
 	_ = vars.Set("value", func(id int) interface{} {
 		if mutations != nil {
+			// Check non-integer values first (arrays from kaeru.js meta parsing)
+			if v, ok := mutations.varAnyChanges[id]; ok {
+				return v
+			}
 			if v, ok := mutations.varChanges[id]; ok {
 				return v
 			}
@@ -400,6 +464,8 @@ func injectScriptGameStateMutable(vm *goja.Runtime, gs GameStateAccessor, mutabl
 	})
 	if mutable && mutations != nil {
 		// 注入 _data Proxy 实现 $gameVariables._data[N] += 1 等操作
+		// set handler accepts any type: numbers go to varChanges, others to varAnyChanges
+		// (kaeru.js stores arrays like [40,10] from meta.Skill01 into game variables)
 		_, _ = vm.RunString(`
 			var __varProxy = new Proxy({}, {
 				get: function(t, p) {
@@ -409,13 +475,27 @@ func injectScriptGameStateMutable(vm *goja.Runtime, gs GameStateAccessor, mutabl
 				},
 				set: function(t, p, v) {
 					var id = parseInt(p);
-					if (!isNaN(id)) __setVar(id, typeof v === 'number' ? v : 0);
+					if (!isNaN(id)) __setVarAny(id, v);
 					return true;
 				}
 			});
 		`)
-		vm.Set("__setVar", func(id, val int) {
-			mutations.varChanges[id] = val
+		vm.Set("__setVarAny", func(call goja.FunctionCall) goja.Value {
+			id := int(call.Argument(0).ToInteger())
+			val := call.Argument(1)
+			exported := val.Export()
+			switch v := exported.(type) {
+			case int64:
+				mutations.varChanges[id] = int(v)
+				delete(mutations.varAnyChanges, id)
+			case float64:
+				mutations.varChanges[id] = int(v)
+				delete(mutations.varAnyChanges, id)
+			default:
+				// Arrays, strings, etc. — store as-is for script access
+				mutations.varAnyChanges[id] = exported
+			}
+			return goja.Undefined()
 		})
 		proxy := vm.Get("__varProxy")
 		_ = vars.Set("_data", proxy)
@@ -424,20 +504,9 @@ func injectScriptGameStateMutable(vm *goja.Runtime, gs GameStateAccessor, mutabl
 }
 
 // injectScriptDataMap 从地图 Note 字段解析 RMMV meta 标签并注入 $dataMap。
-// RMMV 格式：<key> → meta[key]=true, <key:value> → meta[key]="value"（始终为字符串）。
 func injectScriptDataMap(vm *goja.Runtime, note string) {
 	dm := vm.NewObject()
-	meta := vm.NewObject()
-	for _, match := range metaTagRe.FindAllStringSubmatch(note, -1) {
-		key := match[1]
-		if match[2] == ":" {
-			// RMMV 将 <key:value> 存储为字符串；JS 类型转换处理数值比较
-			_ = meta.Set(key, match[3])
-		} else {
-			_ = meta.Set(key, true)
-		}
-	}
-	_ = dm.Set("meta", meta)
+	_ = dm.Set("meta", parseMeta(vm, note))
 	vm.Set("$dataMap", dm)
 }
 
@@ -486,4 +555,123 @@ func injectScriptGameActors(vm *goja.Runtime, s *player.PlayerSession) {
 	_ = ga.Set("_data", data)
 
 	vm.Set("$gameActors", ga)
+}
+
+// parseMeta 从 RMMV Note 字段解析 meta 标签。
+// 格式（kaeru.js 扩展）：
+//   <key> → meta[key]=true
+//   <key:value> → meta[key]="value"（字符串）
+//   <key;json> → meta[key]=JSON.parse(json)（数组/数值等原生类型）
+func parseMeta(vm *goja.Runtime, note string) *goja.Object {
+	meta := vm.NewObject()
+	if note == "" {
+		return meta
+	}
+	for _, match := range metaTagRe.FindAllStringSubmatch(note, -1) {
+		key := match[1]
+		switch match[2] {
+		case ":":
+			_ = meta.Set(key, match[3])
+		case ";":
+			// kaeru.js: semicolon means JSON.parse the value
+			var parsed interface{}
+			if err := json.Unmarshal([]byte(match[3]), &parsed); err == nil {
+				_ = meta.Set(key, parsed)
+			} else {
+				_ = meta.Set(key, match[3])
+			}
+		default:
+			_ = meta.Set(key, true)
+		}
+	}
+	return meta
+}
+
+// injectScriptDataArrays 注入 $dataArmors/$dataWeapons/$dataSkills/$dataItems。
+// 游戏脚本使用 $dataArmors[id].meta.Durability 等读取装备元数据，
+// 这些数据驱动 CE 937/895/1031 的服装耐久/技能计算链。
+func injectScriptDataArrays(vm *goja.Runtime, res *resource.ResourceLoader) {
+	if res == nil {
+		return
+	}
+
+	// $dataArmors
+	if res.Armors != nil {
+		arr := make([]interface{}, len(res.Armors))
+		for i, a := range res.Armors {
+			if a == nil {
+				arr[i] = goja.Null()
+				continue
+			}
+			obj := vm.NewObject()
+			_ = obj.Set("id", a.ID)
+			_ = obj.Set("name", a.Name)
+			_ = obj.Set("price", a.Price)
+			_ = obj.Set("etypeId", a.EtypeID)
+			_ = obj.Set("atypeId", a.AtypeID)
+			_ = obj.Set("params", a.Params)
+			_ = obj.Set("meta", parseMeta(vm, a.Note))
+			arr[i] = obj
+		}
+		vm.Set("$dataArmors", arr)
+	}
+
+	// $dataWeapons
+	if res.Weapons != nil {
+		arr := make([]interface{}, len(res.Weapons))
+		for i, w := range res.Weapons {
+			if w == nil {
+				arr[i] = goja.Null()
+				continue
+			}
+			obj := vm.NewObject()
+			_ = obj.Set("id", w.ID)
+			_ = obj.Set("name", w.Name)
+			_ = obj.Set("price", w.Price)
+			_ = obj.Set("wtypeId", w.WtypeID)
+			_ = obj.Set("params", w.Params)
+			_ = obj.Set("meta", parseMeta(vm, w.Note))
+			arr[i] = obj
+		}
+		vm.Set("$dataWeapons", arr)
+	}
+
+	// $dataSkills
+	if res.Skills != nil {
+		arr := make([]interface{}, len(res.Skills))
+		for i, sk := range res.Skills {
+			if sk == nil {
+				arr[i] = goja.Null()
+				continue
+			}
+			obj := vm.NewObject()
+			_ = obj.Set("id", sk.ID)
+			_ = obj.Set("name", sk.Name)
+			_ = obj.Set("iconIndex", sk.IconIndex)
+			_ = obj.Set("mpCost", sk.MPCost)
+			_ = obj.Set("tpCost", sk.TPCost)
+			_ = obj.Set("scope", sk.Scope)
+			_ = obj.Set("meta", parseMeta(vm, sk.Note))
+			arr[i] = obj
+		}
+		vm.Set("$dataSkills", arr)
+	}
+
+	// $dataItems
+	if res.Items != nil {
+		arr := make([]interface{}, len(res.Items))
+		for i, item := range res.Items {
+			if item == nil {
+				arr[i] = goja.Null()
+				continue
+			}
+			obj := vm.NewObject()
+			_ = obj.Set("id", item.ID)
+			_ = obj.Set("name", item.Name)
+			_ = obj.Set("price", item.Price)
+			_ = obj.Set("meta", parseMeta(vm, item.Note))
+			arr[i] = obj
+		}
+		vm.Set("$dataItems", arr)
+	}
 }

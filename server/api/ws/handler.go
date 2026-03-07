@@ -204,7 +204,10 @@ func (h *Handler) handleDisconnect(s *player.PlayerSession) {
 					"map_y":     y,
 					"direction": dir,
 					"hp":        s.HP,
+					"max_hp":    s.MaxHP,
 					"mp":        s.MP,
+					"max_mp":    s.MaxMP,
+					"class_id":  s.ClassID,
 					"level":     s.Level,
 					"exp":       s.Exp,
 				}).Error

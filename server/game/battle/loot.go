@@ -8,9 +8,9 @@ import (
 
 // DropResult represents one item that dropped.
 type DropResult struct {
-	ItemType int // 1=Item 2=Weapon 3=Armor
-	ItemID   int
-	Quantity int
+	ItemType int `json:"item_type"` // 1=Item 2=Weapon 3=Armor
+	ItemID   int `json:"item_id"`
+	Quantity int `json:"quantity"`
 }
 
 // CalculateDrops runs the RMMV drop probability table for an enemy.

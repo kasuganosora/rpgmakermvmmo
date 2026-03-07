@@ -117,6 +117,7 @@ type Weapon struct {
 	Params  []int   `json:"params"`
 	WtypeID int     `json:"wtypeId"`
 	Traits  []Trait `json:"traits"`
+	Note    string  `json:"note"`
 }
 
 type Armor struct {
@@ -127,6 +128,7 @@ type Armor struct {
 	EtypeID int     `json:"etypeId"` // 1=shield,2=helmet,3=body,4=accessory
 	AtypeID int     `json:"atypeId"`
 	Traits  []Trait `json:"traits"`
+	Note    string  `json:"note"`
 }
 
 // Trait represents an RMMV trait entry (used by actors, enemies, classes, equipment, states).
@@ -203,6 +205,29 @@ type EnemyDrop struct {
 	Denominator int `json:"denominator"` // Drop probability = 1/denominator
 }
 
+// TroopPageConditions holds activation conditions for a troop battle event page.
+type TroopPageConditions struct {
+	TurnValid    bool `json:"turnValid"`
+	TurnA        int  `json:"turnA"`
+	TurnB        int  `json:"turnB"`
+	EnemyValid   bool `json:"enemyValid"`
+	EnemyIndex   int  `json:"enemyIndex"`
+	EnemyHp      int  `json:"enemyHp"` // percentage 0-100
+	ActorValid   bool `json:"actorValid"`
+	ActorId      int  `json:"actorId"`
+	ActorHp      int  `json:"actorHp"` // percentage 0-100
+	SwitchValid  bool `json:"switchValid"`
+	SwitchId     int  `json:"switchId"`
+	TurnEnding   bool `json:"turnEnding"`
+}
+
+// TroopPage is a battle event page on a troop.
+type TroopPage struct {
+	Conditions TroopPageConditions `json:"conditions"`
+	List       []EventCommand      `json:"list"`
+	Span       int                 `json:"span"` // 0=battle, 1=turn, 2=moment
+}
+
 type Troop struct {
 	ID      int    `json:"id"`
 	Name    string `json:"name"`
@@ -211,6 +236,7 @@ type Troop struct {
 		X       int `json:"x"`
 		Y       int `json:"y"`
 	} `json:"members"`
+	Pages []TroopPage `json:"pages"`
 }
 
 type State struct {
@@ -224,6 +250,7 @@ type State struct {
 	MaxTurns          int     `json:"maxTurns"`
 	RemoveAtBattleEnd bool    `json:"removeAtBattleEnd"`
 	RemoveByDamage    bool    `json:"removeByDamage"`
+	ChanceByDamage    int     `json:"chanceByDamage"`  // percentage 0-100
 	Traits            []Trait `json:"traits"`
 	Note              string  `json:"note"`
 }

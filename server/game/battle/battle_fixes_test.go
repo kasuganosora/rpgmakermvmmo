@@ -2,7 +2,9 @@ package battle
 
 import (
 	"context"
+	"encoding/json"
 	"math/rand"
+	"strings"
 	"testing"
 	"time"
 
@@ -207,5 +209,228 @@ func TestCalcStatsLevelIndex(t *testing.T) {
 	stats1 := calcStatsFromClass(res, 1, 1)
 	if stats1[2] != 10 {
 		t.Errorf("ATK at level 1 = %d, want 10", stats1[2])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Bug #5: BattlerSnapshot missing computed params, skills, equips
+// Client needs all 8 params to sync _puppetParams, classID for traits,
+// and skills for command window.
+// ---------------------------------------------------------------------------
+
+func TestSnapshotContainsParams(t *testing.T) {
+	res := makeInstanceRes()
+	actor := NewActorBattler(ActorConfig{
+		CharID: 1, Name: "Hero", Index: 0, ClassID: 3, Level: 5,
+		HP: 200, MP: 30,
+		BaseParams:  [8]int{250, 40, 30, 20, 15, 10, 18, 8},
+		EquipBonus:  [8]int{0, 0, 10, 5, 0, 0, 2, 0},
+		Skills:      []int{1, 2, 7},
+		ActorTraits: []resource.Trait{{Code: 22, DataID: 0, Value: 0.95}},
+		Res:         res,
+	})
+
+	snap := SnapshotBattler(actor)
+
+	// Params should contain all 8 effective values.
+	if len(snap.Params) != 8 {
+		t.Fatalf("Params len = %d, want 8", len(snap.Params))
+	}
+	// MHP = (250+0) * 1.0 = 250 (no paramRate trait for param 0 that changes multiplicatively here,
+	// only xparam code 22 which doesn't affect param 0)
+	if snap.Params[0] != actor.Param(0) {
+		t.Errorf("Params[0] (MHP) = %d, want %d", snap.Params[0], actor.Param(0))
+	}
+	// ATK = (30+10) * 1.0 = 40
+	if snap.Params[2] != actor.Param(2) {
+		t.Errorf("Params[2] (ATK) = %d, want %d", snap.Params[2], actor.Param(2))
+	}
+	// AGI = (18+2) * 1.0 = 20
+	if snap.Params[6] != actor.Param(6) {
+		t.Errorf("Params[6] (AGI) = %d, want %d", snap.Params[6], actor.Param(6))
+	}
+
+	// Skills should be present for actors.
+	if len(snap.Skills) != 3 {
+		t.Errorf("Skills len = %d, want 3", len(snap.Skills))
+	}
+}
+
+func TestBattleStartEventIncludesGameVars(t *testing.T) {
+	res := makeInstanceRes()
+
+	actor := NewActorBattler(ActorConfig{
+		CharID: 1, Name: "Hero", Index: 0, Level: 10,
+		HP: 500, MP: 50,
+		BaseParams: [8]int{500, 50, 50, 30, 20, 10, 20, 10},
+		Res:        res,
+	})
+	enemy := NewEnemyBattler(&resource.Enemy{
+		ID: 1, Name: "Slime", HP: 5, MP: 0,
+		Atk: 1, Def: 1, Mat: 1, Mdf: 1, Agi: 1, Luk: 1,
+		Actions: []resource.EnemyAction{{SkillID: 1, ConditionType: 0, Rating: 5}},
+	}, 0, res)
+
+	testVars := map[int]int{702: 100, 722: 200, 1026: 50, 1027: 30}
+
+	bi := NewBattleInstance(BattleConfig{
+		TroopID:      1,
+		Res:          res,
+		RNG:          rand.New(rand.NewSource(42)),
+		InputTimeout: 5 * time.Second,
+		GameVars:     testVars,
+	})
+	bi.Actors = []Battler{actor}
+	bi.Enemies = []Battler{enemy}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var startEvt *EventBattleStart
+	go func() {
+		for evt := range bi.Events() {
+			if bs, ok := evt.(*EventBattleStart); ok {
+				startEvt = bs
+			}
+			if ir, ok := evt.(*EventInputRequest); ok {
+				bi.SubmitInput(&ActionInput{
+					ActorIndex:    ir.ActorIndex,
+					ActionType:    ActionAttack,
+					TargetIndices: []int{0},
+					TargetIsActor: false,
+				})
+			}
+		}
+	}()
+
+	bi.Run(ctx)
+	time.Sleep(50 * time.Millisecond)
+
+	if startEvt == nil {
+		t.Fatal("no battle_start event received")
+	}
+	if startEvt.GameVars == nil {
+		t.Fatal("GameVars is nil")
+	}
+	if startEvt.GameVars[702] != 100 {
+		t.Errorf("GameVars[702] = %d, want 100", startEvt.GameVars[702])
+	}
+	if startEvt.GameVars[1026] != 50 {
+		t.Errorf("GameVars[1026] = %d, want 50", startEvt.GameVars[1026])
+	}
+}
+
+func TestSnapshotContainsParamsEnemy(t *testing.T) {
+	res := makeInstanceRes()
+	enemy := NewEnemyBattler(&resource.Enemy{
+		ID: 1, Name: "Goblin", HP: 80, MP: 10,
+		Atk: 15, Def: 8, Mat: 5, Mdf: 5, Agi: 12, Luk: 3,
+		Actions: []resource.EnemyAction{{SkillID: 1, ConditionType: 0, Rating: 5}},
+	}, 0, res)
+
+	snap := SnapshotBattler(enemy)
+
+	if len(snap.Params) != 8 {
+		t.Fatalf("Params len = %d, want 8", len(snap.Params))
+	}
+	if snap.Params[2] != 15 {
+		t.Errorf("Params[2] (ATK) = %d, want 15", snap.Params[2])
+	}
+	if snap.Params[6] != 12 {
+		t.Errorf("Params[6] (AGI) = %d, want 12", snap.Params[6])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Bug #6: chargeTpByDamage — RMMV grants TP when taking HP damage
+// Formula: 50 * (damage / mhp) * tcr
+// ---------------------------------------------------------------------------
+
+func TestChargeTpByDamage(t *testing.T) {
+	res := makeTestRes()
+	actor := NewActorBattler(ActorConfig{
+		Name: "Hero", Index: 0, HP: 100,
+		BaseParams: [8]int{100, 50, 30, 20, 10, 10, 10, 10},
+		Res:        res,
+	})
+	actor.SetTP(0)
+
+	// 50 damage on 100 MHP = 50% damage rate → 50 * 0.5 * 1.0 = 25 TP
+	chargeTpByDamage(actor, 50)
+	if actor.TP() != 25 {
+		t.Errorf("TP after 50%% damage = %d, want 25", actor.TP())
+	}
+
+	// 10 damage on 100 MHP = 10% → 50 * 0.1 * 1.0 = 5 TP → total 30
+	chargeTpByDamage(actor, 10)
+	if actor.TP() != 30 {
+		t.Errorf("TP after 10%% more damage = %d, want 30", actor.TP())
+	}
+
+	// 0 or negative damage should not charge TP.
+	chargeTpByDamage(actor, 0)
+	chargeTpByDamage(actor, -5)
+	if actor.TP() != 30 {
+		t.Errorf("TP after 0/negative damage = %d, want 30", actor.TP())
+	}
+}
+
+func TestChargeTpByDamageCapsAt100(t *testing.T) {
+	res := makeTestRes()
+	actor := NewActorBattler(ActorConfig{
+		Name: "Hero", Index: 0, HP: 100,
+		BaseParams: [8]int{100, 50, 30, 20, 10, 10, 10, 10},
+		Res:        res,
+	})
+	actor.SetTP(90)
+
+	// 100 damage → 50 * 1.0 * 1.0 = 50 → 90+50=140, clamped to 100
+	chargeTpByDamage(actor, 100)
+	if actor.TP() != 100 {
+		t.Errorf("TP after full damage from 90 = %d, want 100", actor.TP())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Bug #7: DropResult JSON tags — ensure snake_case serialization
+// ---------------------------------------------------------------------------
+
+func TestDropResultJSONTags(t *testing.T) {
+	drop := DropResult{ItemType: 1, ItemID: 5, Quantity: 2}
+	data, err := json.Marshal(drop)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+	if !strings.Contains(s, `"item_type"`) {
+		t.Errorf("JSON should contain item_type, got: %s", s)
+	}
+	if !strings.Contains(s, `"item_id"`) {
+		t.Errorf("JSON should contain item_id, got: %s", s)
+	}
+	if !strings.Contains(s, `"quantity"`) {
+		t.Errorf("JSON should contain quantity, got: %s", s)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Bug #8: ActionResultTarget should include tp_after
+// ---------------------------------------------------------------------------
+
+func TestActionResultTargetHasTPAfter(t *testing.T) {
+	art := ActionResultTarget{
+		Target:  BattlerRef{Index: 0, IsActor: true, Name: "Hero"},
+		Damage:  10,
+		HPAfter: 90,
+		MPAfter: 50,
+		TPAfter: 25,
+	}
+	data, err := json.Marshal(art)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+	if !strings.Contains(s, `"tp_after":25`) {
+		t.Errorf("JSON should contain tp_after:25, got: %s", s)
 	}
 }

@@ -70,6 +70,11 @@ type npcInteractRequest struct {
 // HandleInteract processes a player interacting with a map event/NPC.
 // Validates proximity, gets the active page, and runs the executor.
 func (h *NPCHandlers) HandleInteract(ctx context.Context, s *player.PlayerSession, raw json.RawMessage) error {
+	// Reject interaction if the player is currently in battle.
+	if s.InBattle() {
+		return nil
+	}
+
 	var req npcInteractRequest
 	if err := json.Unmarshal(raw, &req); err != nil || req.EventID <= 0 {
 		return nil

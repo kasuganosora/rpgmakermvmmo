@@ -391,13 +391,19 @@ func TestTickBuffTurns(t *testing.T) {
 	a := makeTestActor(res)
 
 	a.AddBuff(2, 2) // 2 turns
-	a.TickBuffTurns()
+	expired := a.TickBuffTurns()
 	if a.BuffLevel(2) != 1 {
 		t.Errorf("buff should still be active, level = %d", a.BuffLevel(2))
 	}
-	a.TickBuffTurns()
+	if len(expired) != 0 {
+		t.Errorf("no buffs should have expired yet, got %v", expired)
+	}
+	expired = a.TickBuffTurns()
 	if a.BuffLevel(2) != 0 {
 		t.Errorf("buff should have expired, level = %d", a.BuffLevel(2))
+	}
+	if len(expired) != 1 || expired[0] != 2 {
+		t.Errorf("expected expired=[2], got %v", expired)
 	}
 }
 

@@ -132,9 +132,27 @@ func (h *CharacterHandler) Create(c *gin.Context) {
 	// Mirrors the original game's CE 1 + EV156 new-game initialization:
 	//   var[204] = 18 (hour = 6 PM) → CE 32 computes var[206] = 4 (dusk)
 	// Without this, var[204] defaults to 0 (midnight) → darkness overlay.
+	// Mirrors CE 1 variable initializations.
 	initVars := []model.CharVariable{
-		{CharID: char.ID, VariableID: 204, Value: 18}, // hour = 6 PM
+		{CharID: char.ID, VariableID: 116, Value: 95},   // 好感度
+		{CharID: char.ID, VariableID: 204, Value: 18},   // hour = 6 PM
+		{CharID: char.ID, VariableID: 231, Value: 3},    // 天気
+		{CharID: char.ID, VariableID: 299, Value: 1},    // 地域タイプ
+		{CharID: char.ID, VariableID: 300, Value: 2},    // 地域サブ
+		{CharID: char.ID, VariableID: 802, Value: 100},  // 瘴気汚染/戦意 max
+		{CharID: char.ID, VariableID: 1028, Value: 200}, // 発情値 max
+		{CharID: char.ID, VariableID: 1029, Value: 100}, // 戦意 current (= max)
+		{CharID: char.ID, VariableID: 1031, Value: 2000}, // 敏感値 max
+		{CharID: char.ID, VariableID: 1033, Value: 1},   // ゲージ表示フラグ
 	}
+	// v[722..740] = 100 (clothing durability maxes)
+	for vid := 722; vid <= 740; vid++ {
+		initVars = append(initVars, model.CharVariable{CharID: char.ID, VariableID: vid, Value: 100})
+	}
+	// v[702] = v[722] = 100, v[741] = v[742] = v[722] = 100 (durability current/display)
+	initVars = append(initVars, model.CharVariable{CharID: char.ID, VariableID: 702, Value: 100})
+	initVars = append(initVars, model.CharVariable{CharID: char.ID, VariableID: 741, Value: 100})
+	initVars = append(initVars, model.CharVariable{CharID: char.ID, VariableID: 742, Value: 100})
 	for _, v := range initVars {
 		h.db.Create(&v)
 	}

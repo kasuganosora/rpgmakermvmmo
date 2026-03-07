@@ -1,6 +1,8 @@
 package battle
 
 import (
+	"math/rand"
+
 	"github.com/kasuganosora/rpgmakermvmmo/server/resource"
 )
 
@@ -60,7 +62,9 @@ type Battler interface {
 	HasState(stateID int) bool
 	StateIDs() []int
 	StateEntries() []StateEntry
-	TickStateTurns() []int // decrement; returns expired state IDs
+	TickStateTurns() []int          // decrement timing=2 states; returns expired state IDs
+	TickActionEndStates() []int     // decrement timing=1 states; returns expired state IDs
+	CheckRemoveByDamage(rng *rand.Rand) []int // check removeByDamage states; returns removed IDs
 
 	CurrentAction() *Action
 	SetAction(a *Action)
@@ -79,7 +83,11 @@ type Battler interface {
 	AddBuff(paramID int, turns int)
 	AddDebuff(paramID int, turns int)
 	RemoveBuff(paramID int)
-	TickBuffTurns()
+	TickBuffTurns() []int // returns param IDs of expired buffs
+
+	// Restriction returns the highest restriction level from active states.
+	// 0=none, 1=attack enemy, 2=attack anyone, 3=attack ally, 4=cannot move
+	Restriction() int
 
 	ToCharacterStats() *CharacterStats
 }
@@ -248,10 +256,29 @@ func (b *baseBattler) StateEntries() []StateEntry {
 }
 
 func (b *baseBattler) TickStateTurns() []int {
+	return b.tickStatesWithTiming(2)
+}
+
+func (b *baseBattler) TickActionEndStates() []int {
+	return b.tickStatesWithTiming(1)
+}
+
+// tickStatesWithTiming decrements turns for states with the given autoRemovalTiming.
+// Returns IDs of states that expired. States without resource data or with timing=0
+// are left untouched.
+func (b *baseBattler) tickStatesWithTiming(timing int) []int {
 	var expired []int
 	remaining := b.states[:0]
 	for _, s := range b.states {
-		if s.TurnsLeft < 0 {
+		// Check if this state matches the requested timing.
+		shouldTick := false
+		if b.res != nil && s.StateID > 0 && s.StateID < len(b.res.States) {
+			st := b.res.States[s.StateID]
+			if st != nil && st.AutoRemovalTiming == timing {
+				shouldTick = true
+			}
+		}
+		if !shouldTick || s.TurnsLeft < 0 {
 			remaining = append(remaining, s)
 			continue
 		}
@@ -316,7 +343,8 @@ func (b *baseBattler) RemoveBuff(paramID int) {
 	b.buffTurns[paramID] = 0
 }
 
-func (b *baseBattler) TickBuffTurns() {
+func (b *baseBattler) TickBuffTurns() []int {
+	var expired []int
 	for i := range b.buffLevels {
 		if b.buffLevels[i] == 0 {
 			continue
@@ -325,8 +353,59 @@ func (b *baseBattler) TickBuffTurns() {
 		if b.buffTurns[i] <= 0 {
 			b.buffLevels[i] = 0
 			b.buffTurns[i] = 0
+			expired = append(expired, i)
 		}
 	}
+	return expired
+}
+
+// CheckRemoveByDamage checks all active states for removeByDamage and rolls
+// chanceByDamage for each. Returns IDs of removed states.
+func (b *baseBattler) CheckRemoveByDamage(rng *rand.Rand) []int {
+	if b.res == nil {
+		return nil
+	}
+	var removed []int
+	remaining := b.states[:0]
+	for _, se := range b.states {
+		shouldRemove := false
+		if se.StateID > 0 && se.StateID < len(b.res.States) {
+			st := b.res.States[se.StateID]
+			if st != nil && st.RemoveByDamage {
+				chance := st.ChanceByDamage
+				if chance <= 0 {
+					chance = 100
+				}
+				if rng.Intn(100) < chance {
+					shouldRemove = true
+				}
+			}
+		}
+		if shouldRemove {
+			removed = append(removed, se.StateID)
+		} else {
+			remaining = append(remaining, se)
+		}
+	}
+	b.states = remaining
+	return removed
+}
+
+// Restriction returns the highest restriction level from active states.
+func (b *baseBattler) Restriction() int {
+	maxR := 0
+	if b.res == nil {
+		return 0
+	}
+	for _, se := range b.states {
+		if se.StateID > 0 && se.StateID < len(b.res.States) {
+			st := b.res.States[se.StateID]
+			if st != nil && st.Restriction > maxR {
+				maxR = st.Restriction
+			}
+		}
+	}
+	return maxR
 }
 
 // --- Traits ---
@@ -495,6 +574,37 @@ func (e *EnemyBattler) IsActor() bool          { return false }
 func (e *EnemyBattler) CharID() int64           { return 0 }
 func (e *EnemyBattler) Enemy() *resource.Enemy  { return e.enemy }
 func (e *EnemyBattler) EnemyID() int            { return e.enemyID }
+
+// Transform replaces this enemy with a different enemy type mid-battle.
+// HP is preserved proportionally (RMMV behavior).
+func (e *EnemyBattler) Transform(newEnemy *resource.Enemy) {
+	if newEnemy == nil {
+		return
+	}
+	// Preserve HP ratio.
+	hpRatio := 1.0
+	if e.baseParams[0] > 0 {
+		hpRatio = float64(e.hp) / float64(e.baseParams[0])
+	}
+
+	e.enemyID = newEnemy.ID
+	e.enemy = newEnemy
+	e.name = newEnemy.Name
+	e.baseParams = [8]int{
+		newEnemy.HP, newEnemy.MP,
+		newEnemy.Atk, newEnemy.Def,
+		newEnemy.Mat, newEnemy.Mdf,
+		newEnemy.Agi, newEnemy.Luk,
+	}
+	e.baseTraits = newEnemy.Traits
+
+	// Scale HP proportionally to new max.
+	e.hp = int(float64(newEnemy.HP) * hpRatio)
+	if e.hp < 1 && hpRatio > 0 {
+		e.hp = 1
+	}
+	e.mp = newEnemy.MP
+}
 
 // SkillIDs returns unique skill IDs from the enemy's action table.
 func (e *EnemyBattler) SkillIDs() []int {

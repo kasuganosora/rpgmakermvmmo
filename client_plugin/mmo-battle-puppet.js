@@ -52,6 +52,8 @@
     var _puppetPendingSkillId = 0;
     /** @type {number} 待发送的物品 ID。 */
     var _puppetPendingItemId = 0;
+    /** @type {Object|null} 服务端奖励数据（exp/gold/drops/levelUps）。 */
+    var _puppetRewards = null;
 
     /** 标记 $MMO 当前是否处于服务端战斗中。 */
     $MMO._serverBattle = false;
@@ -149,16 +151,42 @@
             var actorId = j + 1;
             var actor = $gameActors.actor(actorId);
             if (actor) {
+                // 同步职业 ID（FTKR_ExBattleCommand 依赖此值获取自定义命令）。
+                if (actorData.class_id && actorData.class_id > 0) {
+                    actor._classId = actorData.class_id;
+                }
+                // 同步等级。
+                if (actorData.level && actorData.level > 0) {
+                    actor._level = actorData.level;
+                }
                 actor._hp = actorData.hp;
                 actor._mp = actorData.mp;
                 actor._tp = actorData.tp || 0;
-                // 用服务端计算值覆盖本地属性。
+                // 用服务端计算值覆盖本地全部 8 属性（MHP/MMP/ATK/DEF/MAT/MDF/AGI/LUK）。
                 actor._puppetParams = {};
-                actor._puppetParams[0] = actorData.max_hp || actorData.hp;
-                actor._puppetParams[1] = actorData.max_mp || actorData.mp;
-                console.log('[Puppet] Actor ' + actorId + ' HP=' + actorData.hp +
-                    '/' + actor._puppetParams[0] +
-                    ' MP=' + actorData.mp + '/' + actor._puppetParams[1]);
+                if (actorData.params && actorData.params.length >= 8) {
+                    for (var p = 0; p < 8; p++) {
+                        actor._puppetParams[p] = actorData.params[p];
+                    }
+                } else {
+                    actor._puppetParams[0] = actorData.max_hp || actorData.hp;
+                    actor._puppetParams[1] = actorData.max_mp || actorData.mp;
+                }
+                // 同步已学技能（用于技能列表窗口和 FTKR 自定义命令）。
+                if (actorData.skills && actorData.skills.length > 0) {
+                    actor._skills = actorData.skills.slice();
+                }
+                // 同步 buff/debuff 等级（用于状态图标和属性计算）。
+                if (actorData.buff_levels) {
+                    actor._buffs = actorData.buff_levels.slice();
+                }
+                console.log('[Puppet] Actor ' + actorId +
+                    ' class=' + actor._classId +
+                    ' lv=' + actor._level +
+                    ' HP=' + actorData.hp + '/' + actor._puppetParams[0] +
+                    ' MP=' + actorData.mp + '/' + actor._puppetParams[1] +
+                    ' ATK=' + (actor._puppetParams[2] || '?') +
+                    ' DEF=' + (actor._puppetParams[3] || '?'));
             }
             if ($gameParty._actors.indexOf(actorId) < 0) {
                 $gameParty._actors.push(actorId);
@@ -207,6 +235,40 @@
             $gameMap.battleback1Name = _origBB1;
             $gameMap.battleback2Name = _origBB2;
         });
+        // 同步服务端游戏变量（FTKR_CSS_BattleStatus 自定义仪表等）。
+        // 只用服务端非零值覆盖客户端变量，保留客户端并行CE设置的值。
+        if (data.game_vars && $gameVariables) {
+            var keys = Object.keys(data.game_vars);
+            for (var vi = 0; vi < keys.length; vi++) {
+                var varId = Number(keys[vi]);
+                if (varId > 0) {
+                    var serverVal = data.game_vars[varId];
+                    if (serverVal !== 0 || !$gameVariables._data[varId]) {
+                        $gameVariables._data[varId] = serverVal;
+                    }
+                }
+            }
+            // CallStand.js 派生变量：v[741]=v[702], v[742]=v[722]（服装耐久仪表）。
+            if ($gameVariables._data[702]) {
+                $gameVariables._data[741] = $gameVariables._data[702];
+            }
+            if ($gameVariables._data[722]) {
+                $gameVariables._data[742] = $gameVariables._data[722];
+            }
+            // 诊断日志：关键仪表变量状态
+            console.log('[Puppet] battle_start game_vars synced:',
+                'v702=' + ($gameVariables._data[702] || 0),
+                'v722=' + ($gameVariables._data[722] || 0),
+                'v741=' + ($gameVariables._data[741] || 0),
+                'v742=' + ($gameVariables._data[742] || 0),
+                'v802=' + ($gameVariables._data[802] || 0),
+                'v1028=' + ($gameVariables._data[1028] || 0),
+                'v1031=' + ($gameVariables._data[1031] || 0),
+                'keys=' + keys.length);
+        } else {
+            console.warn('[Puppet] battle_start: game_vars missing!', !!data.game_vars, !!$gameVariables);
+        }
+
         $gamePlayer.makeEncounterCount();
         SceneManager.push(Scene_Battle);
     });
@@ -245,6 +307,26 @@
     });
 
     /**
+     * 处理 battle_actor_escape 消息。
+     * 队友逃跑时将其从战斗中移除，战斗继续。
+     */
+    $MMO.on('battle_actor_escape', function (data) {
+        if (!_puppetMode || !data) return;
+        console.log('[Puppet] 队友逃跑: actor_index=' + data.actor_index);
+        _puppetEventQueue.push({ type: 'actor_escape', data: data });
+    });
+
+    /**
+     * 处理 battle_enemy_escape 消息。
+     * 敌人逃跑时将其从战斗中移除。
+     */
+    $MMO.on('battle_enemy_escape', function (data) {
+        if (!_puppetMode || !data) return;
+        console.log('[Puppet] 敌人逃跑: enemy_index=' + data.enemy_index);
+        _puppetEventQueue.push({ type: 'enemy_escape', data: data });
+    });
+
+    /**
      * 处理 battle_turn_end 消息。
      * 将回合结束事件加入队列（包含回合结束回复数据）。
      */
@@ -252,6 +334,115 @@
         if (!_puppetMode) return;
         console.log('[Puppet] 回合结束入队');
         _puppetEventQueue.push({ type: 'turn_end', data: data || {} });
+    });
+
+    /**
+     * 处理 battle_troop_command 消息。
+     * 服务端执行敌群战斗事件时发送的客户端命令（Play SE、Plugin Command 等）。
+     */
+    $MMO.on('battle_troop_command', function (data) {
+        if (!_puppetMode || !data) return;
+        var code = data.code;
+        var params = data.params || [];
+        console.log('[Puppet] 敌群事件命令 code=' + code);
+        switch (code) {
+            case 101: {
+                // Show Text (battle dialogue).
+                // params layout: [faceName, faceIndex, background, positionType, text]
+                // Server appends the combined text as the last element.
+                var text = params[params.length - 1] || '';
+                if (params.length >= 5) {
+                    // Has face/background/position info.
+                    $gameMessage.setFaceImage(params[0] || '', params[1] || 0);
+                    $gameMessage.setBackground(params[2] || 0);
+                    $gameMessage.setPositionType(params[3] || 2);
+                }
+                var textLines = text.split('\n');
+                for (var tl = 0; tl < textLines.length; tl++) {
+                    $gameMessage.add(textLines[tl]);
+                }
+                // Wait for player to dismiss the message, then send ack.
+                var _checkMsgDone = setInterval(function () {
+                    if (!$gameMessage.isBusy()) {
+                        clearInterval(_checkMsgDone);
+                        $MMO.send('battle_troop_ack', {});
+                    }
+                }, 100);
+                break;
+            }
+            case 241: // Play BGM
+                if (params[0]) AudioManager.playBgm(params[0]);
+                break;
+            case 242: // Fadeout BGM
+                AudioManager.fadeOutBgm(params[0] || 1);
+                break;
+            case 245: // Play BGS
+                if (params[0]) AudioManager.playBgs(params[0]);
+                break;
+            case 246: // Fadeout BGS
+                AudioManager.fadeOutBgs(params[0] || 1);
+                break;
+            case 249: // Play ME
+                if (params[0]) AudioManager.playMe(params[0]);
+                break;
+            case 250: // Play SE
+                if (params[0]) AudioManager.playSe(params[0]);
+                break;
+            case 335: // Enemy Appear
+                var appearIdx = params[0] || 0;
+                var enemy = $gameTroop.members()[appearIdx];
+                if (enemy) enemy.appear();
+                break;
+            case 336: { // Enemy Transform
+                var tIdx = params[0] || 0;
+                var newEnemyId = params[1] || 0;
+                var trEnemy = $gameTroop.members()[tIdx];
+                if (trEnemy && newEnemyId > 0) {
+                    trEnemy.transform(newEnemyId);
+                }
+                break;
+            }
+            case 337: { // Show Battle Animation
+                var animTarget = params[0] || 0;
+                var animId = params[1] || 0;
+                var enemy337 = $gameTroop.members()[animTarget];
+                if (enemy337 && animId > 0) {
+                    enemy337.startAnimation(animId, false, 0);
+                }
+                break;
+            }
+            case 339: // Force Action
+                // Forward to client BattleManager for forced action handling.
+                if (params.length >= 3) {
+                    var faIdx = params[0] || 0;
+                    var faEnemy = $gameTroop.members()[faIdx];
+                    if (faEnemy) {
+                        var skillId = params[1] || 0;
+                        var targetIdx = params[2] || -1;
+                        faEnemy.forceAction(skillId, targetIdx);
+                        BattleManager.forceAction(faEnemy);
+                    }
+                }
+                break;
+            case 355: // Script
+                if (params[0]) {
+                    try { eval(params[0]); } catch (e) {
+                        console.warn('[Puppet] troop script error:', e);
+                    }
+                }
+                break;
+            case 356: // Plugin Command
+                if (params[0]) {
+                    var args = String(params[0]).split(' ');
+                    var command = args.shift();
+                    Game_Interpreter.prototype.pluginCommand.call(
+                        { _eventId: 0, _mapId: 0 }, command, args
+                    );
+                }
+                break;
+            default:
+                console.log('[Puppet] 未处理的敌群事件命令 code=' + code);
+        }
     });
 
     /**
@@ -271,19 +462,15 @@
         _puppetEventQueue = [];
         _processingAction = false;
 
-        // result=0: 胜利，发放奖励。
+        // 存储服务端奖励数据，供 makeRewards 覆写使用。
+        // 不在此处手动应用，避免 processVictory.gainRewards 导致双重奖励。
         if (data.result === 0) {
-            if (data.exp > 0) {
-                for (var i = 0; i < $gameParty.members().length; i++) {
-                    var actor = $gameParty.members()[i];
-                    if (actor && actor.isAlive()) {
-                        actor.gainExp(data.exp);
-                    }
-                }
-            }
-            if (data.gold > 0) {
-                $gameParty.gainGold(data.gold);
-            }
+            _puppetRewards = {
+                exp: data.exp || 0,
+                gold: data.gold || 0,
+                drops: [],
+                levelUps: data.level_ups || [],
+            };
             if (data.drops) {
                 for (var d = 0; d < data.drops.length; d++) {
                     var drop = data.drops[d];
@@ -291,7 +478,7 @@
                     if (drop.item_type === 1) item = $dataItems[drop.item_id];
                     else if (drop.item_type === 2) item = $dataWeapons[drop.item_id];
                     else if (drop.item_type === 3) item = $dataArmors[drop.item_id];
-                    if (item) $gameParty.gainItem(item, drop.quantity || 1);
+                    if (item) _puppetRewards.drops.push(item);
                 }
             }
         }
@@ -302,19 +489,50 @@
         _puppetEndingBattle = true;
         _puppetMode = false;
         $MMO._serverBattle = false;
+        if ($gameParty) $gameParty._inBattle = false;
+
+        // Clean up stale BattleManager references to prevent leaks.
+        BattleManager._subject = null;
+        BattleManager._action = null;
+
+        // Clear troop interpreter to stop any running common events.
+        if ($gameTroop && $gameTroop._interpreter) {
+            $gameTroop._interpreter.clear();
+        }
 
         // 根据结果调用对应的 BattleManager 流程。
+        // processVictory 会调用 makeRewards → displayRewards → gainRewards。
+        // result: 0=win, 1=escape, 2=lose, 3=abort(script)
         if (data.result === 0) {
             BattleManager.processVictory();
-        } else if (data.result === 1) {
+        } else if (data.result === 1 || data.result === 3) {
+            // Escape and script-abort both use processEscape (exit battle cleanly).
             BattleManager.processEscape();
         } else {
             BattleManager.processDefeat();
         }
 
         _puppetEndingBattle = false;
+        _puppetRewards = null;
         // 通知服务端客户端已处理完战斗结果。
         $MMO.send('npc_battle_result', { result: data.result });
+    });
+
+    // ── 断线时清理傀儡状态，防止残留影响后续场景 ──
+    $MMO.on('_disconnected', function () {
+        if (!_puppetMode) return;
+        console.log('[Puppet] 断线，清理傀儡战斗状态');
+        _pendingInputRequest = null;
+        _puppetEventQueue = [];
+        _processingAction = false;
+        _puppetEndingBattle = false;
+        _clearPuppetParams();
+        _puppetMode = false;
+        $MMO._serverBattle = false;
+        if ($gameParty) $gameParty._inBattle = false;
+        // Clear stale BattleManager references.
+        BattleManager._subject = null;
+        BattleManager._action = null;
     });
 
     /**
@@ -384,6 +602,11 @@
             _processingAction = false;
             return;
         }
+
+        // 同步行动者 HP/MP/TP（技能 MP/TP 消耗已在服务端扣除）。
+        if (data.subject_hp_after !== undefined) subject._hp = data.subject_hp_after;
+        if (data.subject_mp_after !== undefined) subject._mp = data.subject_mp_after;
+        if (data.subject_tp_after !== undefined) subject._tp = data.subject_tp_after;
 
         // 创建 Game_Action 用于查找动画 ID。
         var skillId = data.skill_id || 1;
@@ -534,9 +757,10 @@
             }
             result.critical = tgtData.critical || false;
 
-            // 同步 HP/MP 到服务端计算值。
+            // 同步 HP/MP/TP 到服务端计算值。
             if (tgtData.hp_after !== undefined) battler._hp = tgtData.hp_after;
             if (tgtData.mp_after !== undefined) battler._mp = tgtData.mp_after;
+            if (tgtData.tp_after !== undefined) battler._tp = tgtData.tp_after;
 
             // 添加状态。
             if (tgtData.added_states) {
@@ -551,6 +775,14 @@
                 for (var r = 0; r < tgtData.removed_states.length; r++) {
                     battler.removeState(tgtData.removed_states[r]);
                     if (result.removedStates) result.removedStates.push(tgtData.removed_states[r]);
+                }
+            }
+            // 应用 buff/debuff 变化。
+            if (tgtData.added_buffs && battler._buffs) {
+                for (var bf = 0; bf < tgtData.added_buffs.length; bf++) {
+                    var bc = tgtData.added_buffs[bf];
+                    battler._buffs[bc.param_id] = bc.new_level;
+                    battler._buffTurns[bc.param_id] = bc.turns;
                 }
             }
         }
@@ -637,6 +869,32 @@
      * 显示回复量弹窗并刷新状态窗口。
      * @param {Object} data - 回合结束数据，包含 regen 数组
      */
+    /**
+     * 处理队友逃跑 — 隐藏该角色的战斗精灵，战斗继续。
+     */
+    function _applyActorEscape(data) {
+        var actorIndex = data.actor_index;
+        var actor = $gameParty.battleMembers()[actorIndex];
+        if (actor) {
+            actor.setHp(0); // mark as "out" so RMMV skips them
+            actor.hide();   // hide from battle scene
+            console.log('[Puppet] 队友 ' + actor.name() + ' 逃跑离开战斗');
+        }
+    }
+
+    /**
+     * 处理敌人逃跑 — 隐藏该敌人，战斗继续。
+     */
+    function _applyEnemyEscape(data) {
+        var enemyIndex = data.enemy_index;
+        var enemy = $gameTroop.members()[enemyIndex];
+        if (enemy) {
+            enemy.hide();
+            enemy.setHp(0);
+            console.log('[Puppet] 敌人 ' + enemy.name() + ' 逃跑离开战斗');
+        }
+    }
+
     function _applyTurnEnd(data) {
         if (data.regen) {
             for (var i = 0; i < data.regen.length; i++) {
@@ -653,6 +911,37 @@
                     result.hpDamage = -(regen.hp_change || 0);
                     result.hpAffected = true;
                     battler.startDamagePopup();
+                }
+            }
+        }
+        // Remove states that expired this turn (turn count reached 0).
+        if (data.expired_states) {
+            var keys = Object.keys(data.expired_states);
+            for (var k = 0; k < keys.length; k++) {
+                var key = keys[k]; // e.g. "actor_0" or "enemy_1"
+                var parts = key.split('_');
+                var ref = { is_actor: parts[0] === 'actor', index: parseInt(parts[1]) };
+                var battler = _getBattler(ref);
+                if (!battler) continue;
+                var stateIds = data.expired_states[key];
+                for (var si = 0; si < stateIds.length; si++) {
+                    battler.removeState(stateIds[si]);
+                }
+            }
+        }
+        // Remove buffs that expired this turn.
+        if (data.expired_buffs) {
+            var bkeys = Object.keys(data.expired_buffs);
+            for (var bk = 0; bk < bkeys.length; bk++) {
+                var bkey = bkeys[bk];
+                var bparts = bkey.split('_');
+                var bref = { is_actor: bparts[0] === 'actor', index: parseInt(bparts[1]) };
+                var bbattler = _getBattler(bref);
+                if (!bbattler) continue;
+                var paramIds = data.expired_buffs[bkey];
+                for (var bi = 0; bi < paramIds.length; bi++) {
+                    bbattler._buffs[paramIds[bi]] = 0;
+                    bbattler._buffTurns[paramIds[bi]] = 0;
                 }
             }
         }
@@ -769,7 +1058,10 @@
         Scene_Base.prototype.update.call(this);  // 子元素、输入、淡入淡出
         if ($gameScreen) $gameScreen.update();
         if ($gameTimer) $gameTimer.update(this.isActive());
-        this.updateStatusWindow();
+        // 傀儡模式下不调用原始 updateStatusWindow —— 它会在
+        // $gameMessage.isBusy() 时关闭命令窗口，导致输入无法操作。
+        // 保持状态窗口始终打开。
+        if (this._statusWindow) this._statusWindow.open();
         this.updateWindowPositions();
 
         // 等待场景完全初始化（15 帧后且命令窗口存在）。
@@ -778,9 +1070,16 @@
             if (_puppetReadyFrames >= 15 && this._actorCommandWindow) {
                 _puppetSceneReady = true;
                 console.log('[Puppet] 场景就绪, 耗时 ' + _puppetReadyFrames + ' 帧');
+                // 触发 CallStand 立绘显示（模拟并行CE的调用）。
+                _triggerBattleStand();
+                // 通知服务端场景已就绪。
+                $MMO.send('battle_scene_ready', {});
             }
             return;
         }
+
+        // ── 驱动地图并行公共事件（立绘、仪表等）──
+        _updateBattleParallelCEs();
 
         // ── 驱动队伍解释器（处理技能触发的公共事件）──
         if ($gameTroop && $gameTroop._interpreter && $gameTroop._interpreter.isRunning()) {
@@ -837,6 +1136,10 @@
                 _startPuppetAction(evt.data);
             } else if (evt.type === 'turn_end') {
                 _applyTurnEnd(evt.data);
+            } else if (evt.type === 'actor_escape') {
+                _applyActorEscape(evt.data);
+            } else if (evt.type === 'enemy_escape') {
+                _applyEnemyEscape(evt.data);
             }
             return;
         }
@@ -911,6 +1214,20 @@
         return _BM_checkAbort.call(this);
     };
 
+    /** 使用服务端奖励数据覆写本地 makeRewards。 */
+    var _BM_makeRewards = BattleManager.makeRewards;
+    BattleManager.makeRewards = function () {
+        if (_puppetRewards) {
+            this._rewards = {
+                exp: _puppetRewards.exp,
+                gold: _puppetRewards.gold,
+                items: _puppetRewards.drops,
+            };
+            return;
+        }
+        _BM_makeRewards.call(this);
+    };
+
     /** 阻止本地 processVictory（除非由 battle_battle_end 触发）。 */
     var _BM_processVictory = BattleManager.processVictory;
     BattleManager.processVictory = function () {
@@ -964,27 +1281,32 @@
     // ═══════════════════════════════════════════════════════════
 
     /**
+     * 阻止傀儡模式下在角色命令窗口按取消键。
+     * 服务端控制输入流程，玩家必须选择一个行动。
+     */
+    var _Scene_Battle_selectPreviousCommand = Scene_Battle.prototype.selectPreviousCommand;
+    Scene_Battle.prototype.selectPreviousCommand = function () {
+        if (_puppetMode) {
+            // 重新激活命令窗口，不做任何切换。
+            var actor = BattleManager.actor();
+            if (actor && this._actorCommandWindow) {
+                this._actorCommandWindow.activate();
+            }
+            return;
+        }
+        _Scene_Battle_selectPreviousCommand.call(this);
+    };
+
+    /**
      * 覆写攻击命令。
-     * 傀儡模式下自动选择第一个存活敌人并发送输入。
-     * 跳过敌人选择窗口以避免与 YEP_BattleEngineCore 等插件冲突。
+     * 傀儡模式下打开敌人选择窗口让玩家选择目标。
      */
     var _Scene_Battle_commandAttack = Scene_Battle.prototype.commandAttack;
     Scene_Battle.prototype.commandAttack = function () {
         if (_puppetMode) {
-            // 自动选择第一个存活的敌人作为目标。
-            var enemies = $gameTroop.aliveMembers();
-            var targetIndex = enemies.length > 0 ? enemies[0].index() : 0;
-            console.log('[Puppet] 攻击 → 自动选择敌人 index=' + targetIndex);
-            $MMO.send('battle_input', {
-                actor_index: BattleManager._actorIndex,
-                action_type: 0,
-                skill_id: 0,
-                item_id: 0,
-                target_indices: [targetIndex],
-                target_is_actor: false,
-            });
-            BattleManager._phase = 'waiting';
-            if (this._actorCommandWindow) this._actorCommandWindow.close();
+            _puppetPendingSkillId = 0;
+            _puppetPendingItemId = 0;
+            _selectEnemyTarget.call(this);
             return;
         }
         _Scene_Battle_commandAttack.call(this);
@@ -1034,6 +1356,53 @@
             return;
         }
         _Scene_Battle_commandEscape.call(this);
+    };
+
+    /**
+     * 拦截 FTKR_ExBattleCommand 的 commandCustom。
+     * 傀儡模式下提取技能 ID 并走服务端输入流程。
+     */
+    var _Scene_Battle_commandCustom = Scene_Battle.prototype.commandCustom;
+    Scene_Battle.prototype.commandCustom = function () {
+        if (_puppetMode) {
+            var skill = null;
+            if (this._actorCommandWindow && this._actorCommandWindow.currentEbcSkill) {
+                skill = this._actorCommandWindow.currentEbcSkill();
+            }
+            if (!skill) {
+                console.warn('[Puppet] commandCustom: 无法获取技能');
+                return;
+            }
+
+            var actor = BattleManager.actor();
+            if (!actor) return;
+            var action = new Game_Action(actor);
+            action.setSkill(skill.id);
+
+            if (!action.needsSelection()) {
+                $MMO.send('battle_input', {
+                    actor_index: BattleManager._actorIndex,
+                    action_type: 1,
+                    skill_id: skill.id,
+                    target_indices: [BattleManager._actorIndex],
+                    target_is_actor: true,
+                });
+                BattleManager._phase = 'waiting';
+                if (this._actorCommandWindow) this._actorCommandWindow.close();
+            } else if (action.isForOpponent()) {
+                _puppetPendingSkillId = skill.id;
+                _puppetPendingItemId = 0;
+                _selectEnemyTarget.call(this);
+            } else {
+                _puppetPendingSkillId = skill.id;
+                _puppetPendingItemId = 0;
+                _selectActorTarget.call(this);
+            }
+            return;
+        }
+        if (_Scene_Battle_commandCustom) {
+            _Scene_Battle_commandCustom.call(this);
+        }
     };
 
     /**
@@ -1249,6 +1618,88 @@
             if (ref.index < enemies.length) return enemies[ref.index];
         }
         return null;
+    }
+
+    /**
+     * 触发 CallStand 立绘显示。
+     * 在傀儡模式战斗场景就绪后调用，模拟并行CE的 CallStand 调用。
+     * 使用 v[916]（立绘ID变量）执行 CallStand 插件命令。
+     */
+    /**
+     * 运行战斗中的客户端并行公共事件。
+     * 许多 ProjectB 功能依赖并行 CE（如 CE 234→207→CallStand 立绘链、
+     * CE 设置自定义仪表变量等），需要在战斗场景中持续驱动。
+     */
+    function _updateBattleParallelCEs() {
+        if (!$gameMap || !$gameMap._commonEvents) return;
+        for (var i = 0; i < $gameMap._commonEvents.length; i++) {
+            var ce = $gameMap._commonEvents[i];
+            if (!ce) continue;
+            try {
+                ce.refresh();
+                ce.update();
+            } catch (e) {
+                // 某些 CE 可能依赖地图上下文，在战斗中会报错，安全跳过。
+            }
+        }
+    }
+
+    function _triggerBattleStand() {
+        try {
+            // CE 234→210 链在原游戏中通过 autorun CE 设置 v[916]（立绘ID）。
+            // 服务端不运行此链（$gameParty.inBattle() 在服务端始终 false），
+            // 所以在客户端直接模拟：设置 switch 48 → 执行 CE 210。
+            if ($gameSwitches) {
+                // Switch 48 = 立绘判定用开关（CE 234 在战斗中设置）
+                $gameSwitches._data[48] = true;
+            }
+
+            // 尝试直接执行 CE 210（立绘判定CE），它检查各种状态并设置 v[916]。
+            // CE 210 是 autorun CE，不在并行CE列表中，必须手动执行。
+            var ce210Ran = false;
+            if ($dataCommonEvents && $dataCommonEvents[210] && $dataCommonEvents[210].list) {
+                try {
+                    var ceInterp = new Game_Interpreter();
+                    ceInterp.setup($dataCommonEvents[210].list, 0);
+                    // 同步执行数帧让 CE 210 运行完毕
+                    for (var tick = 0; tick < 20; tick++) {
+                        ceInterp.update();
+                        if (!ceInterp.isRunning()) break;
+                    }
+                    ce210Ran = true;
+                } catch (e) {
+                    console.warn('[Puppet] CE 210 执行失败:', e.message);
+                }
+            }
+
+            // 也运行并行CE（可能有其他视觉效果依赖）
+            for (var tick2 = 0; tick2 < 3; tick2++) {
+                _updateBattleParallelCEs();
+            }
+
+            var standId = $gameVariables ? $gameVariables.value(916) : 0;
+
+            // 如果 CE 210 未能设置 v[916]，基于变身状态做回退。
+            if (standId <= 0) {
+                var actor = $gameActors ? $gameActors.actor(1) : null;
+                if (actor && actor._classId > 1) {
+                    standId = 1; // 变身后默认基础立绘
+                    if ($gameVariables) $gameVariables._data[916] = standId;
+                }
+            }
+
+            if (standId > 0) {
+                var interp = new Game_Interpreter();
+                interp.pluginCommand('CallStand', [String(standId)]);
+                console.log('[Puppet] CallStand 立绘已触发, standId=' + standId +
+                    ' (CE210=' + ce210Ran + ')');
+            } else {
+                console.log('[Puppet] CallStand 跳过: v[916]=' + standId +
+                    ', classId=' + ($gameActors && $gameActors.actor(1) ? $gameActors.actor(1)._classId : '?'));
+            }
+        } catch (e) {
+            console.warn('[Puppet] CallStand 触发失败:', e.message);
+        }
     }
 
     /**

@@ -23,7 +23,10 @@ type ActionOutcome struct {
 	Drain          int  // HP drained back to attacker (for drain skills)
 	AddedStates    []int
 	RemovedStates  []int
-	CommonEventIDs []int // triggered common event IDs (RMMV effect code 44)
+	AddedBuffs     []BuffChange // buff/debuff changes applied
+	CommonEventIDs []int        // triggered common event IDs (RMMV effect code 44)
+	IsCounter      bool         // true if this is a counter-attack outcome
+	Escaped        bool         // true if target escaped via effect 41
 }
 
 // ProcessAction executes a battler's action and returns outcomes per target.
@@ -81,8 +84,18 @@ func (ap *ActionProcessor) processSkillAction(
 
 	var outcomes []ActionOutcome
 	for _, tgt := range targets {
+		actualTarget := tgt
+		// Magic reflection: magical skills (hitType=1 = certain, 2 = physical, hitType is actually
+		// RMMV hitType: 0=certain, 1=physical, 2=magical).
+		// Reflect only magical skills (hitType=2) with damage targeting opponents.
+		if skill.HitType == 2 && tgt != subject {
+			mrf := tgt.XParam(5) // magic reflection rate
+			if mrf > 0 && ap.RNG.Float64() < mrf {
+				actualTarget = subject // reflected back to caster
+			}
+		}
 		for r := 0; r < repeats; r++ {
-			out := ap.applySkillToTarget(subject, tgt, skill)
+			out := ap.applySkillToTarget(subject, actualTarget, skill)
 			outcomes = append(outcomes, out)
 		}
 	}
@@ -91,6 +104,26 @@ func (ap *ActionProcessor) processSkillAction(
 	for i := range outcomes {
 		if !outcomes[i].Missed {
 			ap.applySkillEffects(subject, ap.targetByOutcome(outcomes[i], actors, enemies), skill.Effects, &outcomes[i])
+		}
+	}
+
+	// Counter-attack: physical attacks (hitType=1) can trigger counter.
+	if skill.HitType == 1 {
+		for i := range outcomes {
+			if outcomes[i].Missed {
+				continue
+			}
+			tgt := ap.targetByOutcome(outcomes[i], actors, enemies)
+			if tgt == nil || tgt == subject || tgt.IsDead() {
+				continue
+			}
+			cnt := tgt.XParam(6) // counter-attack rate
+			if cnt > 0 && ap.RNG.Float64() < cnt {
+				// Counter with normal attack (skill 1).
+				counterOut := ap.applySkillToTarget(tgt, subject, ap.Res.SkillByID(1))
+				counterOut.IsCounter = true
+				outcomes = append(outcomes, counterOut)
+			}
 		}
 	}
 
@@ -161,6 +194,7 @@ func (ap *ActionProcessor) applySkillToTarget(subject, target Battler, skill *re
 	case 1: // HP damage
 		target.SetHP(target.HP() - damage)
 		out.Damage = damage
+		chargeTpByDamage(target, damage)
 	case 2: // MP damage
 		target.SetMP(target.MP() - damage)
 		out.Damage = damage
@@ -175,6 +209,7 @@ func (ap *ActionProcessor) applySkillToTarget(subject, target Battler, skill *re
 		subject.SetHP(subject.HP() + damage)
 		out.Damage = damage
 		out.Drain = damage
+		chargeTpByDamage(target, damage)
 	case 6: // MP drain
 		target.SetMP(target.MP() - damage)
 		subject.SetMP(subject.MP() + damage)
@@ -204,19 +239,57 @@ func (ap *ActionProcessor) applyItemToTarget(subject, target Battler, item *reso
 	damage := dmgResult.damage
 	out.Critical = dmgResult.critical
 
+	// Apply guard.
+	if target.IsGuarding() && (item.Damage.Type == 1 || item.Damage.Type == 5) {
+		grd := target.SParam(1)
+		if grd <= 0 {
+			grd = 1.0
+		}
+		damage = int(float64(damage) / (2.0 * grd))
+	}
+
 	switch item.Damage.Type {
-	case 1:
+	case 1: // HP damage
 		target.SetHP(target.HP() - damage)
 		out.Damage = damage
-	case 3:
+		chargeTpByDamage(target, damage)
+	case 2: // MP damage
+		target.SetMP(target.MP() - damage)
+		out.Damage = damage
+	case 3: // HP recovery
 		target.SetHP(target.HP() + damage)
 		out.Damage = -damage
-	case 4:
+	case 4: // MP recovery
 		target.SetMP(target.MP() + damage)
 		out.Damage = -damage
+	case 5: // HP drain
+		target.SetHP(target.HP() - damage)
+		subject.SetHP(subject.HP() + damage)
+		out.Damage = damage
+		out.Drain = damage
+		chargeTpByDamage(target, damage)
+	case 6: // MP drain
+		target.SetMP(target.MP() - damage)
+		subject.SetMP(subject.MP() + damage)
+		out.Damage = damage
+		out.Drain = damage
 	}
 
 	return out
+}
+
+// chargeTpByDamage grants TP to a battler when they take HP damage.
+// RMMV formula: 50 * damageRate * tcr, where damageRate = damage / mhp.
+func chargeTpByDamage(target Battler, damage int) {
+	if damage <= 0 || target.MaxHP() <= 0 {
+		return
+	}
+	damageRate := float64(damage) / float64(target.MaxHP())
+	tcr := target.SParam(5) // tcr = TP charge rate (default 1.0)
+	tp := int(50.0 * damageRate * tcr)
+	if tp > 0 {
+		target.SetTP(target.TP() + tp)
+	}
 }
 
 type damageCalcResult struct {
@@ -473,19 +546,19 @@ func (ap *ActionProcessor) applySkillEffects(
 				chance *= target.StateRate(stateID)
 			}
 			if ap.RNG.Float64() < chance {
-				target.AddState(stateID, -1)
+				turns := -1 // default: no auto-removal
 				if ap.Res != nil {
 					for _, st := range ap.Res.States {
 						if st != nil && st.ID == stateID && st.AutoRemovalTiming > 0 {
-							turns := st.MinTurns
+							turns = st.MinTurns
 							if st.MaxTurns > st.MinTurns {
 								turns += ap.RNG.Intn(st.MaxTurns - st.MinTurns + 1)
 							}
-							target.AddState(stateID, turns)
 							break
 						}
 					}
 				}
+				target.AddState(stateID, turns)
 				out.AddedStates = append(out.AddedStates, stateID)
 			}
 		case 22: // Remove State — dataId=stateID, value1=chance
@@ -496,15 +569,27 @@ func (ap *ActionProcessor) applySkillEffects(
 			}
 		case 31: // Add Buff — dataId=paramId(0-7), value1=turns
 			target.AddBuff(eff.DataID, int(eff.Value1))
+			out.AddedBuffs = append(out.AddedBuffs, BuffChange{
+				ParamID: eff.DataID, NewLevel: target.BuffLevel(eff.DataID), Turns: int(eff.Value1),
+			})
 		case 32: // Add Debuff — dataId=paramId(0-7), value1=turns
 			target.AddDebuff(eff.DataID, int(eff.Value1))
+			out.AddedBuffs = append(out.AddedBuffs, BuffChange{
+				ParamID: eff.DataID, NewLevel: target.BuffLevel(eff.DataID), Turns: int(eff.Value1),
+			})
 		case 33: // Remove Buff — dataId=paramId(0-7)
 			target.RemoveBuff(eff.DataID)
+			out.AddedBuffs = append(out.AddedBuffs, BuffChange{
+				ParamID: eff.DataID, NewLevel: 0, Turns: 0,
+			})
 		case 34: // Remove Debuff — dataId=paramId(0-7)
 			target.RemoveBuff(eff.DataID)
+			out.AddedBuffs = append(out.AddedBuffs, BuffChange{
+				ParamID: eff.DataID, NewLevel: 0, Turns: 0,
+			})
 		case 41: // Special Effect — dataId=0 means escape
 			if eff.DataID == 0 {
-				// Handled by BattleInstance
+				out.Escaped = true
 			}
 		case 42: // Grow (permanent stat increase)
 			// Not implemented in battle context

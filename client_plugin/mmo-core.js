@@ -374,11 +374,18 @@
         // 客户端并行公共事件需要正确的变量/开关值来计算视觉效果（如昼夜色调）。
         if (data.variables && $gameVariables) {
             var vars = data.variables;
+            var varCount = 0;
             for (var k in vars) {
                 if (vars.hasOwnProperty(k)) {
                     $gameVariables._data[parseInt(k, 10)] = vars[k];
+                    varCount++;
                 }
             }
+            console.log('[MMO] map_init vars synced: count=' + varCount +
+                ' v702=' + ($gameVariables._data[702] || 0) +
+                ' v722=' + ($gameVariables._data[722] || 0) +
+                ' v802=' + ($gameVariables._data[802] || 0) +
+                ' v1031=' + ($gameVariables._data[1031] || 0));
         }
         if (data.switches && $gameSwitches) {
             var sw = data.switches;
