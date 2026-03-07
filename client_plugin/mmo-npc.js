@@ -372,7 +372,13 @@
     /** 在 Spriteset_Map 创建角色精灵后初始化 NPCManager。 */
     var _Spriteset_Map_createCharacters_npc = Spriteset_Map.prototype.createCharacters;
     Spriteset_Map.prototype.createCharacters = function () {
+        // 临时清空 _events，防止为客户端辅助用 Game_Event 创建 Sprite_Character —
+        // 所有 NPC 视觉渲染由 Sprite_ServerNPC 处理。
+        // Game_Event 对象仅供 HzChoiceEvent 等客户端插件读取元数据和运行自动事件。
+        var savedEvents = $gameMap._events;
+        $gameMap._events = [];
         _Spriteset_Map_createCharacters_npc.call(this);
+        $gameMap._events = savedEvents;
         NPCManager.init(this._tilemap);
     };
 
@@ -413,9 +419,9 @@
     // ═══════════════════════════════════════════════════════════
 
     /**
-     * 覆写 setupEvents：跳过创建 Game_Event 对象。
+     * 覆写 setupEvents：仅为客户端专用插件（如 HzChoiceEvent）创建必要的 Game_Event 对象。
      * 保留公共事件（用于客户端并行公共事件，如画面色调、HUD 肖像等）。
-     * _events 清空后，tileEvents() 方法自然返回空数组，无需额外覆写。
+     * 大部分地图事件仍由服务端控制，不创建 Game_Event。
      */
     var _Game_Map_setupEvents = Game_Map.prototype.setupEvents;
     Game_Map.prototype.setupEvents = function () {
@@ -423,8 +429,65 @@
         this._commonEvents = this.parallelCommonEvents().map(function (ce) {
             return new Game_CommonEvent(ce.id);
         });
-        // 清空 _events — 所有地图事件由服务端控制。
+        // 为客户端专用插件创建必要的 Game_Event 对象。
+        // HzChoiceEvent 需要扫描 $gameMap.events() 中带 <hzChoice:> 标签的事件，
+        // 以及包含 hzChoiceEvent 插件指令的自动运行事件来触发菜单。
         this._events = [];
+        if ($dataMap && $dataMap.events) {
+            for (var i = 0; i < $dataMap.events.length; i++) {
+                var ev = $dataMap.events[i];
+                if (ev && this._needsClientEvent(ev)) {
+                    this._events[i] = new Game_Event(this._mapId, i);
+                }
+            }
+        }
+    };
+
+    /**
+     * 判断事件是否需要在客户端创建 Game_Event 对象。
+     * 目前仅 HzChoiceEvent 相关事件需要：
+     *   - 带 <hzChoice:> 标签的事件（位置标记，供 HzChoiceEvent 扫描）
+     *   - 包含 hzChoiceEvent 插件指令的自动运行事件（触发位置菜单）
+     */
+    Game_Map.prototype._needsClientEvent = function (event) {
+        // 带 hzChoice 标签的事件
+        if (event.note && event.note.indexOf('hzChoice') >= 0) return true;
+        // 包含 hzChoiceEvent 插件指令的自动运行事件
+        var pages = event.pages;
+        if (pages) {
+            for (var p = 0; p < pages.length; p++) {
+                var page = pages[p];
+                if (page.trigger === 3 && page.list) { // autorun
+                    for (var c = 0; c < page.list.length; c++) {
+                        var cmd = page.list[c];
+                        if (cmd.code === 356 && cmd.parameters && cmd.parameters[0] &&
+                            String(cmd.parameters[0]).indexOf('hzChoiceEvent') >= 0) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    };
+
+    /**
+     * 拦截客户端 Game_Event 的 start() —— 由 HzChoiceEvent 选中位置后触发。
+     * 不在客户端执行事件命令，而是发送 npc_interact 给服务器处理。
+     * 自动运行事件（trigger=3）不拦截，允许其在客户端正常运行（如 hzChoiceEvent 触发器）。
+     */
+    var _Game_Event_start = Game_Event.prototype.start;
+    Game_Event.prototype.start = function () {
+        // 自动运行事件（trigger=3）允许本地执行（如包含 hzChoiceEvent 的触发事件）
+        var page = this.page();
+        if (page && page.trigger === 3) {
+            _Game_Event_start.call(this);
+            return;
+        }
+        // 其他客户端 Game_Event（如 HzChoiceEvent 选中的位置事件）→ 发送给服务器
+        console.log('[MMO-NPC] Intercepted Game_Event.start for event', this.eventId(), '→ npc_interact');
+        $MMO._serverEventActive = true;
+        $MMO.send('npc_interact', { event_id: this.eventId() });
     };
 
     /**
@@ -450,8 +513,8 @@
                 this._commonEvents[i].update();
             }
         }
-        // _events 为空，原始 updateEvents 中的事件循环不会产生副作用，
-        // 但仍调用以保留其他可能的逻辑（如 map interpreter）。
+        // 调用原始 updateEvents 以保留 map interpreter 逻辑
+        // （处理客户端自动运行事件，如 HzChoiceEvent 触发事件）。
         _Game_Map_updateEvents.call(this);
     };
 

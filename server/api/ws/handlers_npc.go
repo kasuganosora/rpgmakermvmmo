@@ -3,6 +3,7 @@ package ws
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/npc"
@@ -95,6 +96,8 @@ func (h *NPCHandlers) HandleInteract(ctx context.Context, s *player.PlayerSessio
 	}
 
 	// Proximity check — player must be within 1 tile of the NPC.
+	// Skip for hzChoice events (world map location menu — player selects remotely).
+	isHzChoice := npcInst.MapEvent != nil && strings.Contains(npcInst.MapEvent.Note, "hzChoice")
 	px, py, _ := s.Position()
 	dx := px - npcInst.X
 	dy := py - npcInst.Y
@@ -104,7 +107,7 @@ func (h *NPCHandlers) HandleInteract(ctx context.Context, s *player.PlayerSessio
 	if dy < 0 {
 		dy = -dy
 	}
-	if dx > 1 || dy > 1 {
+	if !isHzChoice && (dx > 1 || dy > 1) {
 		h.logger.Warn("npc_interact: too far",
 			zap.Int64("char_id", s.CharID),
 			zap.Int("event_id", req.EventID),
@@ -376,6 +379,17 @@ func (h *NPCHandlers) ExecuteAutoruns(s *player.PlayerSession, mapID int) {
 		if activePage == nil || activePage.Trigger != 3 || len(activePage.List) <= 1 {
 			continue
 		}
+		// 包含客户端专用插件指令（如 hzChoiceEvent）的事件跳过服务端执行，
+		// 交由客户端 RMMV 引擎处理（需要持久 Game_Interpreter + waitMode）。
+		// 同时停止后续自动运行事件，因为在 RMMV 中此事件会占据解释器，
+		// 后续事件要等它完成才能运行（交给客户端按原始顺序处理）。
+		if npc.ContainsClientOnlyPluginCmd(activePage.List) {
+			h.logger.Info("skipping client-only autorun event and deferring remaining to client",
+				zap.Int64("char_id", s.CharID),
+				zap.Int("map_id", mapID),
+				zap.Int("event_id", npcInst.EventID))
+			break
+		}
 		opts := &npc.ExecuteOpts{
 			GameState:       composite,
 			MapID:           mapID,
@@ -388,7 +402,22 @@ func (h *NPCHandlers) ExecuteAutoruns(s *player.PlayerSession, mapID int) {
 				h.sendPageChangesToPlayerDedup(ps, room, composite, lastSentPages)
 			},
 		}
-		h.executor.Execute(context.Background(), s, activePage, opts)
+		// 自动运行事件使用超时上下文，防止客户端不响应时永久阻塞。
+		// 60 秒足够处理大多数自动运行事件（含对话等待）。
+		autorunCtx, autorunCancel := context.WithTimeout(context.Background(), 60*time.Second)
+		h.logger.Info("executing autorun event",
+			zap.Int64("char_id", s.CharID),
+			zap.Int("map_id", mapID),
+			zap.Int("event_id", npcInst.EventID),
+			zap.Int("cmd_count", len(activePage.List)))
+		h.executor.Execute(autorunCtx, s, activePage, opts)
+		if autorunCtx.Err() != nil {
+			h.logger.Warn("autorun event timed out",
+				zap.Int64("char_id", s.CharID),
+				zap.Int("map_id", mapID),
+				zap.Int("event_id", npcInst.EventID))
+		}
+		autorunCancel()
 
 		// Send per-player page changes after each autorun.
 		h.sendPageChangesToPlayer(s, room, composite)
