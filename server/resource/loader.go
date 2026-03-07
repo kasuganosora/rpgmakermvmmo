@@ -68,7 +68,8 @@ type Skill struct {
 	TPGain      int           `json:"tpGain"`      // TP gain on use
 	Damage      SkillDamage   `json:"damage"`
 	Effects     []SkillEffect `json:"effects"`
-	Note        string        `json:"note"`
+	Note        string                 `json:"note"`
+	ParsedMeta  map[string]interface{} `json:"-"`
 }
 
 type Item struct {
@@ -82,7 +83,8 @@ type Item struct {
 	Speed       int           `json:"speed"`
 	Damage      SkillDamage   `json:"damage"`
 	Effects     []SkillEffect `json:"effects"`
-	Note        string        `json:"note"`
+	Note        string                 `json:"note"`
+	ParsedMeta  map[string]interface{} `json:"-"`
 }
 
 // EquipStats extracts the stat bonuses from a weapon or armor Params array.
@@ -117,7 +119,8 @@ type Weapon struct {
 	Params  []int   `json:"params"`
 	WtypeID int     `json:"wtypeId"`
 	Traits  []Trait `json:"traits"`
-	Note    string  `json:"note"`
+	Note       string                 `json:"note"`
+	ParsedMeta map[string]interface{} `json:"-"`
 }
 
 type Armor struct {
@@ -128,7 +131,8 @@ type Armor struct {
 	EtypeID int     `json:"etypeId"` // 1=shield,2=helmet,3=body,4=accessory
 	AtypeID int     `json:"atypeId"`
 	Traits  []Trait `json:"traits"`
-	Note    string  `json:"note"`
+	Note       string                 `json:"note"`
+	ParsedMeta map[string]interface{} `json:"-"`
 }
 
 // Trait represents an RMMV trait entry (used by actors, enemies, classes, equipment, states).
@@ -623,6 +627,13 @@ type ResourceLoader struct {
 	// Maps skill tag index (21-122) to base/add variable mappings.
 	// Used by CulSkillEffect plugin to compute base stat values from equipment effects.
 	TagSkillList map[int]*TagSkillEntry
+
+	// Pre-built data arrays as Go slices for fast injection into Goja VMs.
+	// Built once at load time; each element is map[string]interface{} or nil.
+	PrebuiltArmors  []interface{}
+	PrebuiltWeapons []interface{}
+	PrebuiltSkills  []interface{}
+	PrebuiltItems   []interface{}
 }
 
 // TagSkillEntry represents a single entry in TagSkillList.json.
@@ -680,7 +691,141 @@ func (rl *ResourceLoader) Load() error {
 	rl.buildPassability()
 	rl.buildIncomingTransfers()
 	rl.loadTagSkillList() // optional, ignore errors
+	rl.preParseAllMeta()
+	rl.prebuildDataArrays()
 	return nil
+}
+
+// metaTagRe matches RMMV meta tags including kaeru.js semicolon extension.
+var metaTagRe = regexp.MustCompile(`<([^<>:;]+)([:;]?)([^>]*)>`)
+
+// ParseMetaGo parses RMMV Note field meta tags into a Go map.
+// Format: <key> → true, <key:value> → string, <key;json> → JSON-parsed value.
+func ParseMetaGo(note string) map[string]interface{} {
+	if note == "" {
+		return nil
+	}
+	meta := make(map[string]interface{})
+	for _, match := range metaTagRe.FindAllStringSubmatch(note, -1) {
+		key := match[1]
+		switch match[2] {
+		case ":":
+			meta[key] = match[3]
+		case ";":
+			var parsed interface{}
+			if err := json.Unmarshal([]byte(match[3]), &parsed); err == nil {
+				meta[key] = parsed
+			} else {
+				meta[key] = match[3]
+			}
+		default:
+			meta[key] = true
+		}
+	}
+	return meta
+}
+
+// preParseAllMeta pre-parses Note fields into ParsedMeta for all data arrays.
+func (rl *ResourceLoader) preParseAllMeta() {
+	for _, a := range rl.Armors {
+		if a != nil {
+			a.ParsedMeta = ParseMetaGo(a.Note)
+		}
+	}
+	for _, w := range rl.Weapons {
+		if w != nil {
+			w.ParsedMeta = ParseMetaGo(w.Note)
+		}
+	}
+	for _, s := range rl.Skills {
+		if s != nil {
+			s.ParsedMeta = ParseMetaGo(s.Note)
+		}
+	}
+	for _, item := range rl.Items {
+		if item != nil {
+			item.ParsedMeta = ParseMetaGo(item.Note)
+		}
+	}
+}
+
+// prebuildDataArrays builds Go slices for fast injection into Goja VMs.
+func (rl *ResourceLoader) prebuildDataArrays() {
+	if rl.Armors != nil {
+		arr := make([]interface{}, len(rl.Armors))
+		for i, a := range rl.Armors {
+			if a == nil {
+				continue
+			}
+			m := map[string]interface{}{
+				"id": a.ID, "name": a.Name, "price": a.Price,
+				"etypeId": a.EtypeID, "atypeId": a.AtypeID, "params": a.Params,
+			}
+			if a.ParsedMeta != nil {
+				m["meta"] = a.ParsedMeta
+			} else {
+				m["meta"] = map[string]interface{}{}
+			}
+			arr[i] = m
+		}
+		rl.PrebuiltArmors = arr
+	}
+	if rl.Weapons != nil {
+		arr := make([]interface{}, len(rl.Weapons))
+		for i, w := range rl.Weapons {
+			if w == nil {
+				continue
+			}
+			m := map[string]interface{}{
+				"id": w.ID, "name": w.Name, "price": w.Price,
+				"wtypeId": w.WtypeID, "params": w.Params,
+			}
+			if w.ParsedMeta != nil {
+				m["meta"] = w.ParsedMeta
+			} else {
+				m["meta"] = map[string]interface{}{}
+			}
+			arr[i] = m
+		}
+		rl.PrebuiltWeapons = arr
+	}
+	if rl.Skills != nil {
+		arr := make([]interface{}, len(rl.Skills))
+		for i, sk := range rl.Skills {
+			if sk == nil {
+				continue
+			}
+			m := map[string]interface{}{
+				"id": sk.ID, "name": sk.Name, "iconIndex": sk.IconIndex,
+				"mpCost": sk.MPCost, "tpCost": sk.TPCost, "scope": sk.Scope,
+			}
+			if sk.ParsedMeta != nil {
+				m["meta"] = sk.ParsedMeta
+			} else {
+				m["meta"] = map[string]interface{}{}
+			}
+			arr[i] = m
+		}
+		rl.PrebuiltSkills = arr
+	}
+	if rl.Items != nil {
+		arr := make([]interface{}, len(rl.Items))
+		for i, item := range rl.Items {
+			if item == nil {
+				continue
+			}
+			m := map[string]interface{}{
+				"id": item.ID, "name": item.Name, "price": item.Price,
+			}
+			if item.ParsedMeta != nil {
+				m["meta"] = item.ParsedMeta
+			} else {
+				m["meta"] = map[string]interface{}{}
+			}
+			arr[i] = m
+		}
+		rl.PrebuiltItems = arr
+	}
 }
 
 func (rl *ResourceLoader) path(file string) string {

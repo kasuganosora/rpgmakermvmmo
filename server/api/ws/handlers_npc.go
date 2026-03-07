@@ -172,9 +172,6 @@ func (h *NPCHandlers) HandleInteract(ctx context.Context, s *player.PlayerSessio
 	startMapID := s.MapID
 	go func() {
 		defer s.EventMu.Unlock()
-		// 通知客户端事件开始，阻止移动和交互。
-		h.logger.Info("[EVENT_LIFECYCLE] interact sending event_start",
-			zap.Int64("char_id", s.CharID), zap.Int("map_id", s.MapID), zap.Int("event_id", req.EventID))
 		s.Send(&player.Packet{Type: "event_start"})
 		// 预设标志：假设可能发生 Transfer，autorun 需要接管 event_end。
 		// 如果没有发生 Transfer，在下方清除并发送 event_end。
@@ -193,15 +190,11 @@ func (h *NPCHandlers) HandleInteract(ctx context.Context, s *player.PlayerSessio
 			// Transfer 发生 — needEventEnd 保持为 true。
 			// autorun goroutine（由 EnterMapRoom 生成）将在完成后发送 event_end。
 			// 此处不发送 event_end，避免客户端在 autorun 开始前短暂解除移动锁。
-			h.logger.Info("[EVENT_LIFECYCLE] interact transfer detected — deferring event_end",
-				zap.Int64("char_id", s.CharID), zap.Int("from_map", startMapID), zap.Int("to_map", s.MapID))
 			return
 		}
 
 		// 未发生 Transfer — 清除标志并发送 event_end。
 		s.SetNeedEventEnd(false)
-		h.logger.Info("[EVENT_LIFECYCLE] interact sending event_end",
-			zap.Int64("char_id", s.CharID), zap.Int("map_id", s.MapID))
 		s.Send(&player.Packet{Type: "event_end"})
 	}()
 
@@ -369,21 +362,9 @@ func (h *NPCHandlers) ExecuteAutoruns(s *player.PlayerSession, mapID int) {
 	// 检查是否继承了前一个事件的 event_start（Transfer 后未发送 event_end）。
 	inherited := s.ClearNeedEventEnd()
 	if !inherited {
-		// 正常的 autorun 调用 — 发送自己的 event_start。
-		h.logger.Info("[EVENT_LIFECYCLE] autorun sending event_start",
-			zap.Int64("char_id", s.CharID), zap.Int("map_id", mapID))
 		s.Send(&player.Packet{Type: "event_start"})
-	} else {
-		h.logger.Info("[EVENT_LIFECYCLE] autorun inherited event_start (no new event_start)",
-			zap.Int64("char_id", s.CharID), zap.Int("map_id", mapID))
 	}
-	// 预设标志：假设可能发生 Transfer，新地图 autorun 需要接管 event_end。
 	s.SetNeedEventEnd(true)
-
-	h.logger.Info("executing autorun events",
-		zap.Int64("char_id", s.CharID),
-		zap.Int("map_id", mapID),
-		zap.Int("count", len(autoruns)))
 
 	lastSentPages := make(map[int]*resource.EventPage)
 	for _, npcInst := range autoruns {
@@ -416,14 +397,9 @@ func (h *NPCHandlers) ExecuteAutoruns(s *player.PlayerSession, mapID int) {
 	// Transfer 发生时不发送 event_end — 新地图的 autorun 会继承 event_start。
 	// 与 HandleInteract 保持一致（lines 190-199）。
 	if s.MapID != mapID {
-		h.logger.Info("[EVENT_LIFECYCLE] autorun transfer detected — deferring event_end to new map",
-			zap.Int64("char_id", s.CharID), zap.Int("from_map", mapID), zap.Int("to_map", s.MapID))
 		return
 	}
-	// 未发生 Transfer — 清除标志并发送 event_end。
 	s.SetNeedEventEnd(false)
-	h.logger.Info("[EVENT_LIFECYCLE] autorun sending event_end",
-		zap.Int64("char_id", s.CharID), zap.Int("map_id", mapID))
 	s.Send(&player.Packet{Type: "event_end"})
 }
 

@@ -575,90 +575,22 @@ func parseMeta(vm *goja.Runtime, note string) *goja.Object {
 }
 
 // injectScriptDataArrays 注入 $dataArmors/$dataWeapons/$dataSkills/$dataItems。
-// 游戏脚本使用 $dataArmors[id].meta.Durability 等读取装备元数据，
-// 这些数据驱动 CE 937/895/1031 的服装耐久/技能计算链。
+// 使用 ResourceLoader 中预构建的 Go 切片，通过 vm.ToValue() 批量转换，
+// 避免逐个创建 goja 对象和运行时 parseMeta 正则。
 func injectScriptDataArrays(vm *goja.Runtime, res *resource.ResourceLoader) {
 	if res == nil {
 		return
 	}
-
-	// $dataArmors
-	if res.Armors != nil {
-		arr := make([]interface{}, len(res.Armors))
-		for i, a := range res.Armors {
-			if a == nil {
-				arr[i] = goja.Null()
-				continue
-			}
-			obj := vm.NewObject()
-			_ = obj.Set("id", a.ID)
-			_ = obj.Set("name", a.Name)
-			_ = obj.Set("price", a.Price)
-			_ = obj.Set("etypeId", a.EtypeID)
-			_ = obj.Set("atypeId", a.AtypeID)
-			_ = obj.Set("params", a.Params)
-			_ = obj.Set("meta", parseMeta(vm, a.Note))
-			arr[i] = obj
-		}
-		vm.Set("$dataArmors", arr)
+	if res.PrebuiltArmors != nil {
+		vm.Set("$dataArmors", res.PrebuiltArmors)
 	}
-
-	// $dataWeapons
-	if res.Weapons != nil {
-		arr := make([]interface{}, len(res.Weapons))
-		for i, w := range res.Weapons {
-			if w == nil {
-				arr[i] = goja.Null()
-				continue
-			}
-			obj := vm.NewObject()
-			_ = obj.Set("id", w.ID)
-			_ = obj.Set("name", w.Name)
-			_ = obj.Set("price", w.Price)
-			_ = obj.Set("wtypeId", w.WtypeID)
-			_ = obj.Set("params", w.Params)
-			_ = obj.Set("meta", parseMeta(vm, w.Note))
-			arr[i] = obj
-		}
-		vm.Set("$dataWeapons", arr)
+	if res.PrebuiltWeapons != nil {
+		vm.Set("$dataWeapons", res.PrebuiltWeapons)
 	}
-
-	// $dataSkills
-	if res.Skills != nil {
-		arr := make([]interface{}, len(res.Skills))
-		for i, sk := range res.Skills {
-			if sk == nil {
-				arr[i] = goja.Null()
-				continue
-			}
-			obj := vm.NewObject()
-			_ = obj.Set("id", sk.ID)
-			_ = obj.Set("name", sk.Name)
-			_ = obj.Set("iconIndex", sk.IconIndex)
-			_ = obj.Set("mpCost", sk.MPCost)
-			_ = obj.Set("tpCost", sk.TPCost)
-			_ = obj.Set("scope", sk.Scope)
-			_ = obj.Set("meta", parseMeta(vm, sk.Note))
-			arr[i] = obj
-		}
-		vm.Set("$dataSkills", arr)
+	if res.PrebuiltSkills != nil {
+		vm.Set("$dataSkills", res.PrebuiltSkills)
 	}
-
-	// $dataItems
-	if res.Items != nil {
-		arr := make([]interface{}, len(res.Items))
-		for i, item := range res.Items {
-			if item == nil {
-				arr[i] = goja.Null()
-				continue
-			}
-			obj := vm.NewObject()
-			_ = obj.Set("id", item.ID)
-			_ = obj.Set("name", item.Name)
-			_ = obj.Set("price", item.Price)
-			_ = obj.Set("meta", parseMeta(vm, item.Note))
-			arr[i] = obj
-		}
-		vm.Set("$dataItems", arr)
+	if res.PrebuiltItems != nil {
+		vm.Set("$dataItems", res.PrebuiltItems)
 	}
 }
