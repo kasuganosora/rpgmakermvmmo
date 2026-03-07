@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"strconv"
 
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/player"
 	"go.uber.org/zap"
@@ -136,6 +137,32 @@ func (e *Executor) sendVarChange(s *player.PlayerSession, id, value int) {
 func (e *Executor) sendSwitchChange(s *player.PlayerSession, id int, value bool) {
 	payload, _ := json.Marshal(map[string]interface{}{"id": id, "value": value})
 	s.Send(&player.Packet{Type: "switch_change", Payload: payload})
+}
+
+// sendStateBatch 批量发送变量和开关变更，减少消息数量。
+// 用于 CulSkillEffect/ParaCheck 等一次性产生大量变更的场景，
+// 避免每个变更单独发送导致客户端 OOM。
+func (e *Executor) sendStateBatch(s *player.PlayerSession, varChanges map[int]int, switchChanges map[int]bool) {
+	if len(varChanges) == 0 && len(switchChanges) == 0 {
+		return
+	}
+	data := make(map[string]interface{}, 2)
+	if len(varChanges) > 0 {
+		vars := make(map[string]interface{}, len(varChanges))
+		for id, val := range varChanges {
+			vars[strconv.Itoa(id)] = val
+		}
+		data["vars"] = vars
+	}
+	if len(switchChanges) > 0 {
+		switches := make(map[string]interface{}, len(switchChanges))
+		for id, val := range switchChanges {
+			switches[strconv.Itoa(id)] = val
+		}
+		data["switches"] = switches
+	}
+	payload, _ := json.Marshal(data)
+	s.Send(&player.Packet{Type: "state_batch", Payload: payload})
 }
 
 // applySelfSwitch 处理 RMMV 独立开关变更指令（代码 123）。

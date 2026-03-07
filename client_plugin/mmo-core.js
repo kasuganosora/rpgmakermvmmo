@@ -111,7 +111,7 @@
          * @param {Object} payload - 消息载荷
          */
         _dispatch: function (type, payload) {
-            if (this._debug && type !== 'var_change' && type !== 'switch_change') console.log('[MMO] <-', type, payload);
+            if (this._debug && type !== 'var_change' && type !== 'switch_change' && type !== 'state_batch') console.log('[MMO] <-', type, payload);
             var handlers = this._handlers[type];
             if (!handlers) return;
             var snapshot = handlers.slice();
@@ -505,6 +505,23 @@
     $MMO.on('switch_change', function (data) {
         if ($gameSwitches && data && data.id != null) {
             $gameSwitches._data[data.id] = !!data.value;
+        }
+    });
+
+    /** 处理服务器推送的批量状态变更（变量+开关合并为单条消息）。 */
+    $MMO.on('state_batch', function (data) {
+        if (!data) return;
+        if (data.vars && $gameVariables) {
+            var keys = Object.keys(data.vars);
+            for (var i = 0; i < keys.length; i++) {
+                $gameVariables._data[parseInt(keys[i])] = data.vars[keys[i]] || 0;
+            }
+        }
+        if (data.switches && $gameSwitches) {
+            var skeys = Object.keys(data.switches);
+            for (var j = 0; j < skeys.length; j++) {
+                $gameSwitches._data[parseInt(skeys[j])] = !!data.switches[skeys[j]];
+            }
         }
     });
 

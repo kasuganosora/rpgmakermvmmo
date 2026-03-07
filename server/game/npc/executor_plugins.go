@@ -244,14 +244,12 @@ func (e *Executor) execCulSkillEffect(s *player.PlayerSession, opts *ExecuteOpts
 		return
 	}
 
-	// Apply mutations
+	// Apply mutations to game state (collect all for batch send)
 	for id, val := range mutations.varChanges {
 		opts.GameState.SetVariable(id, val)
-		e.sendVarChange(s, id, val)
 	}
 	for id, val := range mutations.switchChanges {
 		opts.GameState.SetSwitch(id, val)
-		e.sendSwitchChange(s, id, val)
 	}
 
 	// AddSkillEffectBase: apply TagSkillList base values + accumulated effects.
@@ -266,10 +264,13 @@ func (e *Executor) execCulSkillEffect(s *player.PlayerSession, opts *ExecuteOpts
 			result := entry.BaseNum + addVal
 			if result != opts.GameState.GetVariable(entry.BaseVar) {
 				opts.GameState.SetVariable(entry.BaseVar, result)
-				e.sendVarChange(s, entry.BaseVar, result)
+				mutations.varChanges[entry.BaseVar] = result
 			}
 		}
 	}
+
+	// Batch send all changes in a single message
+	e.sendStateBatch(s, mutations.varChanges, mutations.switchChanges)
 
 	e.logger.Info("CulSkillEffect executed",
 		zap.Int64("char_id", s.CharID),
@@ -333,15 +334,14 @@ func (e *Executor) execParaCheck(s *player.PlayerSession, opts *ExecuteOpts) {
 		return
 	}
 
-	// Apply mutations
+	// Apply mutations to game state, then batch send
 	for id, val := range mutations.varChanges {
 		opts.GameState.SetVariable(id, val)
-		e.sendVarChange(s, id, val)
 	}
 	for id, val := range mutations.switchChanges {
 		opts.GameState.SetSwitch(id, val)
-		e.sendSwitchChange(s, id, val)
 	}
+	e.sendStateBatch(s, mutations.varChanges, mutations.switchChanges)
 
 	e.logger.Info("ParaCheck executed",
 		zap.Int64("char_id", s.CharID),
