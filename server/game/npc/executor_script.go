@@ -52,6 +52,18 @@ func (e *Executor) execScriptCommand(ctx context.Context, s *player.PlayerSessio
 		return true
 	}
 
+	// 3. 检测 window.* 属性赋值（如 window.keyTemp = 0; window.Qcd = false 等）
+	//    在条件 VM 中执行，使后续脚本条件能读取这些变量。
+	//    浏览器中 window 就是全局对象，所以 window.x 和 x 相同；
+	//    Goja 中 window 是独立对象，需要同步到全局作用域。
+	if strings.Contains(script, "window.") {
+		vm := e.getOrCreateCondVM(s, opts)
+		_, _ = vm.RunString(script)
+		// 将 window 上的属性同步到全局作用域
+		_, _ = vm.RunString(`(function(){var w=window;for(var k in w){if(w.hasOwnProperty(k)){this[k]=w[k];};}}).call(this);`)
+		return true
+	}
+
 	return false
 }
 
@@ -252,6 +264,18 @@ func (e *Executor) getOrCreateCondVM(s *player.PlayerSession, opts *ExecuteOpts)
 	} else {
 		injectScriptDataMap(vm, "")
 	}
+
+	// window 对象：浏览器 JS 中 window 就是全局对象。
+	// 游戏脚本使用 window.keyList / window.keyTemp / window.Qcd 等存储临时状态。
+	// 初始化 keyList=[] 使 CE 154 的掉落物循环在无掉落时正确跳过。
+	w := vm.NewObject()
+	_ = w.Set("keyList", vm.NewArray())
+	_ = w.Set("keyTemp", 0)
+	_ = w.Set("Qcd", false)
+	vm.Set("window", w)
+	// 同时在全局作用域设置同名变量，因为脚本条件中直接引用 keyList（不带 window. 前缀）
+	vm.Set("keyList", vm.NewArray())
+	vm.Set("keyTemp", 0)
 
 	opts.cachedCondVM = &gojaCondVM{vm: vm}
 	return vm
