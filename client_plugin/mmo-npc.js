@@ -505,17 +505,85 @@
      */
     var _Game_Map_updateEvents = Game_Map.prototype.updateEvents;
     Game_Map.prototype.updateEvents = function () {
+        // ---------------------------------------------------------------
+        // 同步 switch 15（"事件进行中"标志）。
+        // 原版游戏由 CE 10 在事件开始时设置，但 MMO 中 CE 10 在服务端执行，
+        // 开关变更可能未同步到客户端。
+        // 在此根据客户端可观测状态推导：对话显示中 或 服务端事件进行中 → s15=true。
+        // CE 201 依赖此开关决定是否显示立绘。
+        // ---------------------------------------------------------------
+        if ($gameSwitches) {
+            var inServerEvent = !!$MMO._serverEventActive ||
+                ($gameMessage && $gameMessage.isBusy());
+            $gameSwitches._data[15] = inServerEvent;
+        }
+
         // 对每个公共事件先调用 refresh() 再 update()，
         // 确保开关变化后 interpreter 被正确创建。
+        // （MMO 的 switch_change / state_batch 直接写 _data[] 绕过 onChange，
+        //   所以必须在每帧强制 refresh。）
         if (this._commonEvents) {
             for (var i = 0; i < this._commonEvents.length; i++) {
                 this._commonEvents[i].refresh();
-                this._commonEvents[i].update();
+                try {
+                    this._commonEvents[i].update();
+                } catch (ex) {
+                    // CE 210 等并行 CE 包含 eval() 脚本条件（code 111 type 12），
+                    // 若引用了未初始化的自定义属性（如 $gameActors.actor(1).QTE）会抛错。
+                    // 捕获异常防止一个 CE 的错误中断所有 CE 的执行。
+                    console.warn('[MMO] CE update error (CE' + this._commonEvents[i]._commonEventId + '):', ex.message);
+                }
+                // DEBUG: 每 300 帧 (~5 秒) 输出 CE 201 关键变量
+                var ceId = this._commonEvents[i]._commonEventId;
+                if (ceId === 201 && Graphics.frameCount % 300 === 0) {
+                    var hasInterp = !!this._commonEvents[i]._interpreter;
+                    var s15 = $gameSwitches ? $gameSwitches._data[15] : '?';
+                    var s48 = $gameSwitches ? $gameSwitches._data[48] : '?';
+                    var s101 = $gameSwitches ? $gameSwitches._data[101] : '?';
+                    var s45 = $gameSwitches ? $gameSwitches._data[45] : '?';
+                    var s46 = $gameSwitches ? $gameSwitches._data[46] : '?';
+                    var p60 = $gameScreen ? !!$gameScreen.picture(60) : '?';
+                    var p66 = $gameScreen ? !!$gameScreen.picture(66) : '?';
+                    var p35 = $gameScreen ? !!$gameScreen.picture(35) : '?';
+                    var eq1 = ($gameActors && $gameActors._data[1] && $gameActors._data[1]._equips[1]) ? $gameActors._data[1]._equips[1]._itemId : '?';
+                    console.log('[MMO] CE201 dbg: interp=' + hasInterp + ' s15=' + s15 + ' s45=' + s45 + ' s46=' + s46 + ' s48=' + s48 + ' s101=' + s101 + ' p60=' + p60 + ' p66=' + p66 + ' p35=' + p35 + ' eq1=' + eq1);
+                    // Check picture data detail
+                    var pic35 = $gameScreen ? $gameScreen.picture(35) : null;
+                    if (pic35) {
+                        console.log('[MMO] PIC35 data: name=' + pic35.name() + ' x=' + pic35.x() + ' y=' + pic35.y() + ' sx=' + pic35.scaleX() + ' sy=' + pic35.scaleY() + ' op=' + pic35.opacity());
+                    }
+                    // Check sprite rendering state
+                    var scene = SceneManager._scene;
+                    var ss = scene && scene._spriteset;
+                    var pc = ss && ss._pictureContainer;
+                    if (pc) {
+                        var sp35 = null;
+                        for (var k = 0; k < pc.children.length; k++) {
+                            if (pc.children[k]._pictureId === 35) { sp35 = pc.children[k]; break; }
+                        }
+                        if (sp35) {
+                            var bm = sp35.bitmap;
+                            console.log('[MMO] SP35 sprite: vis=' + sp35.visible + ' x=' + sp35.x + ' y=' + sp35.y + ' op=' + sp35.opacity + ' sx=' + sp35.scale.x + ' sy=' + sp35.scale.y + ' bm=' + (bm ? (bm.isReady() ? bm.width + 'x' + bm.height : 'loading') : 'null') + ' name=' + sp35._pictureName);
+                        } else {
+                            console.log('[MMO] SP35 sprite: NOT FOUND in pictureContainer (' + pc.children.length + ' children)');
+                        }
+                        // Check container visibility
+                        console.log('[MMO] PicContainer: vis=' + pc.visible + ' x=' + pc.x + ' y=' + pc.y + ' children=' + pc.children.length);
+                    }
+                    // Check var 916 (pose ID) and switch 131 (transformation)
+                    var v916 = $gameVariables ? $gameVariables.value(916) : '?';
+                    var s131 = $gameSwitches ? $gameSwitches._data[131] : '?';
+                    console.log('[MMO] CE201 extra: v916=' + v916 + ' s131=' + s131);
+                }
             }
         }
-        // 调用原始 updateEvents 以保留 map interpreter 逻辑
-        // （处理客户端自动运行事件，如 HzChoiceEvent 触发事件）。
+        // 调用原始 updateEvents 以保留 map event 和 map interpreter 逻辑，
+        // 但临时隐藏 _commonEvents 防止原始方法再次 update 导致双倍执行
+        // （CE 201 的 Wait 10 会被减半，CallStand 等重入问题）。
+        var saved = this._commonEvents;
+        this._commonEvents = [];
         _Game_Map_updateEvents.call(this);
+        this._commonEvents = saved;
     };
 
     // ═══════════════════════════════════════════════════════════

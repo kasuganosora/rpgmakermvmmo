@@ -133,6 +133,18 @@ func (e *Executor) sendVarChange(s *player.PlayerSession, id, value int) {
 	s.Send(&player.Packet{Type: "var_change", Payload: payload})
 }
 
+// sendEquipChange 通知客户端装备槽位已变更。
+// 因为 EquipChange 插件命令通过 setupChild(CE 838) 执行实际换装，
+// 而 npc_effect 的一次性 Interpreter 不会运行子解释器，所以需要专用消息。
+func (e *Executor) sendEquipChange(s *player.PlayerSession, slotIndex, itemID, kind int) {
+	payload, _ := json.Marshal(map[string]interface{}{
+		"slot_index": slotIndex,
+		"item_id":    itemID,
+		"kind":       kind,
+	})
+	s.Send(&player.Packet{Type: "equip_change", Payload: payload})
+}
+
 // sendSwitchChange 通知客户端开关状态已变更。
 func (e *Executor) sendSwitchChange(s *player.PlayerSession, id int, value bool) {
 	payload, _ := json.Marshal(map[string]interface{}{"id": id, "value": value})

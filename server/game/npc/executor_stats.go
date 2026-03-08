@@ -268,6 +268,10 @@ func (e *Executor) applyEquipChange(ctx context.Context, s *player.PlayerSession
 		}
 	}
 
+	// 同步给客户端——因为 EquipChange 插件命令的 setupChild(CE 838)
+	// 在 npc_effect 一次性 Interpreter 中不会执行，所以发送专用消息。
+	e.sendEquipChange(s, slotIndex, armorID, kind)
+
 	e.logger.Info("equip change",
 		zap.Int64("char_id", s.CharID), zap.String("slot_type", slotType),
 		zap.Int("slot_index", slotIndex), zap.Int("armor_id", armorID))

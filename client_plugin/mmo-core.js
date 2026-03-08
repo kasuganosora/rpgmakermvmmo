@@ -450,6 +450,21 @@
                 if (!_a.QTE) _a.QTE = {};
                 if (!_a.abu) _a.abu = {};
                 if (!_a.hyp) _a.hyp = {};
+                // CE 2 初始化的自定义属性。服务端执行 CE 2 时通过 Script 命令设置，
+                // 但不会同步到客户端。CallStand.js 渲染立绘时需要这些属性，
+                // 缺少 toneArray 会导致 TypeError 中断整个立绘渲染。
+                if (!_a.hairTone) _a.hairTone = [0, 0, 0, 0, 0];
+                if (!_a.hairToneb) _a.hairToneb = [0, 0, 0, 0, 0];
+                if (!_a.save) _a.save = {};
+                if (!_a.save.key) _a.save.key = [0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+                if (!_a.save.keyTroop) _a.save.keyTroop = [0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+                if (!_a.save.teacher) _a.save.teacher = [0,0,0,0,0,0];
+            }
+            // Actor 2 存储色调数组，CallStand.js 用于衣装/武器的颜色染色。
+            var _a2 = $gameActors.actor(2);
+            if (_a2) {
+                if (!_a2.toneArray) _a2.toneArray = new Array(1000);
+                if (!_a2.toneWeapon) _a2.toneWeapon = new Array(100);
             }
         }
 
@@ -485,6 +500,7 @@
             // 否则同地图重入（重新登录到同一地图）会保留上次会话的旧精灵。
             $gamePlayer.refresh();
         }
+
     });
 
     // ═══════════════════════════════════════════════════════════
@@ -525,6 +541,19 @@
         }
     });
 
+    /** 处理服务器推送的装备变更。
+     *  EquipChange 插件命令通过 setupChild(CE 838) 换装，
+     *  但 npc_effect 的一次性 Interpreter 不会执行子解释器，
+     *  所以服务器额外发送此消息确保客户端装备同步。 */
+    $MMO.on('equip_change', function (data) {
+        if (!data || data.slot_index == null) return;
+        var actor = $gameActors && $gameActors.actor(1);
+        if (!actor || !actor._equips[data.slot_index]) return;
+        var isWeapon = (data.kind === 2);
+        actor._equips[data.slot_index].setEquip(isWeapon, data.item_id || 0);
+        actor.refresh();
+    });
+
     // ═══════════════════════════════════════════════════════════
     //  事件锁信号：服务器通知事件开始/结束，客户端据此阻止移动和交互。
     // ═══════════════════════════════════════════════════════════
@@ -543,6 +572,8 @@
         } else {
             $MMO._serverEventActive = false;
         }
+        // 标记事件结束：关闭 switch 15（"事件进行中"标志）。
+        if ($gameSwitches) $gameSwitches._data[15] = false;
         // 强制清理可能阻塞 canMove() 的残留状态：
         // 移动路线强制、穿透、等待计数、消息窗口。
         if ($gamePlayer) {
