@@ -20,6 +20,13 @@ var blockedPluginCmds = map[string]bool{
 	// 纯参数计算插件 — CulSkillEffect/ParaCheck 现在服务端执行，
 	// 其余仍阻止转发
 	"CulPartLV": true, "CulLustLV": true, "CulMiasmaLV": true,
+	// 立绘（standing portrait）相关指令 — 客户端 CE 201（并行）→ CE 210 → CallStand
+	// 链独立管理立绘显示。服务端转发会与客户端 CE 201 的 10 帧循环产生时序冲突，
+	// 导致 EraceStand 擦除后 CE 201 来不及重绘，立绘消失。
+	"CallStand": true, "CallStandForce": true,
+	"EraceStand": true, "EraceStand1": true,
+	"CallCutin": true, "EraceCutin": true,
+	"CallAM": true,
 }
 
 // serverExecPluginCmds 列出由服务端 Goja VM 执行的插件指令。
@@ -285,13 +292,15 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 				continue
 			}
 			// EquipChange 插件命令：更新装备槽位 + 持久化
+			// 不转发 npc_effect：applyEquipChange 已发送 equip_change + var_change(2701/2703)，
+			// 转发会导致 OriginalCommands.js 先将 v[2701/2703] 重置为 0，
+			// 而 setupChild(CE 838) 在一次性 Interpreter 中不会执行，
+			// 造成服务端发送的 var_change 值被覆盖。
 			if strings.HasPrefix(pluginStr, "EquipChange ") {
 				parts := strings.Fields(pluginStr)
 				if len(parts) >= 3 {
 					e.applyEquipChange(ctx, s, parts[1], parts[2], opts)
 				}
-				// 仍然转发给客户端执行 CE 838（changeEquipSlotEx_varID）
-				e.sendEffect(s, cmd)
 				continue
 			}
 			// MPP_CallCommonByName: CallCommon / CCT — 服务端执行，不转发

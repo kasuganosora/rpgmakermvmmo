@@ -118,6 +118,11 @@ func (e *Executor) transferPlayer(s *player.PlayerSession, params []interface{},
 			zap.Int("v423_y", py))
 	}
 
+	fromMap, eventID := 0, 0
+	if opts != nil {
+		fromMap = opts.MapID
+		eventID = opts.EventID
+	}
 	e.logger.Info("executor transferPlayer",
 		zap.Int64("char_id", s.CharID),
 		zap.Int("mode", mode),
@@ -125,8 +130,8 @@ func (e *Executor) transferPlayer(s *player.PlayerSession, params []interface{},
 		zap.Int("dest_x", x),
 		zap.Int("dest_y", y),
 		zap.Int("dest_dir", dir),
-		zap.Int("from_map", opts.MapID),
-		zap.Int("event_id", opts.EventID))
+		zap.Int("from_map", fromMap),
+		zap.Int("event_id", eventID))
 
 	if opts != nil && opts.TransferFn != nil {
 		opts.TransferFn(s, mapID, x, y, dir)

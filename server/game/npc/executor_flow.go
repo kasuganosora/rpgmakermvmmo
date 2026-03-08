@@ -347,7 +347,7 @@ func (e *Executor) evalItemCondition(ctx context.Context, s *player.PlayerSessio
 		return false
 	}
 	itemID := paramInt(params, 1)
-	includeEquip := kind != model.ItemKindItem && asBool(params[2]) // 消耗品无装备概念
+	includeEquip := kind != model.ItemKindItem && paramInt(params, 2) != 0 // 消耗品无装备概念
 	has, err := e.store.HasItemOfKind(ctx, s.CharID, itemID, kind, includeEquip)
 	if err != nil {
 		return false

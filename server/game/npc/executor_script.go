@@ -4,6 +4,7 @@ package npc
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"regexp"
 	"strings"
 	"time"
@@ -344,15 +345,9 @@ func (e *Executor) evalScriptValue(script string, s *player.PlayerSession, opts 
 // injectScriptMath 注入安全的 Math 对象。
 func injectScriptMath(vm *goja.Runtime) {
 	m := vm.NewObject()
-	_ = m.Set("floor", func(v float64) float64 { return float64(int64(v)) })
-	_ = m.Set("ceil", func(v float64) float64 {
-		n := int64(v)
-		if float64(n) < v {
-			n++
-		}
-		return float64(n)
-	})
-	_ = m.Set("round", func(v float64) int64 { return int64(v + 0.5) })
+	_ = m.Set("floor", func(v float64) float64 { return math.Floor(v) })
+	_ = m.Set("ceil", func(v float64) float64 { return math.Ceil(v) })
+	_ = m.Set("round", func(v float64) float64 { return math.Round(v) })
 	_ = m.Set("abs", func(v float64) float64 {
 		if v < 0 {
 			return -v

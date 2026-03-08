@@ -127,7 +127,7 @@ func (e *Executor) teCallMapEvent(ctx context.Context, s *player.PlayerSession, 
 
 	// TemplateEvent.js: 先按数值 eventId 查找当前地图，再按名称查找当前地图
 	var tmplEvent *resource.MapEvent
-	if opts != nil && opts.MapID > 0 {
+	if opts != nil && opts.MapID > 0 && e.res != nil {
 		md := e.res.Maps[opts.MapID]
 		if md != nil {
 			// 尝试按数值 ID 查找
@@ -183,6 +183,9 @@ func (e *Executor) teCallMapEvent(ctx context.Context, s *player.PlayerSession, 
 
 // findMapEvent 按地图 ID 和事件 ID 查找地图事件。
 func (e *Executor) findMapEvent(mapID, eventID int) *resource.MapEvent {
+	if e.res == nil {
+		return nil
+	}
 	md, ok := e.res.Maps[mapID]
 	if !ok {
 		return nil

@@ -435,9 +435,11 @@ func TestMap68_DialogWithSwitchChanges(t *testing.T) {
 	assert.True(t, refreshCalled, "PageRefreshFn should be called after switch change")
 }
 
-// TestPluginCommand_Forwarded verifies that plugin commands like CallStand,
-// CallCutin, CallAM are forwarded as npc_effect (not in blockedPluginCmds).
-func TestPluginCommand_Forwarded(t *testing.T) {
+// TestPluginCommand_PortraitBlocked verifies that portrait-related plugin commands
+// (CallStand, CallCutin, EraceStand, EraceCutin, CallAM) are blocked from forwarding.
+// These are managed by client-side parallel CE 201 → CE 210 → CallStand chain.
+// Server forwarding conflicts with the client's 10-frame CE 201 loop timing.
+func TestPluginCommand_PortraitBlocked(t *testing.T) {
 	resLoader := &resource.ResourceLoader{
 		CommonEvents: make([]*resource.CommonEvent, 2),
 	}
@@ -446,10 +448,14 @@ func TestPluginCommand_Forwarded(t *testing.T) {
 
 	cmds := []*resource.EventCommand{
 		{Code: CmdPluginCommand, Parameters: []interface{}{"CallStand 1 0 0"}},
+		{Code: CmdPluginCommand, Parameters: []interface{}{"CallStandForce 1"}},
 		{Code: CmdPluginCommand, Parameters: []interface{}{"CallCutin 1"}},
 		{Code: CmdPluginCommand, Parameters: []interface{}{"EraceStand"}},
+		{Code: CmdPluginCommand, Parameters: []interface{}{"EraceStand1"}},
 		{Code: CmdPluginCommand, Parameters: []interface{}{"EraceCutin"}},
 		{Code: CmdPluginCommand, Parameters: []interface{}{"CallAM 1"}},
+		// FaceId should still be forwarded (sets var[895] for portrait expression).
+		{Code: CmdPluginCommand, Parameters: []interface{}{"FaceId 1 6"}},
 		{Code: CmdEnd, Parameters: []interface{}{}},
 	}
 
@@ -461,25 +467,27 @@ func TestPluginCommand_Forwarded(t *testing.T) {
 	})
 
 	pkts := drainPackets(t, s)
-	effectCount := 0
 	var cmdsForwarded []string
 	for _, pkt := range pkts {
 		if pkt.Type == "npc_effect" {
 			var data map[string]interface{}
 			json.Unmarshal(pkt.Payload, &data)
 			if data["code"] != nil && int(data["code"].(float64)) == 356 {
-				effectCount++
 				params := data["params"].([]interface{})
 				cmdsForwarded = append(cmdsForwarded, params[0].(string))
 			}
 		}
 	}
 
-	// All 5 plugin commands should be forwarded (CallStand, CallCutin, EraceStand, EraceCutin, CallAM are not blocked)
-	assert.Equal(t, 5, effectCount, "all 5 plugin commands should be forwarded")
-	assert.Contains(t, cmdsForwarded, "CallStand 1 0 0")
-	assert.Contains(t, cmdsForwarded, "CallCutin 1")
-	assert.Contains(t, cmdsForwarded, "EraceStand")
-	assert.Contains(t, cmdsForwarded, "EraceCutin")
-	assert.Contains(t, cmdsForwarded, "CallAM 1")
+	// Portrait commands should be blocked.
+	assert.NotContains(t, cmdsForwarded, "CallStand 1 0 0")
+	assert.NotContains(t, cmdsForwarded, "CallStandForce 1")
+	assert.NotContains(t, cmdsForwarded, "CallCutin 1")
+	assert.NotContains(t, cmdsForwarded, "EraceStand")
+	assert.NotContains(t, cmdsForwarded, "EraceStand1")
+	assert.NotContains(t, cmdsForwarded, "EraceCutin")
+	assert.NotContains(t, cmdsForwarded, "CallAM 1")
+
+	// FaceId should still be forwarded — it sets var[895] for the portrait expression.
+	assert.Contains(t, cmdsForwarded, "FaceId 1 6")
 }

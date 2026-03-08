@@ -3,6 +3,7 @@
 package npc
 
 import (
+	"context"
 	"time"
 
 	"github.com/dop251/goja"
@@ -311,7 +312,7 @@ func (e *Executor) execParaCheck(s *player.PlayerSession, opts *ExecuteOpts) {
 	vm.Set("__playerLevel", s.Level)
 	gold := int64(0)
 	if e.store != nil {
-		g, err := e.store.GetGold(nil, s.CharID)
+		g, err := e.store.GetGold(context.Background(), s.CharID)
 		if err == nil {
 			gold = g
 		}

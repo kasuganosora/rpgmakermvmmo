@@ -91,8 +91,10 @@ func (e *Executor) RunParallelEventsSynced(
 				}
 				ev.waitFrames = 0
 			}
-			allDone = false
 			ev.done = e.stepUntilWait(ctx, s, ev, opts)
+			if !ev.done {
+				allDone = false
+			}
 		}
 
 		// 所有事件本轮结束 → 重置（平行事件自动循环）

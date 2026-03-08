@@ -26,9 +26,12 @@ func (e *Executor) applySwitches(s *player.PlayerSession, params []interface{}, 
 	for id := startID; id <= endID; id++ {
 		if opts.GameState.GetSwitch(id) != val {
 			opts.GameState.SetSwitch(id, val)
-			// 同步给客户端，确保并行公共事件读取到正确值
-			e.sendSwitchChange(s, id, val)
 			changed = true
+			e.sendSwitchChange(s, id, val)
+		} else if id == 15 || id == 85 {
+			// 对客户端可能因 event_end 等本地安全网逻辑清除的开关（sw15, sw85），
+			// 即使服务端值未变也发送 switch_change，防止状态不一致。
+			e.sendSwitchChange(s, id, val)
 		}
 	}
 	// 开关变更后刷新 NPC 页面，使 mid-event 变更立即反映到 NPC 外观

@@ -4,11 +4,15 @@ package npc
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"strconv"
 
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/player"
 	"github.com/kasuganosora/rpgmakermvmmo/server/resource"
 	"go.uber.org/zap"
 )
+
+var reTextVarRef = regexp.MustCompile(`\\{1,2}[vV]\[(\d+)\]`)
 
 // applyChangeHP 处理 RMMV HP 变更指令（代码 311）。
 // 参数格式：[0]=固定角色(0=变量), [1]=角色ID/变量ID, [2]=操作(0=增加,1=减少),
@@ -240,6 +244,10 @@ func (e *Executor) applyEquipChange(ctx context.Context, s *player.PlayerSession
 	}
 
 	armorID := 0
+	// 解析 \v[N] 变量引用（RMMV 文本代码）
+	if opts != nil && opts.GameState != nil {
+		armorIDStr = e.resolveTextVarRef(armorIDStr, opts)
+	}
 	if _, err := fmt.Sscanf(armorIDStr, "%d", &armorID); err != nil {
 		e.logger.Warn("applyEquipChange: invalid armor ID", zap.String("raw", armorIDStr))
 		return
@@ -354,6 +362,25 @@ func (e *Executor) applyChangeEquipment(ctx context.Context, s *player.PlayerSes
 	}
 
 	e.sendEffect(s, &resource.EventCommand{Code: CmdChangeEquipment, Parameters: params})
+}
+
+// resolveTextVarRef 替换字符串中的 \v[N] / \V[N] 变量引用为实际值。
+// RMMV 插件命令参数中常用 \v[N] 引用游戏变量。
+func (e *Executor) resolveTextVarRef(s string, opts *ExecuteOpts) string {
+	if opts == nil || opts.GameState == nil {
+		return s
+	}
+	return reTextVarRef.ReplaceAllStringFunc(s, func(match string) string {
+		sub := reTextVarRef.FindStringSubmatch(match)
+		if len(sub) < 2 {
+			return match
+		}
+		varID, err := strconv.Atoi(sub[1])
+		if err != nil {
+			return match
+		}
+		return strconv.Itoa(opts.GameState.GetVariable(varID))
+	})
 }
 
 // resolveOperand 从参数中读取常量或变量引用的整数值。
