@@ -49,6 +49,12 @@ type PlayerSession struct {
 	States    map[int]bool // active states (state ID → true)
 	Equips    map[int]int  // equipped items (slot index → item ID)
 
+	// ShopGoods holds the goods list for the currently open shop.
+	// Set by executor when sending ShopProcessing; cleared on shop close.
+	// Format: each entry is [type, id, priceType, price] (RMMV goods format).
+	// type: 0=item, 1=weapon, 2=armor.
+	ShopGoods [][]interface{}
+
 	SendChan     chan []byte
 	Done         chan struct{}
 	ChoiceCh      chan int      // receives choice index from npc_choice_reply

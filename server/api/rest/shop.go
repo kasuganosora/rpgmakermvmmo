@@ -142,20 +142,31 @@ func (h *ShopHandler) Buy(c *gin.Context) {
 		if err := tx.Model(&char).Update("gold", gorm.Expr("gold - ?", total)).Error; err != nil {
 			return err
 		}
-		// Add to inventory (stack if consumable item).
+		// Add to inventory. Only consumables (kind=1) stack; weapons/armors
+		// are individual items and always create new rows.
 		const maxStackQty = 9999
-		var inv model.Inventory
-		findErr := tx.Where("char_id = ? AND item_id = ? AND kind = ?", charID, req.ItemID, req.Kind).
-			First(&inv).Error
-		if findErr != nil {
-			inv = model.Inventory{CharID: charID, ItemID: req.ItemID, Kind: req.Kind, Qty: req.Qty}
-			return tx.Create(&inv).Error
+		if req.Kind == model.ItemKindItem {
+			var inv model.Inventory
+			findErr := tx.Where("char_id = ? AND item_id = ? AND kind = ?", charID, req.ItemID, req.Kind).
+				First(&inv).Error
+			if findErr != nil {
+				inv = model.Inventory{CharID: charID, ItemID: req.ItemID, Kind: req.Kind, Qty: req.Qty}
+				return tx.Create(&inv).Error
+			}
+			newQty := inv.Qty + req.Qty
+			if newQty > maxStackQty {
+				return errStackFull
+			}
+			return tx.Model(&inv).Update("qty", newQty).Error
 		}
-		newQty := inv.Qty + req.Qty
-		if newQty > maxStackQty {
-			return errStackFull
+		// Weapons/armors: create separate rows (one per unit).
+		for i := 0; i < req.Qty; i++ {
+			inv := model.Inventory{CharID: charID, ItemID: req.ItemID, Kind: req.Kind, Qty: 1}
+			if err := tx.Create(&inv).Error; err != nil {
+				return err
+			}
 		}
-		return tx.Model(&inv).Update("qty", newQty).Error
+		return nil
 	})
 	if txErr != nil {
 		if txErr == errInsufficientGold {

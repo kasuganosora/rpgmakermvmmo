@@ -304,7 +304,7 @@ func (s *gormInventoryStore) HasItemOfKind(ctx context.Context, charID int64, it
 	q := s.db.WithContext(ctx).Model(&model.Inventory{}).
 		Where("char_id = ? AND item_id = ? AND kind = ?", charID, itemID, kind)
 	if !includeEquipped {
-		q = q.Where("equipped = false")
+		q = q.Where("equipped = ?", false)
 	}
 	var count int64
 	if err := q.Count(&count).Error; err != nil {
@@ -317,7 +317,7 @@ func (s *gormInventoryStore) HasItemOfKind(ctx context.Context, charID int64, it
 func (s *gormInventoryStore) IsEquipped(ctx context.Context, charID int64, itemID, kind int) (bool, error) {
 	var count int64
 	if err := s.db.WithContext(ctx).Model(&model.Inventory{}).
-		Where("char_id = ? AND item_id = ? AND kind = ? AND equipped = true", charID, itemID, kind).
+		Where("char_id = ? AND item_id = ? AND kind = ? AND equipped = ?", charID, itemID, kind, true).
 		Count(&count).Error; err != nil {
 		return false, err
 	}
@@ -340,7 +340,7 @@ func (s *gormInventoryStore) SetEquipSlot(ctx context.Context, charID int64, slo
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// 卸下该槽位当前装备
 		tx.Model(&model.Inventory{}).
-			Where("char_id = ? AND slot_index = ? AND equipped = true", charID, slotIndex).
+			Where("char_id = ? AND slot_index = ? AND equipped = ?", charID, slotIndex, true).
 			Updates(map[string]interface{}{"equipped": false, "slot_index": -1})
 
 		if itemID <= 0 {

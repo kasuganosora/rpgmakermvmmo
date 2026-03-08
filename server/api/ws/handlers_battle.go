@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/battle"
+	"github.com/kasuganosora/rpgmakermvmmo/server/game/item"
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/player"
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/world"
 	"github.com/kasuganosora/rpgmakermvmmo/server/model"
@@ -305,19 +306,20 @@ func (bh *BattleHandlers) HandlePickup(_ context.Context, s *player.PlayerSessio
 	// Attempt to claim the drop and add to inventory atomically.
 	// consumed is set inside the transaction so we know whether to broadcast.
 	var consumed bool
+	var pickedInv model.Inventory
 	err := bh.db.Transaction(func(tx *gorm.DB) error {
 		// ConsumeDrop is protected by room.mu; only one caller wins the race.
 		if !room.ConsumeDrop(req.DropID) {
 			return nil // drop already taken by another player
 		}
 		consumed = true
-		inv := &model.Inventory{
+		pickedInv = model.Inventory{
 			CharID: s.CharID,
 			ItemID: drop.ItemID,
 			Kind:   drop.ItemType,
 			Qty:    1,
 		}
-		return tx.Create(inv).Error
+		return tx.Create(&pickedInv).Error
 	})
 	if err != nil {
 		return err
@@ -326,6 +328,9 @@ func (bh *BattleHandlers) HandlePickup(_ context.Context, s *player.PlayerSessio
 		sendError(s, "item already picked up")
 		return nil
 	}
+
+	// Notify the picker that an item was added to their inventory.
+	item.NotifyUpdate(s, []model.Inventory{pickedInv}, nil)
 
 	// Broadcast drop_remove only after a successful claim.
 	removePayload, err := json.Marshal(map[string]interface{}{"drop_id": req.DropID})

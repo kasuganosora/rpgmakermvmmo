@@ -11,7 +11,10 @@ import (
 	"gorm.io/gorm"
 )
 
-const maxInventorySlots = 99
+const (
+	maxInventorySlots = 99   // maximum distinct item rows per character
+	maxStackQty       = 9999 // per-slot quantity cap for consumables (matches RMMV default)
+)
 
 // InventoryService handles all bag operations.
 type InventoryService struct {
@@ -25,18 +28,19 @@ func NewInventoryService(db *gorm.DB, logger *zap.Logger) *InventoryService {
 }
 
 // AddItem adds qty of (itemType, itemID) to charID's inventory.
-// Consumables stack up to 99 per slot; weapons/armors are always separate rows.
+// Consumables stack up to 9999 per slot; weapons/armors are always separate rows.
 func (svc *InventoryService) AddItem(ctx context.Context, charID int64, itemType, itemID, qty int) error {
 	return svc.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if itemType == model.ItemKindItem {
 			// Check if there's an existing stackable slot.
+			// No need to filter by equipped—consumables can never be equipped.
 			var existing model.Inventory
-			err := tx.Where("char_id = ? AND item_id = ? AND kind = ? AND equipped = false", charID, itemID, itemType).
+			err := tx.Where("char_id = ? AND item_id = ? AND kind = ?", charID, itemID, itemType).
 				First(&existing).Error
 			if err == nil {
 				newQty := existing.Qty + qty
-				if newQty > maxInventorySlots {
-					return errors.New("inventory full")
+				if newQty > maxStackQty {
+					return errors.New("exceeds maximum stack size")
 				}
 				return tx.Model(&existing).Update("qty", newQty).Error
 			}

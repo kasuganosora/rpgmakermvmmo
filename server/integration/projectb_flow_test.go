@@ -440,63 +440,55 @@ func TestProjectBParallelCEExecution(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 6: NPC interaction protocol
+// Test 6: NPC interaction protocol — active event, inactive event, invalid IDs
 // ---------------------------------------------------------------------------
 
 func TestProjectBNPCInteraction(t *testing.T) {
-	dataPath := projectBDataPath(t)
-	ts := NewTestServerWithResources(t, dataPath)
+	ts, ws, _, charID := setupPlayerOnMap67(t)
 	defer ts.Close()
-
-	user := UniqueID("pb")
-	token, _ := ts.Login(t, user, user+"pass")
-	charID := ts.CreateCharacter(t, token, UniqueID("hero"), 1)
-	ws := ts.ConnectWS(t, token)
 	defer ws.Close()
 
-	// Enter map and complete creation flow.
-	ws.Send("enter_map", map[string]interface{}{"char_id": charID})
-	initPkt := ws.RecvType("map_init", 10*time.Second)
-	require.NotNil(t, initPkt)
-	ws.Send("scene_ready", map[string]interface{}{})
-	res := messagePump(t, ws, pumpOpts{
-		TotalTimeout: 60 * time.Second,
-		QuietTimeout: 10 * time.Second,
-		ChoiceReply:  []int{0},
-		TargetMapID:  67,
-	})
-	require.True(t, hasMapInit(res, 67), "should have transferred to map 67")
-
-	// Wait for parallel CEs to settle, then reconnect for clean interactions.
-	ws.Close()
-	time.Sleep(500 * time.Millisecond)
-	ws2 := ts.ConnectWS(t, token)
-	defer ws2.Close()
-	ws2.Send("enter_map", map[string]interface{}{"char_id": charID})
-	ws2.RecvType("map_init", 10*time.Second)
-	ws2.Send("scene_ready", map[string]interface{}{})
-	// Drain initial parallel CE messages.
-	time.Sleep(1 * time.Second)
-
-	// NPC interaction test: EV013 at (23,8), player at (23,9) — within 1 tile.
-	ws2.Send("npc_interact", map[string]interface{}{"event_id": 13})
-	interactRes := messagePump(t, ws2, pumpOpts{
+	// ---- 1. Active event interaction: Event 14 at (26,16) has dialog ----
+	// Event 14 Page 0 is unconditional, contains ShowMessage (code 101).
+	ts.SetPosition(t, charID, 26, 17, 8) // adjacent to Event 14
+	ws.Send("npc_interact", map[string]interface{}{"event_id": 14})
+	activeRes := messagePump(t, ws, pumpOpts{
 		TotalTimeout: 5 * time.Second,
 		QuietTimeout: 3 * time.Second,
 	})
-	t.Logf("NPC interact EV013: %d dialogs, %d effects, %d dialog_ends, %d total",
-		len(interactRes.Dialogs), len(interactRes.Effects), interactRes.DialogEnds, len(interactRes.All))
+	t.Logf("NPC interact EV014 (active): %d dialogs, %d effects, %d dialog_ends",
+		len(activeRes.Dialogs), len(activeRes.Effects), activeRes.DialogEnds)
 
-	// Test invalid event_id — should not crash server.
-	ws2.Send("npc_interact", map[string]interface{}{"event_id": 9999})
+	// Active event with dialog should produce actual dialog messages.
+	assert.Greater(t, len(activeRes.Dialogs), 0,
+		"Event 14 (has code 101) should produce at least 1 dialog message")
+	assert.Greater(t, activeRes.DialogEnds, 0,
+		"Event 14 should produce dialog_end after execution")
+
+	// ---- 2. Inactive event interaction: Event 13 at (23,8) ----
+	// Event 13 requires Switch 317=ON (not set), so page is inactive.
+	ts.SetPosition(t, charID, 23, 9, 8) // adjacent to Event 13
+	ws.Send("npc_interact", map[string]interface{}{"event_id": 13})
+	inactiveRes := messagePump(t, ws, pumpOpts{
+		TotalTimeout: 3 * time.Second,
+		QuietTimeout: 2 * time.Second,
+	})
+	t.Logf("NPC interact EV013 (inactive): %d dialogs, %d effects, %d dialog_ends",
+		len(inactiveRes.Dialogs), len(inactiveRes.Effects), inactiveRes.DialogEnds)
+
+	// Inactive event should produce no dialog or effects.
+	assert.Equal(t, 0, len(inactiveRes.Dialogs),
+		"Event 13 (inactive, Switch 317=OFF) should produce no dialogs")
+
+	// ---- 3. Invalid event IDs — server should not crash ----
+	ws.Send("npc_interact", map[string]interface{}{"event_id": 9999})
 	time.Sleep(500 * time.Millisecond)
-	// Test event_id 0 — should be rejected gracefully.
-	ws2.Send("npc_interact", map[string]interface{}{"event_id": 0})
+	ws.Send("npc_interact", map[string]interface{}{"event_id": 0})
 	time.Sleep(500 * time.Millisecond)
 
-	// If we can still send/receive, the connection survived the invalid requests.
-	ws2.Send("scene_ready", map[string]interface{}{})
-	t.Log("NPC interaction protocol test: server survived invalid requests")
+	// Connection should still work after invalid requests.
+	ws.Send("scene_ready", map[string]interface{}{})
+	t.Log("NPC interaction protocol: active event produces dialog, inactive/invalid events handled gracefully")
 }
 
 // ---------------------------------------------------------------------------
@@ -666,17 +658,28 @@ func TestProjectBVariableGatedEvent(t *testing.T) {
 		QuietTimeout: 3 * time.Second,
 	})
 
-	// Count NPC-specific messages (exclude parallel CE noise).
-	msg1 := len(res1.Dialogs) + res1.DialogEnds
-	msg2 := len(res2.Dialogs) + res2.DialogEnds
+	// When page is inactive, server sends event_end only (no Execute, no dialog_end).
+	msg1All := len(res1.Dialogs) + res1.DialogEnds + len(res1.Effects)
 
-	t.Logf("VariableGatedEvent: before=%d npc_msgs (dialogs=%d, ends=%d), after=%d npc_msgs (dialogs=%d, ends=%d)",
-		msg1, len(res1.Dialogs), res1.DialogEnds,
-		msg2, len(res2.Dialogs), res2.DialogEnds)
+	// Count all NPC-specific messages including effects (Event 3 sends
+	// ChangeName as npc_effect, not dialog — it has no code 101 commands).
+	msg2All := len(res2.Dialogs) + res2.DialogEnds + len(res2.Effects)
 
-	// The second interaction (with switch+variable set) should produce dialog content.
-	assert.Greater(t, msg2, msg1,
-		"variable-gated event should produce more dialog content after setting Switch 345=ON + Variable 206=2")
+	t.Logf("VariableGatedEvent: inactive=%d msgs (d=%d,eff=%d,end=%d), active=%d msgs (d=%d,eff=%d,end=%d)",
+		msg1All, len(res1.Dialogs), len(res1.Effects), res1.DialogEnds,
+		msg2All, len(res2.Dialogs), len(res2.Effects), res2.DialogEnds)
+
+	// Inactive event should produce nothing (no Execute called).
+	assert.Equal(t, 0, msg1All,
+		"inactive event (Switch 345=OFF) should produce no dialogs/effects/dialog_ends")
+
+	// Active event should produce effects and/or dialog_end from Execute completing.
+	assert.Greater(t, msg2All, 0,
+		"active event (Switch 345=ON, V206=2) should produce effects or dialog_end")
+
+	// Verify Execute completed by checking dialog_end was sent.
+	assert.Greater(t, res2.DialogEnds, 0,
+		"Execute should send npc_dialog_end after event completes")
 }
 
 // ---------------------------------------------------------------------------
@@ -739,14 +742,23 @@ func TestProjectBCrossMapTransfer(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 11: Multi-Page NPC (Event 15 at 30,23, gated by Variable 206)
+// Test 11: Multi-Page NPC (Event 15 at 30,23)
+// Event 15 has 3 pages:
+//   Page 0: unconditional, 7 commands (dialog)
+//   Page 1: unconditional, 21 commands (dialog with conditionals)
+//   Page 2: variableValid=true, variableId=206, variableValue=5, 1 command (empty)
+// RMMV page selection (last matching page wins):
+//   V206 < 5 → Page 1 selected (has dialog)
+//   V206 >= 5 → Page 2 selected (empty — only terminator)
+// This test verifies that page switching works: Page 1 produces dialog,
+// Page 2 (activated by V206=5) produces nothing.
 // ---------------------------------------------------------------------------
 
 func TestProjectBMultiPageNPC(t *testing.T) {
 	ts, ws, token, charID := setupPlayerOnMap67(t)
 	defer ts.Close()
 
-	// ---- First interaction: Variable 206 = 0 (default) ----
+	// ---- First interaction: Variable 206 = 0 → Page 1 selected (dialog) ----
 	ts.SetPosition(t, charID, 30, 24, 8) // adjacent to Event 15 (30,23)
 	ws.Send("npc_interact", map[string]interface{}{"event_id": 15})
 	res1 := messagePump(t, ws, pumpOpts{
@@ -755,7 +767,7 @@ func TestProjectBMultiPageNPC(t *testing.T) {
 	})
 	ws.Close()
 
-	// Set Variable 206 = 5 to switch to a different page.
+	// Set Variable 206 = 5 → Page 2 (empty) will be selected.
 	ts.SetVariable(t, charID, 206, 5)
 
 	// ---- Reconnect for second interaction ----
@@ -765,7 +777,12 @@ func TestProjectBMultiPageNPC(t *testing.T) {
 	ws2.Send("enter_map", map[string]interface{}{"char_id": charID})
 	ws2.RecvType("map_init", 10*time.Second)
 	ws2.Send("scene_ready", map[string]interface{}{})
-	time.Sleep(1 * time.Second)
+
+	// Drain autorun messages from the reconnection before interacting.
+	messagePump(t, ws2, pumpOpts{
+		TotalTimeout: 5 * time.Second,
+		QuietTimeout: 3 * time.Second,
+	})
 
 	ts.SetPosition(t, charID, 30, 24, 8) // re-position adjacent to Event 15
 	ws2.Send("npc_interact", map[string]interface{}{"event_id": 15})
@@ -774,22 +791,25 @@ func TestProjectBMultiPageNPC(t *testing.T) {
 		QuietTimeout: 3 * time.Second,
 	})
 
-	msg1 := len(res1.Dialogs) + res1.DialogEnds
-	msg2 := len(res2.Dialogs) + res2.DialogEnds
+	msg1All := len(res1.All)
+	msg2All := len(res2.All)
 
-	t.Logf("MultiPageNPC: page1=%d npc_msgs (dialogs=%d, ends=%d), page2=%d npc_msgs (dialogs=%d, ends=%d)",
-		msg1, len(res1.Dialogs), res1.DialogEnds,
-		msg2, len(res2.Dialogs), res2.DialogEnds)
+	t.Logf("MultiPageNPC: V206=0 → %d total (dialogs=%d, effects=%d, ends=%d)",
+		msg1All, len(res1.Dialogs), len(res1.Effects), res1.DialogEnds)
+	t.Logf("MultiPageNPC: V206=5 → %d total (dialogs=%d, effects=%d, ends=%d)",
+		msg2All, len(res2.Dialogs), len(res2.Effects), res2.DialogEnds)
 
-	// At least one of the interactions should produce content.
-	total := msg1 + msg2
-	assert.Greater(t, total, 0,
-		"multi-page NPC should produce at least some messages across both page states")
+	// Both pages should produce at least a dialog_end (Execute always sends one).
+	assert.Greater(t, res1.DialogEnds, 0,
+		"Page 1 (V206=0) should produce dialog_end from Execute")
 
-	// If both produce content, the content should differ (different pages).
-	if msg1 > 0 && msg2 > 0 {
-		t.Log("MultiPageNPC: both page states produced content, page switching is working")
-	}
+	// Page 2 (V206=5) is empty (only code=0 terminator). Execute still runs
+	// and sends dialog_end, but total messages should be fewer than Page 1
+	// since Page 1 has actual commands (name change, CE calls, dialog branches).
+	assert.Greater(t, res2.DialogEnds, 0,
+		"Page 2 (V206=5, empty) should still get dialog_end from Execute")
+	assert.LessOrEqual(t, msg2All, msg1All,
+		"Page 2 (empty) should produce <= messages than Page 1 (has commands)")
 }
 
 // ---------------------------------------------------------------------------

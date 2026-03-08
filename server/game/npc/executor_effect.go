@@ -64,6 +64,12 @@ func (e *Executor) waitForEffectAck(ctx context.Context, s *player.PlayerSession
 // RMMV command302 的参数为第一个商品，后续 605 指令为额外商品。
 // 客户端需要完整商品列表才能正确构建 Scene_Shop。
 func (e *Executor) sendShopProcessing(s *player.PlayerSession, cmd *resource.EventCommand, extraGoods [][]interface{}) {
+	// Store all goods (first item from params + extras) in session for
+	// server-authoritative buy/sell validation.
+	allGoods := [][]interface{}{cmd.Parameters}
+	allGoods = append(allGoods, extraGoods...)
+	s.ShopGoods = allGoods
+
 	payload, _ := json.Marshal(map[string]interface{}{
 		"code":       cmd.Code,
 		"indent":     cmd.Indent,

@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 // ---- GameHandlers: HandlePing ----
@@ -956,8 +957,16 @@ func TestHandleUseItem_Success(t *testing.T) {
 	s := newSession(acc.ID, char.ID)
 	raw := makePacket(t, 1, "use_item", map[string]interface{}{"inv_id": inv.ID})
 	r.Dispatch(s, raw)
-	// Success: logger.Info called, no packet sent
-	time.Sleep(50 * time.Millisecond)
+
+	// Success: should receive inventory_update with the removed item.
+	select {
+	case data := <-s.SendChan:
+		var pkt player.Packet
+		json.Unmarshal(data, &pkt)
+		assert.Equal(t, "inventory_update", pkt.Type)
+	case <-time.After(200 * time.Millisecond):
+		t.Error("expected inventory_update on successful use_item")
+	}
 }
 
 // ---- BattleHandlers: monster hit and monster death ----
@@ -1261,13 +1270,278 @@ func TestHandlePickup_Success(t *testing.T) {
 	raw := makePacket(t, 1, "pickup_item", map[string]interface{}{"drop_id": int64(1)})
 	r.Dispatch(s, raw)
 
-	// Should receive drop_remove broadcast
+	// Should receive inventory_update (to picker) then drop_remove (broadcast).
+	var gotInvUpdate, gotDropRemove bool
+	for i := 0; i < 2; i++ {
+		select {
+		case data := <-s.SendChan:
+			var pkt player.Packet
+			json.Unmarshal(data, &pkt)
+			if pkt.Type == "inventory_update" {
+				gotInvUpdate = true
+			} else if pkt.Type == "drop_remove" {
+				gotDropRemove = true
+			}
+		case <-time.After(300 * time.Millisecond):
+			t.Error("expected packet but timed out")
+		}
+	}
+	assert.True(t, gotInvUpdate, "should receive inventory_update")
+	assert.True(t, gotDropRemove, "should receive drop_remove")
+}
+
+// ---- Shop WS handler tests ----
+
+func setupShopHandlers(t *testing.T) (*gorm.DB, *SkillItemHandlers, *Router, *model.Character) {
+	t.Helper()
+	db := testutil.SetupTestDB(t)
+	c, _ := cache.NewCache(cache.CacheConfig{})
+	wm := world.NewWorldManager(nil, world.NewGameState(nil, nil), world.NewGlobalWhitelist(), nil, nop())
+	t.Cleanup(func() { wm.StopAll() })
+
+	// Resource with one item (price 100), one weapon (price 500).
+	res := &resource.ResourceLoader{
+		Items:   []*resource.Item{nil, {ID: 1, Name: "Potion", Price: 100}},
+		Weapons: []*resource.Weapon{nil, {ID: 1, Name: "Sword", Price: 500}},
+		Armors:  []*resource.Armor{nil, {ID: 1, Name: "Shield", Price: 300, EtypeID: 1}},
+	}
+
+	skillSvc := gskill.NewSkillService(c, res, wm, nil, nop())
+	sh := NewSkillItemHandlers(db, res, wm, skillSvc, nop())
+	r := NewRouter(nop())
+	sh.RegisterHandlers(r)
+
+	acc := &model.Account{Username: "shopper", PasswordHash: "x", Status: 1}
+	require.NoError(t, db.Create(acc).Error)
+	char := &model.Character{AccountID: acc.ID, Name: "Shopper", ClassID: 1, HP: 100, MaxHP: 100, Gold: 5000}
+	require.NoError(t, db.Create(char).Error)
+
+	return db, sh, r, char
+}
+
+func TestHandleShopBuy_NoShopOpen(t *testing.T) {
+	_, _, r, char := setupShopHandlers(t)
+	s := newSession(1, char.ID)
+
+	raw := makePacket(t, 1, "shop_buy", map[string]interface{}{
+		"goods_type": 0, "item_id": 1, "qty": 1,
+	})
+	r.Dispatch(s, raw)
+
 	select {
 	case data := <-s.SendChan:
 		var pkt player.Packet
 		json.Unmarshal(data, &pkt)
-		assert.Equal(t, "drop_remove", pkt.Type)
-	case <-time.After(300 * time.Millisecond):
-		t.Error("expected drop_remove packet")
+		assert.Equal(t, "error", pkt.Type)
+	case <-time.After(200 * time.Millisecond):
+		t.Error("expected error for no shop open")
 	}
+}
+
+func TestHandleShopBuy_Success(t *testing.T) {
+	db, _, r, char := setupShopHandlers(t)
+	s := newSession(1, char.ID)
+
+	// Set active shop goods: item type=0, id=1 (Potion, 100g)
+	s.ShopGoods = [][]interface{}{
+		{float64(0), float64(1), float64(0), float64(0)}, // type=0(item), id=1, priceType=0(db), price=0
+	}
+
+	raw := makePacket(t, 1, "shop_buy", map[string]interface{}{
+		"goods_type": 0, "item_id": 1, "qty": 3,
+	})
+	r.Dispatch(s, raw)
+
+	select {
+	case data := <-s.SendChan:
+		var pkt player.Packet
+		json.Unmarshal(data, &pkt)
+		assert.Equal(t, "shop_buy_result", pkt.Type)
+	case <-time.After(200 * time.Millisecond):
+		t.Error("expected shop_buy_result")
+	}
+
+	// Verify gold deducted (5000 - 3*100 = 4700)
+	var updated model.Character
+	require.NoError(t, db.First(&updated, char.ID).Error)
+	assert.Equal(t, int64(4700), updated.Gold)
+
+	// Verify inventory
+	var inv model.Inventory
+	require.NoError(t, db.Where("char_id = ? AND item_id = ? AND kind = ?", char.ID, 1, 1).First(&inv).Error)
+	assert.Equal(t, 3, inv.Qty)
+}
+
+func TestHandleShopBuy_InsufficientGold(t *testing.T) {
+	db, _, r, char := setupShopHandlers(t)
+	// Set gold to 10
+	db.Model(char).Update("gold", 10)
+
+	s := newSession(1, char.ID)
+	s.ShopGoods = [][]interface{}{
+		{float64(0), float64(1), float64(0), float64(0)},
+	}
+
+	raw := makePacket(t, 1, "shop_buy", map[string]interface{}{
+		"goods_type": 0, "item_id": 1, "qty": 1,
+	})
+	r.Dispatch(s, raw)
+
+	select {
+	case data := <-s.SendChan:
+		var pkt player.Packet
+		json.Unmarshal(data, &pkt)
+		assert.Equal(t, "error", pkt.Type)
+	case <-time.After(200 * time.Millisecond):
+		t.Error("expected error for insufficient gold")
+	}
+}
+
+func TestHandleShopBuy_ItemNotInShop(t *testing.T) {
+	_, _, r, char := setupShopHandlers(t)
+	s := newSession(1, char.ID)
+	s.ShopGoods = [][]interface{}{
+		{float64(0), float64(1), float64(0), float64(0)}, // only item 1
+	}
+
+	raw := makePacket(t, 1, "shop_buy", map[string]interface{}{
+		"goods_type": 0, "item_id": 99, "qty": 1, // item 99 not in shop
+	})
+	r.Dispatch(s, raw)
+
+	select {
+	case data := <-s.SendChan:
+		var pkt player.Packet
+		json.Unmarshal(data, &pkt)
+		assert.Equal(t, "error", pkt.Type)
+	case <-time.After(200 * time.Millisecond):
+		t.Error("expected error for item not in shop")
+	}
+}
+
+func TestHandleShopBuy_CustomPrice(t *testing.T) {
+	db, _, r, char := setupShopHandlers(t)
+	s := newSession(1, char.ID)
+
+	// Custom price: priceType=1, price=50
+	s.ShopGoods = [][]interface{}{
+		{float64(0), float64(1), float64(1), float64(50)},
+	}
+
+	raw := makePacket(t, 1, "shop_buy", map[string]interface{}{
+		"goods_type": 0, "item_id": 1, "qty": 2,
+	})
+	r.Dispatch(s, raw)
+
+	select {
+	case data := <-s.SendChan:
+		var pkt player.Packet
+		json.Unmarshal(data, &pkt)
+		assert.Equal(t, "shop_buy_result", pkt.Type)
+	case <-time.After(200 * time.Millisecond):
+		t.Error("expected shop_buy_result")
+	}
+
+	var updated model.Character
+	require.NoError(t, db.First(&updated, char.ID).Error)
+	assert.Equal(t, int64(4900), updated.Gold) // 5000 - 2*50
+}
+
+func TestHandleShopBuy_WeaponSeparateRows(t *testing.T) {
+	db, _, r, char := setupShopHandlers(t)
+	s := newSession(1, char.ID)
+
+	// Weapon: goods_type=1, id=1 (Sword, 500g)
+	s.ShopGoods = [][]interface{}{
+		{float64(1), float64(1), float64(0), float64(0)},
+	}
+
+	raw := makePacket(t, 1, "shop_buy", map[string]interface{}{
+		"goods_type": 1, "item_id": 1, "qty": 2,
+	})
+	r.Dispatch(s, raw)
+
+	select {
+	case data := <-s.SendChan:
+		var pkt player.Packet
+		json.Unmarshal(data, &pkt)
+		assert.Equal(t, "shop_buy_result", pkt.Type)
+	case <-time.After(200 * time.Millisecond):
+		t.Error("expected shop_buy_result")
+	}
+
+	// Should create 2 separate rows for weapons
+	var invs []model.Inventory
+	require.NoError(t, db.Where("char_id = ? AND item_id = ? AND kind = ?", char.ID, 1, 2).Find(&invs).Error)
+	assert.Equal(t, 2, len(invs))
+
+	var updated model.Character
+	require.NoError(t, db.First(&updated, char.ID).Error)
+	assert.Equal(t, int64(4000), updated.Gold) // 5000 - 2*500
+}
+
+func TestHandleShopSell_Success(t *testing.T) {
+	db, _, r, char := setupShopHandlers(t)
+	s := newSession(1, char.ID)
+
+	// Add 5 potions to inventory
+	inv := &model.Inventory{CharID: char.ID, ItemID: 1, Kind: 1, Qty: 5}
+	require.NoError(t, db.Create(inv).Error)
+
+	raw := makePacket(t, 1, "shop_sell", map[string]interface{}{
+		"goods_type": 0, "item_id": 1, "qty": 3,
+	})
+	r.Dispatch(s, raw)
+
+	select {
+	case data := <-s.SendChan:
+		var pkt player.Packet
+		json.Unmarshal(data, &pkt)
+		assert.Equal(t, "shop_sell_result", pkt.Type)
+	case <-time.After(200 * time.Millisecond):
+		t.Error("expected shop_sell_result")
+	}
+
+	// Price 100, sell at half = 50, sold 3 → earned 150
+	var updated model.Character
+	require.NoError(t, db.First(&updated, char.ID).Error)
+	assert.Equal(t, int64(5150), updated.Gold) // 5000 + 150
+
+	// Inventory: 5 - 3 = 2
+	var updatedInv model.Inventory
+	require.NoError(t, db.First(&updatedInv, inv.ID).Error)
+	assert.Equal(t, 2, updatedInv.Qty)
+}
+
+func TestHandleShopSell_NotEnoughItems(t *testing.T) {
+	db, _, r, char := setupShopHandlers(t)
+	s := newSession(1, char.ID)
+
+	inv := &model.Inventory{CharID: char.ID, ItemID: 1, Kind: 1, Qty: 2}
+	require.NoError(t, db.Create(inv).Error)
+
+	raw := makePacket(t, 1, "shop_sell", map[string]interface{}{
+		"goods_type": 0, "item_id": 1, "qty": 5,
+	})
+	r.Dispatch(s, raw)
+
+	select {
+	case data := <-s.SendChan:
+		var pkt player.Packet
+		json.Unmarshal(data, &pkt)
+		assert.Equal(t, "error", pkt.Type)
+	case <-time.After(200 * time.Millisecond):
+		t.Error("expected error for not enough items")
+	}
+}
+
+func TestHandleShopClose(t *testing.T) {
+	_, _, r, char := setupShopHandlers(t)
+	s := newSession(1, char.ID)
+	s.ShopGoods = [][]interface{}{{float64(0), float64(1), float64(0), float64(0)}}
+
+	raw := makePacket(t, 1, "shop_close", nil)
+	r.Dispatch(s, raw)
+
+	assert.Nil(t, s.ShopGoods)
 }

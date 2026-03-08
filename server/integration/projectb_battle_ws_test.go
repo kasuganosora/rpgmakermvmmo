@@ -196,6 +196,11 @@ func TestProjectBBattle_WSFullFlow(t *testing.T) {
 	// Run battle pump: auto-attack, collect all messages.
 	res := battlePump(t, ws, battlePumpOpts{Timeout: 30 * time.Second, ActionType: 0})
 
+	// After battle ends, server drains stale scene_ready signals then waits for a
+	// fresh one. We delay briefly so the server has time to reach the wait state.
+	time.Sleep(500 * time.Millisecond)
+	ws.Send("scene_ready", map[string]interface{}{})
+
 	// --- Verify full protocol was exercised ---
 
 	// battle_battle_start
@@ -312,6 +317,9 @@ func TestProjectBBattle_WSEscape(t *testing.T) {
 	// Auto-escape on every input request.
 	res := battlePump(t, ws, battlePumpOpts{Timeout: 30 * time.Second, ActionType: 4})
 
+	// After battle ends, server waits for scene_ready before RunBattle returns.
+	ws.Send("scene_ready", map[string]interface{}{})
+
 	require.NotNil(t, res.BattleStart, "should receive battle_battle_start")
 	assert.True(t, len(res.InputRequests) > 0, "should receive input_request(s)")
 
@@ -371,6 +379,11 @@ func TestProjectBBattle_WSProtocolOrder(t *testing.T) {
 	}()
 
 	res := battlePump(t, ws, battlePumpOpts{Timeout: 30 * time.Second, ActionType: 0})
+
+	// After battle ends, server drains stale scene_ready signals then waits for a
+	// fresh one. We delay briefly so the server has time to reach the wait state.
+	time.Sleep(500 * time.Millisecond)
+	ws.Send("scene_ready", map[string]interface{}{})
 
 	// Verify strict message ordering.
 	battleTypes := []string{}

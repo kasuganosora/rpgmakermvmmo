@@ -48,14 +48,20 @@ func (svc *EquipService) Equip(ctx context.Context, s *player.PlayerSession, inv
 		}
 
 		// Unequip any existing item in the same slot.
-		var existing model.Inventory
-		err := tx.Where("char_id = ? AND slot_index = ? AND equipped = true", s.CharID, slot).
-			First(&existing).Error
-		if err == nil {
-			existing.Equipped = false
-			existing.SlotIndex = -1
-			if err2 := tx.Save(&existing).Error; err2 != nil {
-				return err2
+		// Query all char items and filter in Go — the embedded DB engine
+		// doesn't reliably handle boolean or negative-value WHERE clauses.
+		var charItems []model.Inventory
+		if err := tx.Where("char_id = ?", s.CharID).Find(&charItems).Error; err != nil {
+			return err
+		}
+		for _, ci := range charItems {
+			if ci.ID != invID && ci.Equipped && ci.SlotIndex == slot {
+				ci.Equipped = false
+				ci.SlotIndex = -1
+				if err2 := tx.Save(&ci).Error; err2 != nil {
+					return err2
+				}
+				break
 			}
 		}
 
@@ -69,13 +75,15 @@ func (svc *EquipService) Equip(ctx context.Context, s *player.PlayerSession, inv
 func (svc *EquipService) Unequip(ctx context.Context, s *player.PlayerSession, invID int64) error {
 	return svc.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var inv model.Inventory
-		if err := tx.Where("id = ? AND char_id = ? AND equipped = true", invID, s.CharID).
+		if err := tx.Where("id = ? AND char_id = ?", invID, s.CharID).
 			First(&inv).Error; err != nil {
 			return errors.New("item not equipped")
 		}
-		inv.Equipped = false
-		inv.SlotIndex = -1
-		return tx.Save(&inv).Error
+		if !inv.Equipped {
+			return errors.New("item not equipped")
+		}
+		return tx.Exec("UPDATE inventories SET equipped = 0, slot_index = -1 WHERE id = ?",
+			inv.ID).Error
 	})
 }
 

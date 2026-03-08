@@ -1470,6 +1470,51 @@
     });
 
     // ═══════════════════════════════════════════════════════════
+    //  Scene_Shop 服务端权威 — 购买/出售通过 WS 发送到服务端
+    //  客户端本地也同步修改 $gameParty 以保持 UI 一致。
+    // ═══════════════════════════════════════════════════════════
+
+    var _Scene_Shop_doBuy = Scene_Shop.prototype.doBuy;
+    Scene_Shop.prototype.doBuy = function (number) {
+        // RMMV goods type: 0=item, 1=weapon, 2=armor
+        var goodsType = 0;
+        if (DataManager.isWeapon(this._item)) goodsType = 1;
+        else if (DataManager.isArmor(this._item)) goodsType = 2;
+
+        $MMO.send('shop_buy', {
+            goods_type: goodsType,
+            item_id:    this._item.id,
+            qty:        number
+        });
+
+        // Apply locally for immediate UI feedback.
+        _Scene_Shop_doBuy.call(this, number);
+    };
+
+    var _Scene_Shop_doSell = Scene_Shop.prototype.doSell;
+    Scene_Shop.prototype.doSell = function (number) {
+        var goodsType = 0;
+        if (DataManager.isWeapon(this._item)) goodsType = 1;
+        else if (DataManager.isArmor(this._item)) goodsType = 2;
+
+        $MMO.send('shop_sell', {
+            goods_type: goodsType,
+            item_id:    this._item.id,
+            qty:        number
+        });
+
+        // Apply locally for immediate UI feedback.
+        _Scene_Shop_doSell.call(this, number);
+    };
+
+    // Notify server when player closes the shop scene.
+    var _Scene_Shop_terminate = Scene_Shop.prototype.terminate;
+    Scene_Shop.prototype.terminate = function () {
+        $MMO.send('shop_close', {});
+        _Scene_Shop_terminate.call(this);
+    };
+
+    // ═══════════════════════════════════════════════════════════
     //  YEP_MessageCore null-safe patch — escapeIconItem
     //  \II[n], \IW[n], \IA[n] 引用不存在的物品时返回空字符串而非崩溃
     // ═══════════════════════════════════════════════════════════
