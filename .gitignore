@@ -5,6 +5,8 @@ node_modules/
 server/server
 server/server.exe
 server/mmo-server.exe
+server/mmo-server
+server/mmo-server.exe~
 server/server~
 *.exe
 
@@ -22,9 +24,15 @@ Thumbs.db
 # Test artifacts
 coverage/
 *.out
+*.cov
+server/cover*.html
+server/*_cov.html
+server/client_scripts/
 
 # Database
 server/data/game.db
+server/data/game.db-shm
+server/data/game.db-wal
 
 # Test results
 e2e/test-results/
