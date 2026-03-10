@@ -83,8 +83,8 @@ func (e *Executor) teCallOriginEvent(ctx context.Context, s *player.PlayerSessio
 		return true
 	}
 
-	// TemplateEvent.js 使用 1 起始页面索引：pages[pageIndex - 1 || _pageIndex]
-	// arg=0 或缺省 → page 0；arg=1 → page 0（JS 中 0 为 falsy）；arg≥2 → page arg-1
+	// TemplateEvent.js page index: 1-based with JS falsy trick (pages[idx-1 || _pageIndex]).
+	// arg omitted/1 2192 pageIdx=0 (current page fallback); arg22652 2192 pageIdx=arg-1. The idx>=2 check reproduces this.
 	pageIdx := 0
 	if len(args) > 0 {
 		if idx, err := strconv.Atoi(args[0]); err == nil && idx >= 2 {
@@ -157,8 +157,8 @@ func (e *Executor) teCallMapEvent(ctx context.Context, s *player.PlayerSession, 
 		return true
 	}
 
-	// TemplateEvent.js 使用 1 起始页面索引：pages[pageIndex - 1 || _pageIndex]
-	// arg=0 或缺省 → page 0；arg=1 → page 0（JS 中 0 为 falsy）；arg≥2 → page arg-1
+	// TemplateEvent.js page index: 1-based with JS falsy trick (pages[idx-1 || _pageIndex]).
+	// arg omitted/1 2192 pageIdx=0 (current page fallback); arg22652 2192 pageIdx=arg-1. The idx>=2 check reproduces this.
 	arrayIdx := 0
 	if pageIdx >= 2 {
 		arrayIdx = pageIdx - 1
@@ -265,6 +265,12 @@ func (e *Executor) teSetRangeSelfVariable(s *player.PlayerSession, args []string
 	}
 	endIdx, err := strconv.Atoi(args[1])
 	if err != nil {
+		return true
+	}
+	const maxSelfVarRange = 1000
+	if endIdx < startIdx || endIdx-startIdx > maxSelfVarRange {
+		e.logger.Warn("TE_SET_RANGE_SELF_VARIABLE: invalid or excessive range",
+			zap.Int("start", startIdx), zap.Int("end", endIdx))
 		return true
 	}
 	opType, err := strconv.Atoi(args[2])

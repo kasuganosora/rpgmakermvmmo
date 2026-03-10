@@ -280,6 +280,138 @@ game:
   global_chat_cooldown_s: 180
 ```
 
+### Game-Specific Configuration (MMOConfig.json)
+
+The framework separates all game-specific logic from the core engine. Each RMMV project provides its own configuration in `www/data/MMOConfig.json`. If the file is absent, the framework runs with no game-specific behavior (no blocked plugins, no broadcast sync, no server-exec plugins, no time period computation).
+
+```jsonc
+{
+  // Plugin commands that should NOT be forwarded to the client.
+  // Use this for portrait/UI plugins that the client manages independently,
+  // or calculation plugins that are handled server-side.
+  "blockedPluginCmds": [
+    "CallStand", "CallStandForce",
+    "EraceStand", "EraceStand1",
+    "CallCutin", "EraceCutin",
+    "CallAM",
+    "CulPartLV", "CulLustLV", "CulMiasmaLV"
+  ],
+
+  // Plugin commands executed server-side via Goja JS VM.
+  // Each entry maps a plugin command name to its configuration.
+  "serverExecPlugins": {
+    "CulSkillEffect": {
+      "scriptFile": "js/plugins/CulSkillEffect_server.js",  // relative to game root
+      "timeout": 200,                // execution timeout in ms
+      "injectActors": true,          // inject $gameActors into VM
+      "injectDataArrays": true,      // inject $dataArmors, $dataWeapons, etc.
+      "injectPlayerVars": false,     // inject __playerLevel, __gold, __classId
+      "tagSkillListRange": [21, 122] // TagSkillList post-processing range
+    },
+    "ParaCheck": {
+      "scriptFile": "js/plugins/ParaCheck_server.js",
+      "timeout": 200,
+      "injectActors": true,
+      "injectDataArrays": true,
+      "injectPlayerVars": true
+    }
+  },
+
+  // Variables broadcast to ALL connected clients when changed (global state).
+  // Typically time/weather variables that all players should see simultaneously.
+  "broadcastVariables": [202, 203, 204, 205, 206, 207, 211],
+
+  // Switches broadcast to ALL connected clients when changed.
+  "broadcastSwitches": [11, 12, 20, 31, 53, 54, 55, 56, 57, 58, 87, 89, 103, 104],
+
+  // Time period computation: derives a "period" variable from an "hour" variable.
+  // The server computes this on map entry so maps without autoruns still get correct time.
+  "timePeriod": {
+    "hourVar": 204,      // variable ID containing current hour (0-23)
+    "periodVar": 206,    // variable ID to write the period value
+    "ranges": [          // first match wins (hour < maxHour)
+      { "maxHour": 5,  "period": 6 },
+      { "maxHour": 7,  "period": 1 },
+      { "maxHour": 9,  "period": 2 },
+      { "maxHour": 17, "period": 3 },
+      { "maxHour": 19, "period": 4 },
+      { "maxHour": 22, "period": 5 },
+      { "maxHour": 99, "period": 6 }
+    ]
+  },
+
+  // Script line prefixes allowed to be forwarded to the client (code 355).
+  // Lines not matching any prefix or $gameScreen method are silently dropped.
+  "safeScriptPrefixes": ["AudioManager."],
+
+  // $gameScreen methods allowed to be forwarded (explicit whitelist).
+  "safeScreenMethods": [
+    "movePicture", "erasePicture", "showPicture", "picture",
+    "tintPicture", "rotatePicture",
+    "startFadeOut", "startFadeIn", "startTint", "startFlash", "startShake",
+    "setWeather", "showBalloon",
+    "startZoom", "setZoom", "clearZoom",
+    "updateFadeOut", "updateFadeIn", "clearPictures"
+  ]
+}
+```
+
+#### Server-Exec Plugin Scripts
+
+Plugins listed in `serverExecPlugins` have their JS executed server-side in a sandboxed Goja VM. The script file path is relative to the game root (parent of `www/data/`). The VM provides:
+
+- `$gameVariables` / `$gameSwitches` — read/write game state (mutations tracked and synced to client)
+- `$gameActors` — read equipment slots (if `injectActors: true`)
+- `$dataArmors` / `$dataWeapons` / `$dataSkills` / `$dataItems` — RMMV data arrays with parsed meta (if `injectDataArrays: true`)
+- `__playerLevel` / `__gold` / `__classId` — player-specific values (if `injectPlayerVars: true`)
+- `Math` — standard JS Math object
+
+To add a new server-exec plugin: create the JS file, add an entry to `serverExecPlugins`, and implement a handler case in `executor_dispatch.go:execServerPlugin()`.
+
+### Client Initialization (InitState.json)
+
+Optional file `www/data/InitState.json` provides client-side initialization data sent via `map_init`. This replaces hardcoded actor property setup:
+
+```jsonc
+{
+  // Switches to set on client after map load
+  "switches": { "85": true },
+
+  // Switches to reset at event_end (e.g., to re-trigger parallel CEs)
+  "resetSwitches": { "15": false },
+
+  // Actor property initialization (custom plugin properties)
+  "actorProps": {
+    "1": {
+      "EXT": { "mouth": 0, "nipple": 0, "clit": 0, "vagina": 0, "anus": 0 },
+      "QTE": {},
+      "hairTone": [0, 0, 0, 0, 0]
+    }
+  }
+}
+```
+
+### TagSkillList.json
+
+Optional file `www/data/TagSkillList.json` defines mappings for equipment stat base value computation:
+
+```json
+{
+  "21": { "BaseVar": 1091, "AddVar": 4221, "BaseNum": 10 },
+  "22": { "BaseVar": 1092, "AddVar": 4222, "BaseNum": 20 }
+}
+```
+
+Each entry: `v[BaseVar] = BaseNum + v[AddVar]` — applied after the CulSkillEffect JS finishes accumulating equipment effects.
+
+### Character Initialization (Automatic)
+
+Character creation stats (starting equipment, switches, variables) are **automatically extracted** from Common Event 1 at server startup — no config needed. The server parses CE 1 and all its sub-CE calls, extracting:
+
+- Code 121 (Control Switches) — initial switch values
+- Code 122 (Control Variables) — initial variable values
+- Code 356 (Plugin Commands) — EquipChange commands for starting equipment
+
 ## Known Limitations
 
 1. **Database Schema**: May change between versions without migration

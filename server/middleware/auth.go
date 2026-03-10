@@ -47,7 +47,9 @@ func Auth(sec config.SecurityConfig, c cache.Cache) gin.HandlerFunc {
 // GetAccountID retrieves the authenticated account ID from the Gin context.
 func GetAccountID(c *gin.Context) int64 {
 	if v, exists := c.Get(AccountIDKey); exists {
-		return v.(int64)
+		if id, ok := v.(int64); ok {
+			return id
+		}
 	}
 	return 0
 }

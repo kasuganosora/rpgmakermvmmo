@@ -2,6 +2,7 @@ package world
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/kasuganosora/rpgmakermvmmo/server/resource"
 	"go.uber.org/zap"
@@ -99,6 +100,20 @@ func (wm *WorldManager) ActiveInstanceCount() int {
 	wm.mu.RLock()
 	defer wm.mu.RUnlock()
 	return len(wm.instances)
+}
+
+// TotalBroadcastDrops returns the sum of dropped broadcast packets across all rooms.
+func (wm *WorldManager) TotalBroadcastDrops() int64 {
+	wm.mu.RLock()
+	defer wm.mu.RUnlock()
+	var total int64
+	for _, r := range wm.rooms {
+		total += atomic.LoadInt64(&r.BroadcastDrops)
+	}
+	for _, r := range wm.instances {
+		total += atomic.LoadInt64(&r.BroadcastDrops)
+	}
+	return total
 }
 
 // StopAll stops all active map rooms and instances (used at server shutdown).

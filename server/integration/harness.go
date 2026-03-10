@@ -110,7 +110,7 @@ func NewTestServer(t *testing.T) *TestServer {
 	partyH.RegisterHandlers(wsRouter)
 
 	// TemplateEvent.js hook handlers
-	templateEventH := apows.NewTemplateEventHandlers(db, wm, sm, logger)
+	templateEventH := apows.NewTemplateEventHandlers(db, wm, sm, res, logger)
 	templateEventH.RegisterHandlers(wsRouter)
 
 	wsRouter.On("chat_send", chatH.HandleSend)
@@ -262,6 +262,13 @@ func NewTestServerWithResources(t *testing.T, dataPath string) *TestServer {
 		}
 		return ps.VariablesSnapshot()
 	})
+	battleMgr.SetSwitchSnapshotFn(func(charID int64) map[int]bool {
+		ps, err := wm.PlayerStateManager().GetOrLoad(charID)
+		if err != nil {
+			return nil
+		}
+		return ps.SwitchesSnapshot()
+	})
 	battleMgr.RegisterHandlers(wsRouter)
 
 	npcH := apows.NewNPCHandlers(db, res, wm, logger)
@@ -278,7 +285,7 @@ func NewTestServerWithResources(t *testing.T, dataPath string) *TestServer {
 	partyH := apows.NewPartyHandlers(partyMgr, sm, logger)
 	partyH.RegisterHandlers(wsRouter)
 
-	templateEventH := apows.NewTemplateEventHandlers(db, wm, sm, logger)
+	templateEventH := apows.NewTemplateEventHandlers(db, wm, sm, res, logger)
 	templateEventH.RegisterHandlers(wsRouter)
 
 	// Debug handlers

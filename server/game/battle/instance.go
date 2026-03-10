@@ -44,6 +44,7 @@ type ItemConsumeFn func(charID int64, itemID int)
 // BattleConfig configures a BattleInstance.
 type BattleConfig struct {
 	TroopID     int
+	BaseTroopID int               // YEP_BaseTroopEvents: troop ID whose pages are merged (0 = disabled)
 	CanEscape   bool
 	CanLose     bool
 	Battleback1 string              // battleback1 image name from map data
@@ -54,6 +55,7 @@ type BattleConfig struct {
 	TurnMgr      TurnManager         // nil = DefaultTurnManager
 	InputTimeout time.Duration       // deprecated: no longer used (waits indefinitely)
 	GameVars     map[int]int         // player variable snapshot for client UI (custom gauges etc.)
+	GameSwitches map[int]bool       // player switch snapshot (transformation state etc.)
 	LevelCheckFn  LevelCheckFn        // nil = no level-up check
 	ItemCheckFn   ItemCheckFn        // nil = skip inventory check
 	ItemConsumeFn ItemConsumeFn      // nil = no item consumption
@@ -65,6 +67,7 @@ type BattleInstance struct {
 	Enemies []Battler
 
 	troopID     int
+	baseTroopID int
 	canEscape   bool
 	canLose     bool
 	battleback1 string
@@ -72,6 +75,7 @@ type BattleInstance struct {
 	turnCount   int
 	escapeRatio    float64
 	gameVars       map[int]int
+	gameSwitches   map[int]bool
 	levelCheckFn   LevelCheckFn
 	itemCheckFn    ItemCheckFn
 	itemConsumeFn  ItemConsumeFn
@@ -116,12 +120,14 @@ func NewBattleInstance(cfg BattleConfig) *BattleInstance {
 
 	return &BattleInstance{
 		troopID:     cfg.TroopID,
+		baseTroopID: cfg.BaseTroopID,
 		canEscape:   cfg.CanEscape,
 		canLose:     cfg.CanLose,
 		battleback1: cfg.Battleback1,
 		battleback2: cfg.Battleback2,
 		escapeRatio:  0.0, // incremented by 0.1 per failed attempt; base from agility ratio
 		gameVars:      cfg.GameVars,
+		gameSwitches:  cfg.GameSwitches,
 		levelCheckFn:  cfg.LevelCheckFn,
 		itemCheckFn:   cfg.ItemCheckFn,
 		itemConsumeFn: cfg.ItemConsumeFn,
@@ -269,11 +275,12 @@ func (b *BattleInstance) Run(ctx context.Context) int {
 		enemySnaps[i] = SnapshotBattler(e)
 	}
 	b.emitEvent(&EventBattleStart{
-		Actors:      actorSnaps,
-		Enemies:     enemySnaps,
-		Battleback1: b.battleback1,
-		Battleback2: b.battleback2,
-		GameVars:    b.gameVars,
+		Actors:       actorSnaps,
+		Enemies:      enemySnaps,
+		Battleback1:  b.battleback1,
+		Battleback2:  b.battleback2,
+		GameVars:     b.gameVars,
+		GameSwitches: b.gameSwitches,
 	})
 
 	for {
@@ -362,9 +369,9 @@ func (b *BattleInstance) Run(ctx context.Context) int {
 				targets := make([]ActionResultTarget, len(outcomes))
 				for i, out := range outcomes {
 					var tgt Battler
-					if out.TargetIsActor && out.TargetIndex < len(b.Actors) {
+					if out.TargetIsActor && out.TargetIndex >= 0 && out.TargetIndex < len(b.Actors) {
 						tgt = b.Actors[out.TargetIndex]
-					} else if !out.TargetIsActor && out.TargetIndex < len(b.Enemies) {
+					} else if !out.TargetIsActor && out.TargetIndex >= 0 && out.TargetIndex < len(b.Enemies) {
 						tgt = b.Enemies[out.TargetIndex]
 					}
 					ref := BattlerRef{}
@@ -421,7 +428,7 @@ func (b *BattleInstance) Run(ctx context.Context) int {
 			// Handle escape effects (effect 41 dataId=0).
 			for _, out := range outcomes {
 				if out.Escaped && !out.Missed {
-					if !out.TargetIsActor && out.TargetIndex < len(b.Enemies) {
+					if !out.TargetIsActor && out.TargetIndex >= 0 && out.TargetIndex < len(b.Enemies) {
 						b.MarkEnemyEscaped(out.TargetIndex)
 						b.emitEvent(&EventEnemyEscape{EnemyIndex: out.TargetIndex})
 					}
@@ -614,6 +621,9 @@ func (b *BattleInstance) waitForInput(ctx context.Context, actorIndex int) (*Act
 			select {
 			case b.inputCh <- input:
 			default:
+				b.logger.Warn("input put-back channel full, dropping input",
+					zap.Int("expected_actor", actorIndex),
+					zap.Int("got_actor", input.ActorIndex))
 			}
 		}
 	}
@@ -768,17 +778,33 @@ func (b *BattleInstance) processTurnEnd() {
 }
 
 // initTroopEvents sets up the TroopEventRunner from troop data.
+// If BaseTroopID is set (YEP_BaseTroopEvents), its pages are prepended to the troop's own pages.
 func (b *BattleInstance) initTroopEvents() {
 	if b.res == nil || b.troopID <= 0 || b.troopID >= len(b.res.Troops) {
 		return
 	}
 	troop := b.res.Troops[b.troopID]
-	if troop == nil || len(troop.Pages) == 0 {
+	if troop == nil {
+		return
+	}
+
+	// Merge base troop pages (YEP_BaseTroopEvents).
+	pages := troop.Pages
+	if b.baseTroopID > 0 && b.baseTroopID != b.troopID &&
+		b.baseTroopID < len(b.res.Troops) {
+		if baseTroop := b.res.Troops[b.baseTroopID]; baseTroop != nil {
+			merged := make([]resource.TroopPage, 0, len(baseTroop.Pages)+len(pages))
+			merged = append(merged, baseTroop.Pages...)
+			merged = append(merged, pages...)
+			pages = merged
+		}
+	}
+	if len(pages) == 0 {
 		return
 	}
 
 	b.troopEvents = NewTroopEventRunner(TroopEventConfig{
-		Pages:    troop.Pages,
+		Pages:    pages,
 		Res:      b.res,
 		RNG:      b.rng,
 		Logger:   b.logger,
@@ -947,6 +973,9 @@ func (b *BattleInstance) initTroopEvents() {
 				return int(ab.CharID())
 			}
 			return -1
+		},
+		EnemyCount: func() int {
+			return len(b.Enemies)
 		},
 	})
 }

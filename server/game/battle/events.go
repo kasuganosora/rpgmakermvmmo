@@ -65,11 +65,12 @@ func RefBattler(b Battler) BattlerRef {
 // --- Concrete event types ---
 
 type EventBattleStart struct {
-	Actors      []BattlerSnapshot `json:"actors"`
-	Enemies     []BattlerSnapshot `json:"enemies"`
-	Battleback1 string            `json:"battleback1,omitempty"`
-	Battleback2 string            `json:"battleback2,omitempty"`
-	GameVars    map[int]int       `json:"game_vars,omitempty"` // player variable snapshot for client UI
+	Actors       []BattlerSnapshot `json:"actors"`
+	Enemies      []BattlerSnapshot `json:"enemies"`
+	Battleback1  string            `json:"battleback1,omitempty"`
+	Battleback2  string            `json:"battleback2,omitempty"`
+	GameVars     map[int]int       `json:"game_vars,omitempty"`     // player variable snapshot for client UI
+	GameSwitches map[int]bool      `json:"game_switches,omitempty"` // player switch snapshot (e.g. switch 131 transformation)
 }
 
 func (EventBattleStart) EventType() string { return "battle_start" }

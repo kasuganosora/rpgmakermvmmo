@@ -188,6 +188,11 @@ type Executor struct {
 	store  InventoryStore           // 金币/物品持久化（可 mock）
 	res    *resource.ResourceLoader // RMMV 资源数据（只读）
 	logger *zap.Logger
+
+	// Cached config sets built once from MMOConfig (lazy init).
+	blockedCmdSet  map[string]bool // blocked plugin commands
+	safeScreenSet  map[string]bool // safe $gameScreen methods
+	alwaysSendSet  map[int]bool    // switches always forwarded even when value unchanged
 }
 
 // New 创建 Executor，接受 InventoryStore 接口以支持测试 mock。
@@ -339,9 +344,11 @@ func (s *gormInventoryStore) HasSkill(ctx context.Context, charID int64, skillID
 func (s *gormInventoryStore) SetEquipSlot(ctx context.Context, charID int64, slotIndex, itemID, kind int) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// 卸下该槽位当前装备
-		tx.Model(&model.Inventory{}).
+		if err := tx.Model(&model.Inventory{}).
 			Where("char_id = ? AND slot_index = ? AND equipped = ?", charID, slotIndex, true).
-			Updates(map[string]interface{}{"equipped": false, "slot_index": -1})
+			Updates(map[string]interface{}{"equipped": false, "slot_index": -1}).Error; err != nil {
+			return err
+		}
 
 		if itemID <= 0 {
 			return nil // 仅卸下

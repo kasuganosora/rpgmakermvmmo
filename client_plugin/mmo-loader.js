@@ -36,6 +36,7 @@
         'mmo-other-players.js',
         'mmo-npc.js',
         'mmo-battle.js',
+        'mmo-battle-core.js',
         'mmo-hud.js',
         'mmo-skill-bar.js',
         'mmo-inventory.js',
@@ -104,6 +105,94 @@
 
     if (MMO_CONFIG.debug || failed.length) console.log('[MMO] 远程加载完成: ' + loaded + '/' + LOAD_ORDER.length +
                 (failed.length ? ' | 失败: ' + failed.join(', ') : ''));
+
+    // ═══════════════════════════════════════════════════════════
+    //  客户端配置管理器
+    //  从 data/MMOClientConfig.json 加载客户端UI配置。
+    //  若文件不存在或解析失败，使用内置默认值。
+    //  配置通过 window.MMO_CLIENT_CONFIG 供所有插件访问。
+    // ═══════════════════════════════════════════════════════════
+
+    /**
+     * 客户端配置默认值。
+     * 当 data/MMOClientConfig.json 不存在或缺少对应字段时使用。
+     */
+    var CLIENT_CONFIG_DEFAULTS = {
+        hud: {
+            statusBar: false,
+            minimap: false,
+            questTracker: false
+        },
+        skillBar: {
+            enabled: false,
+            slotCount: 12
+        },
+        inventory: {
+            enabled: false
+        },
+        chat: {
+            enabled: false,
+            maxMessages: 100,
+            channels: ['world', 'party', 'guild', 'battle', 'system', 'private']
+        },
+        party: {
+            enabled: false,
+            inviteTimeoutSeconds: 30
+        },
+        social: {
+            enabled: false,
+            notificationTimeoutMs: 5000
+        },
+        trade: {
+            enabled: false,
+            requestTimeoutSeconds: 15
+        },
+        escMenu: false
+    };
+
+    /**
+     * 深度合并两个对象，src 的值覆盖 dst，src 中缺失的字段保留 dst 的默认值。
+     * @param {Object} dst - 默认值对象（不会被修改）
+     * @param {Object} src - 用户配置对象
+     * @returns {Object} 合并后的新对象
+     */
+    function mergeConfig(dst, src) {
+        var result = {};
+        for (var k in dst) {
+            if (Object.prototype.hasOwnProperty.call(dst, k)) {
+                if (src && Object.prototype.hasOwnProperty.call(src, k) &&
+                    typeof dst[k] === 'object' && dst[k] !== null &&
+                    typeof src[k] === 'object' && src[k] !== null) {
+                    result[k] = mergeConfig(dst[k], src[k]);
+                } else if (src && Object.prototype.hasOwnProperty.call(src, k)) {
+                    result[k] = src[k];
+                } else {
+                    result[k] = dst[k];
+                }
+            }
+        }
+        return result;
+    }
+
+    /** 加载客户端配置文件，合并默认值后写入 window.MMO_CLIENT_CONFIG。 */
+    (function loadClientConfig() {
+        var userConfig = null;
+        try {
+            var cfgXhr = new XMLHttpRequest();
+            cfgXhr.open('GET', 'data/MMOClientConfig.json', false); // 同步请求本地文件
+            cfgXhr.send();
+            if (cfgXhr.status === 200 || cfgXhr.status === 0) { // 0 = 本地文件协议
+                userConfig = JSON.parse(cfgXhr.responseText);
+                if (MMO_CONFIG.debug) console.log('[MMO] 已加载客户端配置: data/MMOClientConfig.json');
+            } else {
+                if (MMO_CONFIG.debug) console.log('[MMO] 未找到 data/MMOClientConfig.json，使用默认配置');
+            }
+        } catch (e) {
+            if (MMO_CONFIG.debug) console.log('[MMO] 客户端配置加载失败，使用默认配置:', e.message);
+        }
+        window.MMO_CLIENT_CONFIG = mergeConfig(CLIENT_CONFIG_DEFAULTS, userConfig || {});
+        if (MMO_CONFIG.debug) console.log('[MMO] 客户端配置:', JSON.stringify(window.MMO_CLIENT_CONFIG));
+    })();
 
     // ═══════════════════════════════════════════════════════════
     //  自动检测 TemplateEvent.js 并加载同步钩子

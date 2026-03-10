@@ -14,26 +14,99 @@ import (
 // maxCallDepth 防止公共事件之间的无限递归调用。
 const maxCallDepth = 10
 
-// blockedPluginCmds 列出不应转发给客户端的插件指令名称。
-// 这些插件要么是纯客户端计算（服务端转发无意义），要么依赖客户端状态。
-var blockedPluginCmds = map[string]bool{
-	// 纯参数计算插件 — CulSkillEffect/ParaCheck 现在服务端执行，
-	// 其余仍阻止转发
-	"CulPartLV": true, "CulLustLV": true, "CulMiasmaLV": true,
-	// 立绘（standing portrait）相关指令 — 客户端 CE 201（并行）→ CE 210 → CallStand
-	// 链独立管理立绘显示。服务端转发会与客户端 CE 201 的 10 帧循环产生时序冲突，
-	// 导致 EraceStand 擦除后 CE 201 来不及重绘，立绘消失。
-	"CallStand": true, "CallStandForce": true,
-	"EraceStand": true, "EraceStand1": true,
-	"CallCutin": true, "EraceCutin": true,
-	"CallAM": true,
+// isSafeScriptLine 检查一行脚本是否可安全转发给客户端。
+// 检查 $gameScreen 方法白名单和安全脚本前缀（均从 MMOConfig 读取）。
+func (e *Executor) isSafeScriptLine(line string) bool {
+	cfg := e.mmoConfig()
+	if cfg == nil {
+		return false
+	}
+	// Check safe script prefixes (e.g. "AudioManager.")
+	for _, prefix := range cfg.SafeScriptPrefixes {
+		if strings.HasPrefix(line, prefix) {
+			return true
+		}
+	}
+	// Check $gameScreen method whitelist
+	const screenPrefix = "$gameScreen."
+	if strings.HasPrefix(line, screenPrefix) {
+		rest := line[len(screenPrefix):]
+		methodEnd := strings.IndexAny(rest, "(;= ")
+		if methodEnd < 0 {
+			methodEnd = len(rest)
+		}
+		method := rest[:methodEnd]
+		if e.safeScreenSet == nil {
+			e.safeScreenSet = cfg.SafeScreenMethodSet()
+		}
+		return e.safeScreenSet[method]
+	}
+	return false
 }
 
-// serverExecPluginCmds 列出由服务端 Goja VM 执行的插件指令。
-// 这些插件读写 $gameVariables/_data 和 $dataArmors.meta，
-// 服务端已注入完整的数据数组和 kaeru.js meta 解析。
-var serverExecPluginCmds = map[string]bool{
-	"CulSkillEffect": true, "ParaCheck": true,
+// mmoConfig returns the MMOConfig from the resource loader, or nil.
+func (e *Executor) mmoConfig() *resource.MMOConfig {
+	if e.res != nil {
+		return e.res.MMOConfig
+	}
+	return nil
+}
+
+// isAlwaysSendSwitch returns true if the switch ID should always be forwarded to the
+// client even when the server-side value is unchanged (e.g. client may reset it locally).
+// IDs are read from MMOConfig.alwaysSendSwitches.
+func (e *Executor) isAlwaysSendSwitch(id int) bool {
+	cfg := e.mmoConfig()
+	if cfg == nil {
+		return false
+	}
+	if e.alwaysSendSet == nil {
+		e.alwaysSendSet = cfg.AlwaysSendSwitchSet()
+	}
+	return e.alwaysSendSet[id]
+}
+
+// isBlockedPluginCmd checks whether a plugin command should be blocked from forwarding.
+// Reads from MMOConfig.blockedPluginCmds; also blocks server-exec plugins (they run server-side).
+func (e *Executor) isBlockedPluginCmd(name string) bool {
+	cfg := e.mmoConfig()
+	if cfg == nil {
+		return false
+	}
+	// Server-exec plugins are handled server-side, never forwarded.
+	if _, ok := cfg.ServerExecPlugins[name]; ok {
+		return true
+	}
+	if e.blockedCmdSet == nil {
+		e.blockedCmdSet = cfg.BlockedPluginCmdSet()
+	}
+	return e.blockedCmdSet[name]
+}
+
+// execServerPlugin checks if the named plugin command has a server-exec config entry.
+// If so, dispatches to the appropriate executor function. Returns true if handled.
+func (e *Executor) execServerPlugin(_ context.Context, s *player.PlayerSession, name string, opts *ExecuteOpts) bool {
+	cfg := e.mmoConfig()
+	if cfg == nil {
+		return false
+	}
+	plugin, ok := cfg.ServerExecPlugins[name]
+	if !ok || plugin == nil {
+		return false
+	}
+	// Dispatch to the known executor functions by name.
+	switch name {
+	case "CulSkillEffect":
+		e.execCulSkillEffect(s, opts)
+	case "ParaCheck":
+		e.execParaCheck(s, opts)
+	default:
+		// Generic Goja execution for future plugins could go here.
+		e.logger.Warn("server exec plugin registered but no handler",
+			zap.String("plugin", name))
+		return false
+	}
+	return true
 }
 
 // executeList 执行指令列表。返回 true 表示遇到终止指令（CmdEnd 或 CmdExitEvent）。
@@ -245,20 +318,25 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 				script += "\n" + paramStr(cmds[i].Parameters, 0)
 			}
 
-			// 先尝试服务端执行（setupChild、变量/开关 _data 变更等）
+			// 先尝试服务端执行（setupChild、变量/开关 _data 变更等）。
+		// execScriptCommand 处理了 projectb 中 99% 的 code 355 脚本
+		// （setupChild CE 调用、_data[] 变量/开关写入、Goja VM 执行等）。
+		// 只有 execScriptCommand 返回 false（未识别的脚本）时，
+		// 才会走到下面的视觉/音效白名单作为最后防线转发给客户端。
 			if e.execScriptCommand(ctx, s, script, opts, depth) {
 				continue
 			}
 
-			// 仅转发安全的视觉/音效指令行，过滤潜在的状态修改指令
+			// 最后防线：仅转发安全的视觉/音效指令行，过滤未识别的状态修改指令。
+			// 使用显式方法白名单而非前缀匹配，防止插件扩展 $gameScreen 引入的
+			// 非视觉方法被意外转发。
 			var safeLines []string
 			for _, line := range strings.Split(script, "\n") {
 				trimmed := strings.TrimSpace(line)
 				if trimmed == "" {
 					continue
 				}
-				if strings.HasPrefix(trimmed, "$gameScreen.") ||
-					strings.HasPrefix(trimmed, "AudioManager.") {
+				if e.isSafeScriptLine(trimmed) {
 					safeLines = append(safeLines, trimmed)
 				}
 			}
@@ -307,18 +385,13 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 			if e.handleCallCommon(ctx, s, cmd, opts, depth) {
 				continue
 			}
-			// 服务端执行的插件指令（CulSkillEffect, ParaCheck）
+			// 服务端执行的插件指令（从 MMOConfig.serverExecPlugins 动态读取）
 			pluginCmdName := extractPluginCmdName(pluginStr)
-			if pluginCmdName == "CulSkillEffect" {
-				e.execCulSkillEffect(s, opts)
+			if e.execServerPlugin(ctx, s, pluginCmdName, opts) {
 				continue
 			}
-			if pluginCmdName == "ParaCheck" {
-				e.execParaCheck(s, opts)
-				continue
-			}
-			// 过滤不需要转发的插件指令
-			if blockedPluginCmds[pluginCmdName] {
+			// 过滤不需要转发的插件指令（从 MMOConfig.blockedPluginCmds 读取）
+			if e.isBlockedPluginCmd(pluginCmdName) {
 				continue
 			}
 			// 转发插件指令给客户端

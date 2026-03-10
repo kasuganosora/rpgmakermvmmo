@@ -76,6 +76,11 @@ func (h *NPCHandlers) HandleInteract(ctx context.Context, s *player.PlayerSessio
 		return nil
 	}
 
+	// 交互冷却：防止快速连点触发多次事件执行。
+	if !s.CheckInteractCooldown() {
+		return nil
+	}
+
 	var req npcInteractRequest
 	if err := json.Unmarshal(raw, &req); err != nil || req.EventID <= 0 {
 		return nil
@@ -172,15 +177,20 @@ func (h *NPCHandlers) HandleInteract(ctx context.Context, s *player.PlayerSessio
 
 	// Execute in a goroutine so the WS handler returns immediately.
 	// The executor may block waiting for choice replies.
+	// 5 分钟看门狗超时：防止 executor panic/死循环导致 EventMu 永久锁死。
+	// executor 的 executeList 在每条指令后检查 ctx.Done()，超时后自动终止。
 	startMapID := s.MapID
 	go func() {
 		defer s.EventMu.Unlock()
+		eventCtx, eventCancel := context.WithTimeout(ctx, 5*time.Minute)
+		defer eventCancel()
+
 		s.Send(&player.Packet{Type: "event_start"})
 		// 预设标志：假设可能发生 Transfer，autorun 需要接管 event_end。
 		// 如果没有发生 Transfer，在下方清除并发送 event_end。
 		s.SetNeedEventEnd(true)
 
-		h.executor.Execute(ctx, s, activePage, opts)
+		h.executor.Execute(eventCtx, s, activePage, opts)
 		// After execution, send per-player page changes (not broadcast).
 		h.sendPageChangesToPlayer(s, room, composite)
 		// 如果执行过程中发生了 Transfer，还需更新新地图的 NPC 页面。
@@ -667,6 +677,9 @@ func (h *NPCHandlers) sendSinglePageChange(s *player.PlayerSession, npcInst *wor
 		data["walk_anime"] = playerPage.WalkAnime
 		if icon := world.ExtractIconOnEvent(npcInst.MapEvent, playerPage); icon > 0 {
 			data["icon_on_event"] = icon
+		}
+		if label := world.ExtractMiniLabel(playerPage); label != "" {
+			data["label"] = label
 		}
 	} else {
 		data["walk_name"] = ""

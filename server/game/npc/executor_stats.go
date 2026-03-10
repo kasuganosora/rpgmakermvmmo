@@ -372,13 +372,8 @@ func (e *Executor) resolveTextVarRef(s string, opts *ExecuteOpts) string {
 	}
 	return reTextVarRef.ReplaceAllStringFunc(s, func(match string) string {
 		sub := reTextVarRef.FindStringSubmatch(match)
-		if len(sub) < 2 {
-			return match
-		}
-		varID, err := strconv.Atoi(sub[1])
-		if err != nil {
-			return match
-		}
+		// sub[1] is always a valid integer: reTextVarRef requires \d+
+		varID, _ := strconv.Atoi(sub[1])
 		return strconv.Itoa(opts.GameState.GetVariable(varID))
 	})
 }

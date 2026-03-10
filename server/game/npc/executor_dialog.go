@@ -95,21 +95,31 @@ func (e *Executor) waitForChoice(ctx context.Context, s *player.PlayerSession) i
 // textCodeRe 匹配 RMMV 文本转义码：\N[n], \V[n], \P[n]（不区分大小写）。
 var textCodeRe = regexp.MustCompile(`(?i)\\([NVP])\[(\d+)\]`)
 
+// svCodeRe 匹配 TemplateEvent.js 自身变量转义码：\sv[n]（不区分大小写）。
+var svCodeRe = regexp.MustCompile(`(?i)\\sv\[(\d+)\]`)
+
 // resolveTextCodes 替换 RMMV 对话文本中的转义码：
 //   - \N[n] → 角色名（Actor 1/101 = MMO 中的玩家名）
 //   - \V[n] → 游戏变量值
 //   - \P[n] → 队伍成员名（MMO 中 P[1] = 玩家）
+//   - \sv[n] → TemplateEvent.js 自身变量值（per-player，索引 n）
 func (e *Executor) resolveTextCodes(text string, s *player.PlayerSession, opts *ExecuteOpts) string {
+	// First resolve \sv[n] (TemplateEvent self-variables), then standard codes.
+	if opts != nil && opts.GameState != nil && opts.MapID != 0 && opts.EventID != 0 {
+		mapID, eventID := opts.MapID, opts.EventID
+		text = svCodeRe.ReplaceAllStringFunc(text, func(match string) string {
+			sub := svCodeRe.FindStringSubmatch(match)
+			// sub[1] is always a valid integer: svCodeRe requires \d+
+			idx, _ := strconv.Atoi(sub[1])
+			return strconv.Itoa(opts.GameState.GetSelfVariable(mapID, eventID, idx))
+		})
+	}
+
 	return textCodeRe.ReplaceAllStringFunc(text, func(match string) string {
 		sub := textCodeRe.FindStringSubmatch(match)
-		if len(sub) < 3 {
-			return match
-		}
 		code := strings.ToUpper(sub[1])
-		id, err := strconv.Atoi(sub[2])
-		if err != nil {
-			return match
-		}
+		// sub[2] is always a valid integer: textCodeRe requires \d+
+		id, _ := strconv.Atoi(sub[2])
 
 		switch code {
 		case "N":
@@ -135,7 +145,6 @@ func (e *Executor) resolveTextCodes(text string, s *player.PlayerSession, opts *
 			if id == 1 {
 				return s.CharName
 			}
-			return match
 		}
 		return match
 	})

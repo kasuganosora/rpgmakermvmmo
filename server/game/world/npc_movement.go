@@ -82,6 +82,9 @@ func (room *MapRoom) tickNPCs() {
 		case 3: // custom route
 			room.moveNPCCustomRoute(npc)
 		}
+
+		// Chase/flee AI overrides standard movement when active.
+		room.tickChaseAI(npc)
 	}
 
 	// Collect dirty NPCs and broadcast.

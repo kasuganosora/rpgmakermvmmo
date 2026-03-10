@@ -46,6 +46,8 @@
     var _puppetTargetData = [];
     /** @type {boolean} 是否正在结束战斗。 */
     var _puppetEndingBattle = false;
+    /** @type {number|null} 全灭安全超时 ID。 */
+    var _puppetDefeatTimer = null;
 
     // ── 目标选择状态 ──
     /** @type {number} 待发送的技能 ID。 */
@@ -135,6 +137,7 @@
         _pendingInputRequest = null;
         _puppetSceneReady = false;
         _puppetReadyFrames = 0;
+        if (_puppetDefeatTimer) { clearTimeout(_puppetDefeatTimer); _puppetDefeatTimer = null; }
         _puppetPendingSkillId = 0;
         _puppetPendingItemId = 0;
 
@@ -222,12 +225,16 @@
         }
 
         // 使用服务端提供的战场背景（来自地图数据）。
+        // 仅在服务端提供了非空背景名时覆盖；空字符串表示地图未指定背景，
+        // 此时保留 RMMV 原始的 tileset/terrain fallback 链。
         var _origBB1 = $gameMap.battleback1Name;
         var _origBB2 = $gameMap.battleback2Name;
-        var _serverBB1 = data.battleback1 || '';
-        var _serverBB2 = data.battleback2 || '';
-        $gameMap.battleback1Name = function () { return _serverBB1; };
-        $gameMap.battleback2Name = function () { return _serverBB2; };
+        if (data.battleback1) {
+            $gameMap.battleback1Name = function () { return data.battleback1; };
+        }
+        if (data.battleback2) {
+            $gameMap.battleback2Name = function () { return data.battleback2; };
+        }
 
         // 战斗结束回调：恢复战场背景。
         BattleManager.setEventCallback(function (result) {
@@ -257,17 +264,42 @@
             }
             // 诊断日志：关键仪表变量状态
             console.log('[Puppet] battle_start game_vars synced:',
+                'v620=' + ($gameVariables._data[620] || 0),
                 'v702=' + ($gameVariables._data[702] || 0),
                 'v722=' + ($gameVariables._data[722] || 0),
                 'v741=' + ($gameVariables._data[741] || 0),
                 'v742=' + ($gameVariables._data[742] || 0),
                 'v802=' + ($gameVariables._data[802] || 0),
+                'v1026=' + ($gameVariables._data[1026] || 0),
                 'v1028=' + ($gameVariables._data[1028] || 0),
                 'v1031=' + ($gameVariables._data[1031] || 0),
                 'keys=' + keys.length);
         } else {
             console.warn('[Puppet] battle_start: game_vars missing!', !!data.game_vars, !!$gameVariables);
         }
+
+        // 同步服务端开关快照（变身状态 switch 131、立绘标志等）。
+        // 确保 CallStand.js 在战斗中能读到正确的 StandAltFlag (switch 131)。
+        if (data.game_switches && $gameSwitches) {
+            var swKeys = Object.keys(data.game_switches);
+            for (var si = 0; si < swKeys.length; si++) {
+                var swId = Number(swKeys[si]);
+                if (swId > 0) {
+                    $gameSwitches._data[swId] = !!data.game_switches[swId];
+                }
+            }
+            console.log('[Puppet] battle_start switches synced:',
+                'sw131=' + !!$gameSwitches._data[131],
+                'sw98=' + !!$gameSwitches._data[98],
+                'sw101=' + !!$gameSwitches._data[101],
+                'keys=' + swKeys.length);
+        }
+
+        // 注意：$gameParty._inBattle 不能在这里设置！
+        // SceneManager.push(Scene_Battle) 触发场景切换时，YEP_BattleEngineCore 的
+        // snapForBackground 会检查 inBattle()，若为 true 则尝试在 Spriteset_Map 上
+        // 调用 battleback1Name()（该方法只存在于 Spriteset_Battle），导致 TypeError。
+        // _inBattle 改为在 Scene_Battle.start() 中设置（见下方 hook）。
 
         $gamePlayer.makeEncounterCount();
         SceneManager.push(Scene_Battle);
@@ -461,6 +493,12 @@
         _pendingInputRequest = null;
         _processingAction = false;
 
+        // 清除全灭安全超时（正常收到了 battle_battle_end）。
+        if (_puppetDefeatTimer) {
+            clearTimeout(_puppetDefeatTimer);
+            _puppetDefeatTimer = null;
+        }
+
         // 立即应用队列中所有未处理的动作结果（跳过动画），
         // 确保敌人 HP 正确归零、死亡状态被添加、倒下动画播放。
         // 否则最后一击的 action_result 会被丢弃，敌人在客户端仍然"活着"。
@@ -557,6 +595,7 @@
         _puppetEventQueue = [];
         _processingAction = false;
         _puppetEndingBattle = false;
+        if (_puppetDefeatTimer) { clearTimeout(_puppetDefeatTimer); _puppetDefeatTimer = null; }
         _clearPuppetParams();
         _puppetMode = false;
         $MMO._serverBattle = false;
@@ -659,6 +698,12 @@
         BattleManager._subject = subject;
         BattleManager._action = action;
         BattleManager._phase = 'puppetAction';
+
+        // ── 战斗日志：显示行动者和技能名 ──
+        var logWin = SceneManager._scene && SceneManager._scene._logWindow;
+        if (logWin) {
+            logWin.displayAction(subject, item);
+        }
 
         // 解析目标引用为实际战斗者对象。
         var targets = [];
@@ -799,6 +844,7 @@
             if (tgtData.added_states) {
                 for (var s = 0; s < tgtData.added_states.length; s++) {
                     var stateId = tgtData.added_states[s];
+                    if (!stateId || !$dataStates[stateId]) continue;
                     battler.addState(stateId);
                     if (result.addedStates) result.addedStates.push(stateId);
                 }
@@ -806,8 +852,10 @@
             // 移除状态。
             if (tgtData.removed_states) {
                 for (var r = 0; r < tgtData.removed_states.length; r++) {
-                    battler.removeState(tgtData.removed_states[r]);
-                    if (result.removedStates) result.removedStates.push(tgtData.removed_states[r]);
+                    var rmId = tgtData.removed_states[r];
+                    if (!rmId || !$dataStates[rmId]) continue;
+                    battler.removeState(rmId);
+                    if (result.removedStates) result.removedStates.push(rmId);
                 }
             }
             // 应用 buff/debuff 变化。
@@ -822,6 +870,16 @@
 
         // 显示伤害弹窗。
         battler.startDamagePopup();
+
+        // 触发白闪效果，同时驱动 YEP_X_VisualHpGauge 在目标头顶显示 HP 条。
+        // requestEffect('whiten') 设置 _effectType 并重置 _hpGaugeTimer（YEP 内部逻辑）。
+        if (battler.requestEffect) battler.requestEffect('whiten');
+
+        // ── 战斗日志：显示伤害/状态变化 ──
+        var logWin = SceneManager._scene && SceneManager._scene._logWindow;
+        if (logWin && BattleManager._subject) {
+            logWin.displayActionResults(BattleManager._subject, battler);
+        }
 
         // 处理死亡：播放倒下动画。
         if (battler.isDead && battler.isDead()) {
@@ -1063,8 +1121,13 @@
     Scene_Battle.prototype.start = function () {
         _Scene_Battle_start.call(this);
         if (_puppetMode) {
+            // 在 Scene_Battle 完全初始化（Spriteset_Battle 已创建）后才标记战斗状态。
+            // 不能在 battle_start handler 中设置，否则 YEP_BattleEngineCore 的
+            // snapForBackground 会在 Spriteset_Map 上调用 battleback1Name() 导致 TypeError。
+            // 不调用 onBattleStart() 因为它会 initTp() 覆盖服务端设置的 TP 值。
+            if ($gameParty) $gameParty._inBattle = true;
             _puppetReadyFrames = 0;
-            console.log('[Puppet] Scene_Battle.start(), 等待场景稳定...');
+            console.log('[Puppet] Scene_Battle.start(), _inBattle=true, 等待场景稳定...');
         }
     };
 
@@ -1177,6 +1240,33 @@
             return;
         }
 
+        // ── 全灭检测：队列空、无动作时检查是否全队死亡 ──
+        if (!_puppetEndingBattle && $gameParty && $gameParty.isAllDead && $gameParty.isAllDead()) {
+            if (!_puppetDefeatTimer) {
+                console.log('[Puppet] 全灭检测, 等待服务端 battle_battle_end (3s超时)...');
+                _puppetDefeatTimer = setTimeout(function () {
+                    _puppetDefeatTimer = null;
+                    if (!_puppetMode) return;
+                    console.warn('[Puppet] battle_battle_end 超时, 强制退出战斗');
+                    _puppetEndingBattle = true;
+                    _puppetMode = false;
+                    $MMO._serverBattle = false;
+                    if ($gameParty) $gameParty._inBattle = false;
+                    BattleManager._eventCallback = null;
+                    BattleManager.endBattle(2);
+                    BattleManager._phase = null;
+                    if ($gameMessage) $gameMessage.clear();
+                    BattleManager.replayBgmAndBgs();
+                    $MMO.send('npc_battle_result', { result: 2 });
+                    SceneManager.pop();
+                    // _puppetEndingBattle 延迟重置：SceneManager.pop() 是跨帧异步的，
+                    // 如果立即重置，processDefeat guard 在场景切换期间会失效。
+                    setTimeout(function () { _puppetEndingBattle = false; }, 100);
+                }, 3000);
+            }
+            return;
+        }
+
         // ── 处理待处理的输入请求（仅在队列完全清空后）──
         if (_pendingInputRequest && this._actorCommandWindow) {
             _processInputRequest(_pendingInputRequest);
@@ -1268,7 +1358,10 @@
         _BM_processVictory.call(this);
     };
 
-    /** 阻止本地 processDefeat（除非由 battle_battle_end 触发）。 */
+    /** 阻止本地 processDefeat（除非由 battle_battle_end 触发）。
+     *  全灭超时安全网已移至 Scene_Battle.update 的傀儡更新循环中，
+     *  因为 processDefeat 在傀儡模式下不会被 RMMV 调用
+     *  （checkBattleEnd 返回 false，且 BattleManager.update 被跳过）。 */
     var _BM_processDefeat = BattleManager.processDefeat;
     BattleManager.processDefeat = function () {
         if (_puppetMode && !_puppetEndingBattle) return;
@@ -1673,6 +1766,10 @@
                 ce.update();
             } catch (e) {
                 // 某些 CE 可能依赖地图上下文，在战斗中会报错，安全跳过。
+                // 但记录错误以便诊断。
+                if (Graphics.frameCount % 300 === 0) {
+                    console.warn('[Puppet] CE' + ce._commonEventId + ' update error:', e.message);
+                }
             }
         }
     }

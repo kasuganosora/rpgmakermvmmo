@@ -1,6 +1,7 @@
 package rest
 
 import (
+	"crypto/subtle"
 	"net/http"
 	"strconv"
 
@@ -38,9 +39,10 @@ func NewAdminHandler(
 // GET /api/admin/metrics
 func (h *AdminHandler) Metrics(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
-		"online_players": h.sm.Count(),
-		"active_rooms":   h.wm.ActiveRoomCount(),
-		"scheduler_tasks": h.sched.ListTickers(),
+		"online_players":    h.sm.Count(),
+		"active_rooms":      h.wm.ActiveRoomCount(),
+		"broadcast_drops":   h.wm.TotalBroadcastDrops(),
+		"scheduler_tasks":   h.sched.ListTickers(),
 	})
 }
 
@@ -143,7 +145,7 @@ func AdminAuth(adminKey string) gin.HandlerFunc {
 			return
 		}
 		key := c.GetHeader("X-Admin-Key")
-		if key != adminKey {
+		if subtle.ConstantTimeCompare([]byte(key), []byte(adminKey)) != 1 {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			return
 		}

@@ -57,10 +57,10 @@ func testResourceWithArmors(armors []*resource.Armor) *resource.ResourceLoader {
 			prebuilt[a.ID] = m
 		}
 	}
-	return &resource.ResourceLoader{
+	return withTestMMOConfig(&resource.ResourceLoader{
 		Armors:         arr,
 		PrebuiltArmors: prebuilt,
-	}
+	})
 }
 
 // testResourceWithTagSkillList creates a ResourceLoader with armors and TagSkillList.

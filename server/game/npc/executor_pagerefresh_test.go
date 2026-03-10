@@ -440,9 +440,9 @@ func TestMap68_DialogWithSwitchChanges(t *testing.T) {
 // These are managed by client-side parallel CE 201 → CE 210 → CallStand chain.
 // Server forwarding conflicts with the client's 10-frame CE 201 loop timing.
 func TestPluginCommand_PortraitBlocked(t *testing.T) {
-	resLoader := &resource.ResourceLoader{
+	resLoader := withTestMMOConfig(&resource.ResourceLoader{
 		CommonEvents: make([]*resource.CommonEvent, 2),
-	}
+	})
 	e := New(nil, resLoader, nopLogger())
 	s := testSession(1)
 

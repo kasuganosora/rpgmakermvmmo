@@ -1274,7 +1274,7 @@ func TestExecute_Script_VarDataSendsVarChange(t *testing.T) {
 
 // TestExecute_Script_SafeForward 测试安全脚本仍然转发给客户端。
 func TestExecute_Script_SafeForward(t *testing.T) {
-	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	exec := New(nil, testResMMO(), nopLogger())
 	s := testSession(1)
 
 	page := &resource.EventPage{
@@ -1980,7 +1980,7 @@ func TestExecute_Battle_NoBattleFn_Fallback(t *testing.T) {
 
 // TestExecute_Script_FilteredLines 测试 Script 指令仅转发白名单行。
 func TestExecute_Script_GameScreenLine(t *testing.T) {
-	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	exec := New(nil, testResMMO(), nopLogger())
 	s := testSession(1)
 
 	page := &resource.EventPage{

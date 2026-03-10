@@ -41,6 +41,16 @@ func (r *Router) Dispatch(s *player.PlayerSession, raw []byte) {
 		return
 	}
 
+	// 频率限制：每秒最多 rateLimitRefill 条消息，允许短暂突发到 rateLimitBurst。
+	// ack 类消息（dialog_ack, effect_ack, scene_ready, choice_reply）免限制，
+	// 因为它们是服务端请求的响应，阻止它们会卡住事件执行。
+	if !isAckMessage(pkt.Type) && !s.RateLimit() {
+		r.logger.Warn("rate limited",
+			zap.Int64("account_id", s.AccountID),
+			zap.String("type", pkt.Type))
+		return
+	}
+
 	// Monotonic seq check (anti-replay). Seq == 0 means no seq tracking.
 	if pkt.Seq != 0 && pkt.Seq <= s.LastSeq {
 		r.logger.Warn("replayed or out-of-order packet",
@@ -72,6 +82,16 @@ func (r *Router) Dispatch(s *player.PlayerSession, raw []byte) {
 			zap.String("trace_id", s.TraceID),
 			zap.Error(err))
 	}
+}
+
+// isAckMessage returns true for messages that are server-requested responses.
+// These are exempt from rate limiting because blocking them would stall event execution.
+func isAckMessage(msgType string) bool {
+	switch msgType {
+	case "npc_dialog_ack", "npc_effect_ack", "npc_choice_reply", "scene_ready", "pong":
+		return true
+	}
+	return false
 }
 
 type ctxKeyTraceID struct{}

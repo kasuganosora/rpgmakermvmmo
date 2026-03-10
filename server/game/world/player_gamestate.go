@@ -4,6 +4,7 @@ import (
 	"sync"
 
 	"github.com/kasuganosora/rpgmakermvmmo/server/model"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -135,9 +136,11 @@ func (ps *PlayerGameState) SetSwitch(id int, val bool) {
 	ps.mu.Unlock()
 
 	if ps.db != nil {
-		ps.db.Clauses(clause.OnConflict{
+		if err := ps.db.Clauses(clause.OnConflict{
 			DoUpdates: clause.AssignmentColumns([]string{"value"}),
-		}).Create(&model.CharSwitch{CharID: ps.charID, SwitchID: id, Value: val})
+		}).Create(&model.CharSwitch{CharID: ps.charID, SwitchID: id, Value: val}).Error; err != nil {
+			zap.L().Error("persist CharSwitch failed", zap.Int64("char", ps.charID), zap.Int("switch", id), zap.Error(err))
+		}
 	}
 }
 
@@ -155,9 +158,11 @@ func (ps *PlayerGameState) SetVariable(id int, val int) {
 	ps.mu.Unlock()
 
 	if ps.db != nil {
-		ps.db.Clauses(clause.OnConflict{
+		if err := ps.db.Clauses(clause.OnConflict{
 			DoUpdates: clause.AssignmentColumns([]string{"value"}),
-		}).Create(&model.CharVariable{CharID: ps.charID, VariableID: id, Value: val})
+		}).Create(&model.CharVariable{CharID: ps.charID, VariableID: id, Value: val}).Error; err != nil {
+			zap.L().Error("persist CharVariable failed", zap.Int64("char", ps.charID), zap.Int("var", id), zap.Error(err))
+		}
 	}
 }
 
@@ -197,9 +202,11 @@ func (ps *PlayerGameState) SetSelfSwitch(mapID, eventID int, ch string, val bool
 	ps.mu.Unlock()
 
 	if ps.db != nil {
-		ps.db.Clauses(clause.OnConflict{
+		if err := ps.db.Clauses(clause.OnConflict{
 			DoUpdates: clause.AssignmentColumns([]string{"value"}),
-		}).Create(&model.CharSelfSwitch{CharID: ps.charID, MapID: mapID, EventID: eventID, Ch: ch, Value: val})
+		}).Create(&model.CharSelfSwitch{CharID: ps.charID, MapID: mapID, EventID: eventID, Ch: ch, Value: val}).Error; err != nil {
+			zap.L().Error("persist CharSelfSwitch failed", zap.Int64("char", ps.charID), zap.Int("map", mapID), zap.Int("event", eventID), zap.Error(err))
+		}
 	}
 }
 
@@ -219,9 +226,11 @@ func (ps *PlayerGameState) SetSelfVariable(mapID, eventID, index, val int) {
 	ps.mu.Unlock()
 
 	if ps.db != nil {
-		ps.db.Clauses(clause.OnConflict{
+		if err := ps.db.Clauses(clause.OnConflict{
 			DoUpdates: clause.AssignmentColumns([]string{"value"}),
-		}).Create(&model.CharSelfVariable{CharID: ps.charID, MapID: mapID, EventID: eventID, Index: index, Value: val})
+		}).Create(&model.CharSelfVariable{CharID: ps.charID, MapID: mapID, EventID: eventID, Index: index, Value: val}).Error; err != nil {
+			zap.L().Error("persist CharSelfVariable failed", zap.Int64("char", ps.charID), zap.Int("map", mapID), zap.Int("event", eventID), zap.Error(err))
+		}
 	}
 }
 

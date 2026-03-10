@@ -592,3 +592,65 @@ func TestTECallOriginEvent_DialogEnd(t *testing.T) {
 		t.Fatal("timeout")
 	}
 }
+
+// TestHandleCallCommon_CCT_NoArgs covers the len(parts) < 2 branch for CCT.
+func TestHandleCallCommon_CCT_NoArgs(t *testing.T) {
+	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	s := testSession(1)
+	cmd := &resource.EventCommand{Code: CmdPluginCommand, Parameters: []interface{}{"CCT"}} // no args
+	opts := &ExecuteOpts{GameState: newMockGameState()}
+
+	// Should return true (handled) but do nothing (no prefix to match)
+	handled := exec.handleCallCommon(context.Background(), s, cmd, opts, 0)
+	assert.True(t, handled)
+}
+
+// TestHandleCallCommon_CallCommon_NoArgs covers the len(parts) < 2 for CallCommon.
+func TestHandleCallCommon_CallCommon_NoArgs(t *testing.T) {
+	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	s := testSession(1)
+	cmd := &resource.EventCommand{Code: CmdPluginCommand, Parameters: []interface{}{"CallCommon"}}
+	opts := &ExecuteOpts{GameState: newMockGameState()}
+
+	handled := exec.handleCallCommon(context.Background(), s, cmd, opts, 0)
+	assert.True(t, handled)
+}
+
+// TestHandleCallCommon_CallCommon_NotFound covers ceID <= 0 warn branch for CallCommon.
+func TestHandleCallCommon_CallCommon_NotFound(t *testing.T) {
+	rl := &resource.ResourceLoader{
+		CommonEventsByName: map[string]int{}, // empty — name not found
+	}
+	exec := New(nil, rl, nopLogger())
+	s := testSession(1)
+	cmd := &resource.EventCommand{Code: CmdPluginCommand, Parameters: []interface{}{"CallCommon NonExistent"}}
+	opts := &ExecuteOpts{GameState: newMockGameState()}
+
+	handled := exec.handleCallCommon(context.Background(), s, cmd, opts, 0)
+	assert.True(t, handled) // returns true even when CE not found
+}
+
+// TestHandleCallCommon_EmptyParameters covers len(cmd.Parameters)==0 branch.
+func TestHandleCallCommon_EmptyParameters(t *testing.T) {
+	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	s := testSession(1)
+	cmd := &resource.EventCommand{Code: CmdPluginCommand, Parameters: []interface{}{}} // zero params
+	opts := &ExecuteOpts{GameState: newMockGameState()}
+
+	handled := exec.handleCallCommon(context.Background(), s, cmd, opts, 0)
+	assert.False(t, handled)
+}
+
+// TestHandleCallCommon_CCT_NotFound covers ceID <= 0 warn branch for CCT.
+func TestHandleCallCommon_CCT_NotFound(t *testing.T) {
+	rl := &resource.ResourceLoader{
+		CommonEvents: []*resource.CommonEvent{nil},
+	}
+	exec := New(nil, rl, nopLogger())
+	s := testSession(1)
+	cmd := &resource.EventCommand{Code: CmdPluginCommand, Parameters: []interface{}{"CCT UnknownPrefix"}}
+	opts := &ExecuteOpts{GameState: newMockGameState()}
+
+	handled := exec.handleCallCommon(context.Background(), s, cmd, opts, 0)
+	assert.True(t, handled) // returns true even when prefix not found
+}

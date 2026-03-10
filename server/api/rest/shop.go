@@ -309,9 +309,18 @@ func (h *ShopHandler) resolvePrice(kind, itemID int) int {
 }
 
 func (h *ShopHandler) getActiveCharID(c *gin.Context, accountID int64) (int64, error) {
-	// Use char_id query param; for a full implementation this would come from the session.
+	// Use char_id query param but validate it belongs to the authenticated account.
 	if cidStr := c.Query("char_id"); cidStr != "" {
-		return strconv.ParseInt(cidStr, 10, 64)
+		cid, err := strconv.ParseInt(cidStr, 10, 64)
+		if err != nil {
+			return 0, err
+		}
+		// Verify ownership to prevent privilege escalation.
+		var char model.Character
+		if err := h.db.Where("id = ? AND account_id = ?", cid, accountID).First(&char).Error; err != nil {
+			return 0, err
+		}
+		return char.ID, nil
 	}
 	// Fall back: first character of the account.
 	var char model.Character

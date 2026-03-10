@@ -111,11 +111,16 @@ func (h *GuildHandler) Join(c *gin.Context) {
 	}
 
 	// Simplified: auto-accept (full version requires leader approval).
-	if err := h.db.Create(&model.GuildMember{GuildID: guildID, CharID: charID, Rank: 4}).Error; err != nil {
+	// Both writes must succeed atomically to avoid orphaned member or stale guild_id.
+	if err := h.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&model.GuildMember{GuildID: guildID, CharID: charID, Rank: 4}).Error; err != nil {
+			return err
+		}
+		return tx.Model(&model.Character{}).Where("id = ?", charID).Update("guild_id", guildID).Error
+	}); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "join failed"})
 		return
 	}
-	h.db.Model(&model.Character{}).Where("id = ?", charID).Update("guild_id", guildID)
 	c.JSON(http.StatusOK, gin.H{"message": "joined"})
 }
 

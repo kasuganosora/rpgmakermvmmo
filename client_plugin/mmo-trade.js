@@ -336,7 +336,8 @@
     function showTradeRequestDialog(data) {
         if (_tradeRequestDialog) return;
 
-        var countdown = 15;
+        var countdown = (window.MMO_CLIENT_CONFIG && window.MMO_CLIENT_CONFIG.trade &&
+                         window.MMO_CLIENT_CONFIG.trade.requestTimeoutSeconds) || 15;
         var dlg = new L2_Dialog({
             title: '交易请求',
             content: (data.from_name || '?') + ' 请求与你交易\n' +
@@ -396,9 +397,12 @@
      */
     Scene_Map.prototype.createAllWindows = function () {
         _Scene_Map_createAllWindows5.call(this);
-        this._tradeWindow = new TradeWindow();
-        this.addChild(this._tradeWindow);
-        $MMO._tradeWindow = this._tradeWindow;
+        if (window.MMO_CLIENT_CONFIG && window.MMO_CLIENT_CONFIG.trade &&
+            window.MMO_CLIENT_CONFIG.trade.enabled === true) {
+            this._tradeWindow = new TradeWindow();
+            this.addChild(this._tradeWindow);
+            $MMO._tradeWindow = this._tradeWindow;
+        }
     };
 
     /** @type {Function} 原始 Scene_Map.terminate 引用。 */

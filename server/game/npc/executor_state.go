@@ -28,9 +28,10 @@ func (e *Executor) applySwitches(s *player.PlayerSession, params []interface{}, 
 			opts.GameState.SetSwitch(id, val)
 			changed = true
 			e.sendSwitchChange(s, id, val)
-		} else if id == 15 || id == 85 {
-			// 对客户端可能因 event_end 等本地安全网逻辑清除的开关（sw15, sw85），
+		} else if e.isAlwaysSendSwitch(id) {
+			// 对客户端可能因 event_end 等本地安全网逻辑重置的开关，
 			// 即使服务端值未变也发送 switch_change，防止状态不一致。
+			// 具体 ID 由 MMOConfig.alwaysSendSwitches 配置。
 			e.sendSwitchChange(s, id, val)
 		}
 	}

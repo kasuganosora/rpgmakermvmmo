@@ -2139,7 +2139,7 @@ func TestDispatch_InstanceCommands(t *testing.T) {
 // ========================================================================
 
 func TestDispatch_BlockedPluginCmds(t *testing.T) {
-	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	exec := New(nil, testResMMO(), nopLogger())
 	s := testSession(1)
 
 	page := &resource.EventPage{
@@ -2604,7 +2604,9 @@ func TestApplySelfSwitch_PageRefresh(t *testing.T) {
 func TestApplySwitches_SpecialSwitchResend(t *testing.T) {
 	gs := newMockGameState()
 	gs.switches[15] = true // already ON
-	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	res := withTestMMOConfig(&resource.ResourceLoader{})
+	res.MMOConfig.AlwaysSendSwitches = []int{15, 85}
+	exec := New(nil, res, nopLogger())
 	s := testSession(1)
 	opts := &ExecuteOpts{GameState: gs}
 

@@ -268,8 +268,8 @@ func (e *Executor) stepUntilWait(
 				ev.idx++
 				continue
 			}
-			// 过滤不需要转发的插件指令
-			if pluginCmdName := extractPluginCmdName(pluginStr); blockedPluginCmds[pluginCmdName] {
+			// 过滤不需要转发的插件指令（从 MMOConfig 读取）
+			if pluginCmdName := extractPluginCmdName(pluginStr); e.isBlockedPluginCmd(pluginCmdName) {
 				ev.idx++
 				continue
 			}

@@ -461,9 +461,12 @@
      */
     Scene_Map.prototype.createAllWindows = function () {
         _Scene_Map_createAllWindows_inv.call(this);
-        $MMO._inventoryWindow = new InventoryWindow();
-        this.addChild($MMO._inventoryWindow);
-        $MMO.registerWindow($MMO._inventoryWindow);
+        if (window.MMO_CLIENT_CONFIG && window.MMO_CLIENT_CONFIG.inventory &&
+            window.MMO_CLIENT_CONFIG.inventory.enabled === true) {
+            $MMO._inventoryWindow = new InventoryWindow();
+            this.addChild($MMO._inventoryWindow);
+            $MMO.registerWindow($MMO._inventoryWindow);
+        }
     };
 
     // ═══════════════════════════════════════════════════════════

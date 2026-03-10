@@ -3,6 +3,7 @@ package world
 import (
 	"encoding/json"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/player"
@@ -50,6 +51,7 @@ type MapRoom struct {
 	state           *GameState
 	passMap         *resource.PassabilityMap
 	broadcastQ      chan []byte
+	BroadcastDrops  int64 // 广播队列溢出丢包计数（atomic）
 	mu              sync.RWMutex
 	stopCh          chan struct{}
 	logger          *zap.Logger
@@ -235,6 +237,7 @@ func (room *MapRoom) Broadcast(data []byte) {
 	select {
 	case room.broadcastQ <- data:
 	default:
+		atomic.AddInt64(&room.BroadcastDrops, 1)
 		room.logger.Warn("broadcastQ full, dropping packet", zap.Int("map_id", room.MapID))
 	}
 }

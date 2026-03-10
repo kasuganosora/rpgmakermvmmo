@@ -14,12 +14,13 @@ type Spawner struct {
 	res     *resource.ResourceLoader
 	configs []SpawnConfig
 	mu      sync.Mutex
+	stopCh  chan struct{}
 	logger  *zap.Logger
 }
 
 // NewSpawner creates a Spawner for a MapRoom.
 func NewSpawner(room *MapRoom, res *resource.ResourceLoader, configs []SpawnConfig, logger *zap.Logger) *Spawner {
-	return &Spawner{room: room, res: res, configs: configs, logger: logger}
+	return &Spawner{room: room, res: res, configs: configs, stopCh: make(chan struct{}), logger: logger}
 }
 
 // SpawnAll spawns all configured monsters immediately (called on room creation).
@@ -82,10 +83,22 @@ func (sp *Spawner) CheckRespawns() {
 
 // RespawnAfter schedules a single monster slot to respawn after a delay.
 func (sp *Spawner) RespawnAfter(cfgIndex int, delay time.Duration) {
+	if cfgIndex < 0 || cfgIndex >= len(sp.configs) {
+		return
+	}
 	go func() {
-		time.Sleep(delay)
-		sp.mu.Lock()
-		defer sp.mu.Unlock()
-		sp.spawnGroup(cfgIndex, sp.configs[cfgIndex])
+		select {
+		case <-time.After(delay):
+			sp.mu.Lock()
+			defer sp.mu.Unlock()
+			sp.spawnGroup(cfgIndex, sp.configs[cfgIndex])
+		case <-sp.stopCh:
+			return
+		}
 	}()
+}
+
+// Stop cancels any pending respawn goroutines.
+func (sp *Spawner) Stop() {
+	close(sp.stopCh)
 }

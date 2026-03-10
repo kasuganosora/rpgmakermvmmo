@@ -52,6 +52,23 @@ func (h *Handler) ServeSSE(c *gin.Context) {
 		return
 	}
 
+	// Validate Origin if AllowedOrigins is configured.
+	if len(h.sec.AllowedOrigins) > 0 {
+		origin := c.GetHeader("Origin")
+		allowed := false
+		for _, o := range h.sec.AllowedOrigins {
+			if o == origin {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			c.JSON(http.StatusForbidden, gin.H{"error": "origin not allowed"})
+			return
+		}
+		c.Header("Access-Control-Allow-Origin", origin)
+	}
+
 	// Set SSE headers.
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")

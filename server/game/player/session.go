@@ -73,7 +73,81 @@ type PlayerSession struct {
 	inBattle     int32      // atomic: 1 = in battle, 0 = not
 	mapGen       uint64     // incremented on each map entry; used to cancel stale autorun goroutines
 	needEventEnd bool       // set when event transferred player; autorun should send event_end
+
+	// 反作弊：速度异常计数。每次检测到 speed hack 时 +1，
+	// 每 speedHackWindow 重置。累计超过 speedHackKickThreshold 则断开连接。
+	speedHackCount int
+	speedHackReset time.Time
+
+	// 反作弊：WS 消息频率限制（令牌桶）。
+	// 每秒补充 rateLimitRefill 个令牌，最多持有 rateLimitBurst 个。
+	rateBucket   int
+	rateLastTime time.Time
+
+	// 反作弊：NPC 交互冷却。防止快速连点触发多次事件。
+	lastInteract time.Time
+
 	logger       *zap.Logger
+}
+
+const (
+	speedHackKickThreshold = 10               // 窗口内最大容忍次数
+	speedHackWindow        = 60 * time.Second  // 计数重置周期
+
+	rateLimitRefill = 30  // 每秒补充令牌数
+	rateLimitBurst  = 60  // 令牌桶容量（允许短暂突发）
+
+	interactCooldown = 300 * time.Millisecond // NPC 交互最小间隔
+)
+
+// RateLimit checks whether this message should be dropped due to rate limiting.
+// Returns true if the message is allowed, false if it should be dropped.
+// Uses a token bucket algorithm: rateLimitRefill tokens per second, up to rateLimitBurst.
+func (s *PlayerSession) RateLimit() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	if s.rateLastTime.IsZero() {
+		s.rateLastTime = now
+		s.rateBucket = rateLimitBurst
+	}
+	// Refill tokens based on elapsed time.
+	elapsed := now.Sub(s.rateLastTime).Seconds()
+	s.rateLastTime = now
+	s.rateBucket += int(elapsed * float64(rateLimitRefill))
+	if s.rateBucket > rateLimitBurst {
+		s.rateBucket = rateLimitBurst
+	}
+	if s.rateBucket <= 0 {
+		return false
+	}
+	s.rateBucket--
+	return true
+}
+
+// CheckInteractCooldown returns true if enough time has passed since last interaction.
+func (s *PlayerSession) CheckInteractCooldown() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if time.Since(s.lastInteract) < interactCooldown {
+		return false
+	}
+	s.lastInteract = time.Now()
+	return true
+}
+
+// RecordSpeedHack increments the speed hack counter and returns true
+// if the player should be kicked (exceeded threshold within window).
+func (s *PlayerSession) RecordSpeedHack() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	if now.Sub(s.speedHackReset) > speedHackWindow {
+		s.speedHackCount = 0
+		s.speedHackReset = now
+	}
+	s.speedHackCount++
+	return s.speedHackCount >= speedHackKickThreshold
 }
 
 // SetLogger sets the session's logger. Useful for tests that construct

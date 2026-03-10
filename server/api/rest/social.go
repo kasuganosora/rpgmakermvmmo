@@ -67,6 +67,10 @@ func (h *SocialHandler) SendFriendRequest(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if req.TargetCharID == charID {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cannot send friend request to yourself"})
+		return
+	}
 
 	friendship := &model.Friendship{
 		CharID:   charID,
@@ -143,6 +147,10 @@ func (h *SocialHandler) BlockPlayer(c *gin.Context) {
 	targetID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || charID == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+	if targetID == charID {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cannot block yourself"})
 		return
 	}
 

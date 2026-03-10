@@ -185,11 +185,9 @@ func (gh *GameHandlers) HandleMove(_ context.Context, s *player.PlayerSession, r
 
 	curX, curY, _ := s.Position()
 
-	// After a map transfer or resetpos, skip the speed check for a grace period.
-	// The server has already switched maps but the client may still be mid-fade,
-	// causing a position desync. Accepting moves without speed check allows the
-	// server to re-sync with the client's actual position on the new map.
-	inGrace := time.Since(s.LastTransfer) < 3*time.Second
+	// Grace period after map transfer/resetpos: skip SPEED check only (not passability).
+	// Reduced to 1s to minimize exploitation window. Passability always enforced.
+	inGrace := time.Since(s.LastTransfer) < 1*time.Second
 
 	if !inGrace {
 		// Distance check: allow at most 1 tile per tick with 1.3× tolerance.
@@ -202,14 +200,21 @@ func (gh *GameHandlers) HandleMove(_ context.Context, s *player.PlayerSession, r
 				zap.Int64("char_id", s.CharID),
 				zap.Float64("dx", dx), zap.Float64("dy", dy),
 				zap.Float64("distance", dist))
+			if s.RecordSpeedHack() {
+				gh.logger.Warn("kicking player for repeated speed hacks",
+					zap.Int64("char_id", s.CharID))
+				s.Close()
+				return nil
+			}
 			sendMoveReject(s)
 			return nil
 		}
 	}
 
-	// Passability check — match RMMV's two-way check:
+	// Passability check — ALWAYS enforced (including during grace period).
 	// 1. Can leave current tile in the move direction
 	// 2. Can enter destination tile from the reverse direction
+	// 3. YEP_RegionRestrictions: block player if destination region is restricted
 	if gh.res != nil {
 		pm := gh.res.Passability[s.MapID]
 		if pm != nil {
@@ -225,26 +230,40 @@ func (gh *GameHandlers) HandleMove(_ context.Context, s *player.PlayerSession, r
 			} else if ddx == 0 && ddy == -1 {
 				moveDir = 8 // up
 			}
-			// Check source tile: can leave in the move direction.
-			if !pm.CanPass(curX, curY, moveDir) {
-				sendMoveReject(s)
-				return nil
+
+			// YEP_RegionRestrictions: check destination region.
+			destRegion := pm.RegionAt(req.X, req.Y)
+			if rr := gh.res.RegionRestr; rr != nil {
+				if rr.IsPlayerRestricted(destRegion) {
+					sendMoveReject(s)
+					return nil
+				}
 			}
-			// Check destination tile: can enter from the reverse direction.
-			revDir := moveDir
-			switch moveDir {
-			case 2:
-				revDir = 8
-			case 4:
-				revDir = 6
-			case 6:
-				revDir = 4
-			case 8:
-				revDir = 2
-			}
-			if !pm.CanPass(req.X, req.Y, revDir) {
-				sendMoveReject(s)
-				return nil
+
+			// Skip tile passability if region explicitly allows movement.
+			regionAllowed := gh.res.RegionRestr != nil && gh.res.RegionRestr.IsPlayerAllowed(destRegion)
+			if !regionAllowed {
+				// Check source tile: can leave in the move direction.
+				if !pm.CanPass(curX, curY, moveDir) {
+					sendMoveReject(s)
+					return nil
+				}
+				// Check destination tile: can enter from the reverse direction.
+				revDir := moveDir
+				switch moveDir {
+				case 2:
+					revDir = 8
+				case 4:
+					revDir = 6
+				case 6:
+					revDir = 4
+				case 8:
+					revDir = 2
+				}
+				if !pm.CanPass(req.X, req.Y, revDir) {
+					sendMoveReject(s)
+					return nil
+				}
 			}
 		}
 	}
@@ -268,6 +287,27 @@ func (gh *GameHandlers) HandleMove(_ context.Context, s *player.PlayerSession, r
 	room := gh.wm.GetPlayerRoom(s)
 	if room != nil {
 		room.BroadcastExcept(syncPkt, s.CharID)
+	}
+
+	// YEP_EventRegionTrigger: fire events whose region trigger list matches the
+	// player's current region. Runs before transfer/touch-event checks so that
+	// region-triggered autoruns can set up state before transfers execute.
+	if room != nil && !inGrace && gh.touchEventFn != nil && gh.res != nil {
+		if md := gh.res.Maps[s.MapID]; md != nil {
+			if md.RegionTriggerIndex == nil {
+				md.BuildRegionTriggerIndex()
+			}
+			if pm := gh.res.Passability[s.MapID]; pm != nil {
+				playerRegion := pm.RegionAt(req.X, req.Y)
+				if eventIDs, ok := md.RegionTriggerIndex[playerRegion]; ok {
+					for _, eid := range eventIDs {
+						if eid < len(md.Events) && md.Events[eid] != nil {
+							gh.touchEventFn(s, s.MapID, md.Events[eid].X, md.Events[eid].Y)
+						}
+					}
+				}
+			}
+		}
 	}
 
 	// Server-side auto-transfer: check if player stepped on a transfer event
@@ -650,28 +690,17 @@ func (gh *GameHandlers) EnterMapRoom(s *player.PlayerSession, mapID, x, y, dir i
 	var varsSnap map[int]int
 	var switchSnap map[int]bool
 	if ps, err := gh.wm.PlayerStateManager().GetOrLoad(s.CharID); err == nil {
-		// Compute var[206] (time period) from var[204] (hour) server-side.
+		// Compute time period from hour variable using MMOConfig.
 		// CE 32 normally does this, but it requires autorun events on the map.
 		// New/starting maps (e.g. Map 20) may lack autoruns, so we compute inline.
-		hour := ps.GetVariable(204)
-		var period int
-		switch {
-		case hour < 5:
-			period = 6 // midnight
-		case hour < 7:
-			period = 1 // dawn
-		case hour < 9:
-			period = 2 // early morning
-		case hour < 17:
-			period = 3 // daytime
-		case hour < 19:
-			period = 4 // dusk
-		case hour < 22:
-			period = 5 // evening
-		default:
-			period = 6 // midnight
+		if gh.res != nil && gh.res.MMOConfig != nil && gh.res.MMOConfig.TimePeriod != nil {
+			tp := gh.res.MMOConfig.TimePeriod
+			hour := ps.GetVariable(tp.HourVar)
+			period := gh.res.MMOConfig.ComputeTimePeriod(hour)
+			if period != 0 {
+				ps.SetVariable(tp.PeriodVar, period)
+			}
 		}
-		ps.SetVariable(206, period)
 
 		varsSnap = ps.VariablesSnapshot()
 		switchSnap = ps.SwitchesSnapshot()
@@ -724,6 +753,7 @@ func (gh *GameHandlers) EnterMapRoom(s *player.PlayerSession, mapID, x, y, dir i
 		"variables":   jsonVars,
 		"switches":    jsonSwitches,
 		"equips":      equippedItems,
+		"init_state":  gh.res.InitState,
 	})
 	s.Send(&player.Packet{Type: "map_init", Payload: initPayload})
 

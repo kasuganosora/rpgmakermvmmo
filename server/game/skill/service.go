@@ -174,12 +174,29 @@ func (svc *SkillService) UseSkill(
 		targets = []int64{targetID}
 	}
 
+	// 技能射程（瓦片距离）。瓦片 RPG 中 10 格足以覆盖大部分屏幕可见范围。
+	const skillRange = 10
+
+	px, py, _ := s.Position()
+
 	// Compute damage for each target and broadcast.
 	var targetResults []interface{}
 	for _, tid := range targets {
 		if targetType == "monster" {
 			m := room.GetMonster(tid)
 			if m == nil {
+				continue
+			}
+			// 距离检查：目标超出射程则跳过。
+			ddx := px - m.X
+			ddy := py - m.Y
+			if ddx < 0 {
+				ddx = -ddx
+			}
+			if ddy < 0 {
+				ddy = -ddy
+			}
+			if ddx > skillRange || ddy > skillRange {
 				continue
 			}
 			defStats := &battle.CharacterStats{

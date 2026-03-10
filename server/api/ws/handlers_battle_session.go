@@ -18,6 +18,9 @@ import (
 // VarSnapshotFn returns a snapshot of game variables relevant to battle UI for a player.
 type VarSnapshotFn func(charID int64) map[int]int
 
+// SwitchSnapshotFn returns a snapshot of game switches relevant to battle UI for a player.
+type SwitchSnapshotFn func(charID int64) map[int]bool
+
 // BattleSessionManager manages server-authoritative battle sessions.
 type BattleSessionManager struct {
 	mu        sync.RWMutex
@@ -25,8 +28,9 @@ type BattleSessionManager struct {
 	db        *gorm.DB
 	res       *resource.ResourceLoader
 	partyMgr  *party.Manager
-	varSnapFn VarSnapshotFn
-	logger    *zap.Logger
+	varSnapFn    VarSnapshotFn
+	switchSnapFn SwitchSnapshotFn
+	logger       *zap.Logger
 }
 
 type activeBattle struct {
@@ -48,6 +52,11 @@ func NewBattleSessionManager(db *gorm.DB, res *resource.ResourceLoader, partyMgr
 // SetVarSnapshotFn sets the function for retrieving player variable snapshots for battle UI.
 func (bm *BattleSessionManager) SetVarSnapshotFn(fn VarSnapshotFn) {
 	bm.varSnapFn = fn
+}
+
+// SetSwitchSnapshotFn sets the function for retrieving player switch snapshots for battle UI.
+func (bm *BattleSessionManager) SetSwitchSnapshotFn(fn SwitchSnapshotFn) {
+	bm.switchSnapFn = fn
 }
 
 // RegisterHandlers registers battle WS handlers.
@@ -140,11 +149,16 @@ func (bm *BattleSessionManager) RunBattle(
 	troop := bm.res.Troops[troopID]
 
 	// Look up battleback from map data.
+	// YEP_ImprovedBattlebacks: prefer region-specific override at player's position.
 	var bb1, bb2 string
 	if bm.res != nil {
 		if mapData := bm.res.Maps[s.MapID]; mapData != nil {
-			bb1 = mapData.Battleback1Name
-			bb2 = mapData.Battleback2Name
+			px, py, _ := s.Position()
+			regionID := 0
+			if pm := bm.res.Passability[s.MapID]; pm != nil {
+				regionID = pm.RegionAt(px, py)
+			}
+			bb1, bb2 = mapData.BattlebackAt(regionID)
 		}
 	}
 
@@ -152,6 +166,11 @@ func (bm *BattleSessionManager) RunBattle(
 	var gameVars map[int]int
 	if bm.varSnapFn != nil {
 		gameVars = bm.varSnapFn(s.CharID)
+	}
+	// Snapshot player switches (transformation state, portrait flags, etc.).
+	var gameSwitches map[int]bool
+	if bm.switchSnapFn != nil {
+		gameSwitches = bm.switchSnapFn(s.CharID)
 	}
 
 	// Build level-check callback using participant sessions.
@@ -176,9 +195,16 @@ func (bm *BattleSessionManager) RunBattle(
 		return newLevel, newLevel > pe.Level
 	}
 
+	// Read BaseTroopID from MMOConfig (YEP_BaseTroopEvents).
+	baseTroopID := 0
+	if bm.res != nil && bm.res.MMOConfig != nil && bm.res.MMOConfig.Battle != nil {
+		baseTroopID = bm.res.MMOConfig.Battle.BaseTroopID
+	}
+
 	// Create battle instance.
 	bi := battle.NewBattleInstance(battle.BattleConfig{
 		TroopID:      troopID,
+		BaseTroopID:  baseTroopID,
 		CanEscape:    canEscape,
 		CanLose:      canLose,
 		Battleback1:  bb1,
@@ -186,6 +212,7 @@ func (bm *BattleSessionManager) RunBattle(
 		Res:          bm.res,
 		Logger:       bm.logger,
 		GameVars:      gameVars,
+		GameSwitches:  gameSwitches,
 		LevelCheckFn:  levelCheckFn,
 		ItemCheckFn: func(charID int64, itemID int) bool {
 			if bm.db == nil {

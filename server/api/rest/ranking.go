@@ -68,10 +68,13 @@ func (h *RankingHandler) TopExp(c *gin.Context) {
 
 	// Fall back to DB query.
 	var chars []model.Character
-	h.db.Select("id, name, level, exp").
+	if err := h.db.Select("id, name, level, exp").
 		Order("exp DESC").
 		Limit(limit).
-		Find(&chars)
+		Find(&chars).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
 
 	entries := make([]RankEntry, len(chars))
 	for i, ch := range chars {
@@ -112,7 +115,9 @@ func (h *RankingHandler) enrichNames(entries []RankEntry) {
 		ids[i] = e.CharID
 	}
 	var chars []model.Character
-	h.db.Select("id, name, level, exp").Where("id IN ?", ids).Find(&chars)
+	if err := h.db.Select("id, name, level, exp").Where("id IN ?", ids).Find(&chars).Error; err != nil {
+		return
+	}
 	nameMap := make(map[int64]model.Character, len(chars))
 	for _, ch := range chars {
 		nameMap[ch.ID] = ch

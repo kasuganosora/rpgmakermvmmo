@@ -346,7 +346,7 @@ func TestDispatch_ShowText_DialogDisconnect(t *testing.T) {
 
 func TestDispatch_Script_SafeForward_Cov4(t *testing.T) {
 	s := testSession(1)
-	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	exec := New(nil, testResMMO(), nopLogger())
 
 	page := &resource.EventPage{
 		List: []*resource.EventCommand{
@@ -371,7 +371,7 @@ func TestDispatch_Script_SafeForward_Cov4(t *testing.T) {
 
 func TestDispatch_Script_AudioForward(t *testing.T) {
 	s := testSession(1)
-	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	exec := New(nil, testResMMO(), nopLogger())
 
 	page := &resource.EventPage{
 		List: []*resource.EventCommand{
@@ -766,7 +766,7 @@ func TestStepUntilWait_BlockedPlugin_Cov4(t *testing.T) {
 	gs := newMockGameState()
 	s := testSession(1)
 	s.MapID = 1
-	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	exec := New(nil, testResMMO(), nopLogger())
 	opts := &ExecuteOpts{MapID: 1, GameState: gs}
 
 	ev := &ParallelEventState{

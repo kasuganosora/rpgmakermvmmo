@@ -399,7 +399,7 @@ func TestExecParaCheck_Switch131(t *testing.T) {
 	s := testSessionWithStats(1, 100, 100, 50, 50, 10, 0)
 	s.ClassID = 1
 	s.Equips = map[int]int{0: 0, 1: 0}
-	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	exec := New(nil, testResMMO(), nopLogger())
 	opts := &ExecuteOpts{GameState: gs, TransientVars: make(map[int]interface{})}
 
 	exec.execParaCheck(s, opts)

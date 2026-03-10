@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 )
 
 // ---- RMMV Data Structures ----
@@ -368,6 +369,15 @@ type MapData struct {
 	Battleback1Name  string      `json:"battleback1Name"`
 	Battleback2Name  string      `json:"battleback2Name"`
 	Note             string      `json:"note"` // map note field for meta tags like <RandomPos>
+
+	// RegionTriggerIndex maps regionID → []eventID for YEP_EventRegionTrigger.
+	// Built lazily by BuildRegionTriggerIndex(); nil until first call.
+	RegionTriggerIndex map[int][]int `json:"-"`
+
+	// BattlebackOverrides maps regionID → [bb1, bb2] for region-specific battlebacks.
+	// Parsed from map Note tags: <Region N Battleback1: file> / <Region N Battleback2: file>
+	// Built lazily by BuildBattlebackOverrides(); nil until first call.
+	BattlebackOverrides map[int][2]string `json:"-"`
 }
 
 // TransferTarget holds the destination of a map transfer event.
@@ -411,6 +421,113 @@ func (md *MapData) FindTransferAt(x, y int) *TransferTarget {
 		}
 	}
 	return nil
+}
+
+// BuildRegionTriggerIndex scans all event pages for YEP_EventRegionTrigger comment tags
+// (code 108/408 with "<Region Trigger: N>" or "<Region Triggers: N,N,...>") and builds
+// RegionTriggerIndex: regionID → []eventID.
+// Safe to call multiple times; rebuilds the index on each call.
+func (md *MapData) BuildRegionTriggerIndex() {
+	idx := make(map[int][]int)
+	reSingle := regexp.MustCompile(`(?i)<Region\s+Triggers?:\s*(\d+)>`)
+	reMulti := regexp.MustCompile(`(?i)<Region\s+Triggers?:\s*([\d,\s]+)>`)
+	for _, ev := range md.Events {
+		if ev == nil {
+			continue
+		}
+		seen := make(map[int]bool) // deduplicate per event
+		for _, page := range ev.Pages {
+			if page == nil {
+				continue
+			}
+			for _, cmd := range page.List {
+				if cmd == nil || (cmd.Code != 108 && cmd.Code != 408) {
+					continue
+				}
+				if len(cmd.Parameters) == 0 {
+					continue
+				}
+				text, _ := cmd.Parameters[0].(string)
+				if text == "" {
+					continue
+				}
+				// Try multi first (superset of single).
+				if m := reMulti.FindStringSubmatch(text); m != nil {
+					for _, part := range regexp.MustCompile(`\d+`).FindAllString(m[1], -1) {
+						var n int
+						fmt.Sscanf(part, "%d", &n)
+						if n > 0 && !seen[n] {
+							seen[n] = true
+							idx[n] = append(idx[n], ev.ID)
+						}
+					}
+				} else if m := reSingle.FindStringSubmatch(text); m != nil {
+					var n int
+					fmt.Sscanf(m[1], "%d", &n)
+					if n > 0 && !seen[n] {
+						seen[n] = true
+						idx[n] = append(idx[n], ev.ID)
+					}
+				}
+			}
+		}
+	}
+	md.RegionTriggerIndex = idx
+}
+
+// BuildBattlebackOverrides parses region-specific battleback Note tags from the map Note field.
+// Supported formats:
+//
+//	<Region N Battleback1: filename>
+//	<Region N Battleback2: filename>
+//
+// Fills BattlebackOverrides: regionID → [bb1, bb2] (empty string = no override for that slot).
+func (md *MapData) BuildBattlebackOverrides() {
+	reBB1 := regexp.MustCompile(`(?i)<Region\s+(\d+)\s+Battleback1:\s*([^>]+)>`)
+	reBB2 := regexp.MustCompile(`(?i)<Region\s+(\d+)\s+Battleback2:\s*([^>]+)>`)
+	idx := make(map[int][2]string)
+	for _, m := range reBB1.FindAllStringSubmatch(md.Note, -1) {
+		var n int
+		fmt.Sscanf(m[1], "%d", &n)
+		if n > 0 {
+			entry := idx[n]
+			entry[0] = strings.TrimSpace(m[2])
+			idx[n] = entry
+		}
+	}
+	for _, m := range reBB2.FindAllStringSubmatch(md.Note, -1) {
+		var n int
+		fmt.Sscanf(m[1], "%d", &n)
+		if n > 0 {
+			entry := idx[n]
+			entry[1] = strings.TrimSpace(m[2])
+			idx[n] = entry
+		}
+	}
+	md.BattlebackOverrides = idx
+}
+
+// BattlebackAt returns the battleback filenames for the given region ID.
+// Falls back to the map-level default if no region override is found.
+// Returns (bb1, bb2) where empty string means "use engine default".
+func (md *MapData) BattlebackAt(regionID int) (bb1, bb2 string) {
+	if md.BattlebackOverrides == nil {
+		md.BuildBattlebackOverrides()
+	}
+	if regionID > 0 {
+		if entry, ok := md.BattlebackOverrides[regionID]; ok {
+			r1 := entry[0]
+			r2 := entry[1]
+			if r1 == "" {
+				r1 = md.Battleback1Name
+			}
+			if r2 == "" {
+				r2 = md.Battleback2Name
+			}
+			return r1, r2
+		}
+	}
+	return md.Battleback1Name, md.Battleback2Name
 }
 
 // paramIntP extracts an int from a []interface{} at the given index (JSON numbers are float64).
@@ -540,10 +657,49 @@ func (pm *PassabilityMap) RegionAt(x, y int) int {
 // RegionRestrictions stores the region-based movement restriction config
 // parsed from the YEP_RegionRestrictions plugin.
 type RegionRestrictions struct {
-	EventRestrict []int // regions that block event/NPC movement
-	AllRestrict   []int // regions that block all movement
-	EventAllow    []int // regions that always allow event movement
-	AllAllow      []int // regions that always allow all movement
+	PlayerRestrict []int // regions that block player movement
+	PlayerAllow    []int // regions that always allow player movement
+	EventRestrict  []int // regions that block event/NPC movement
+	AllRestrict    []int // regions that block all movement
+	EventAllow     []int // regions that always allow event movement
+	AllAllow       []int // regions that always allow all movement
+}
+
+// IsPlayerRestricted returns true if the given region blocks player movement.
+func (rr *RegionRestrictions) IsPlayerRestricted(regionID int) bool {
+	if regionID == 0 {
+		return false
+	}
+	for _, r := range rr.PlayerRestrict {
+		if r == regionID {
+			return true
+		}
+	}
+	for _, r := range rr.AllRestrict {
+		if r == regionID {
+			return true
+		}
+	}
+	return false
+}
+
+// IsPlayerAllowed returns true if the given region always allows player movement
+// (overrides tile passability).
+func (rr *RegionRestrictions) IsPlayerAllowed(regionID int) bool {
+	if regionID == 0 {
+		return false
+	}
+	for _, r := range rr.PlayerAllow {
+		if r == regionID {
+			return true
+		}
+	}
+	for _, r := range rr.AllAllow {
+		if r == regionID {
+			return true
+		}
+	}
+	return false
 }
 
 // IsEventRestricted returns true if the given region blocks NPC/event movement.
@@ -634,6 +790,126 @@ type ResourceLoader struct {
 	PrebuiltWeapons []interface{}
 	PrebuiltSkills  []interface{}
 	PrebuiltItems   []interface{}
+
+	// InitState holds client initialization data loaded from InitState.json.
+	// Sent to client via map_init to replace hardcoded projectb-specific init.
+	// nil if file doesn't exist (optional).
+	InitState json.RawMessage
+
+	// MMOConfig holds game-specific configuration loaded from MMOConfig.json.
+	// Replaces all hardcoded projectb-specific values (plugin commands,
+	// broadcast whitelists, time period formula, etc.).
+	// nil if file doesn't exist (framework runs with built-in defaults).
+	MMOConfig *MMOConfig
+}
+
+// ServerExecPlugin defines a plugin command that runs server-side via Goja VM.
+type ServerExecPlugin struct {
+	ScriptFile       string `json:"scriptFile"`       // path relative to game root
+	Timeout          int    `json:"timeout"`           // execution timeout in ms
+	InjectActors     bool   `json:"injectActors"`      // inject $gameActors
+	InjectDataArrays bool   `json:"injectDataArrays"`  // inject $dataArmors etc.
+	InjectPlayerVars bool   `json:"injectPlayerVars"`  // inject __playerLevel, __gold, __classId
+	TagSkillRange    []int  `json:"tagSkillListRange"` // [start, end] for TagSkillList post-processing
+
+	// LoadedScript holds the file contents, loaded at startup.
+	LoadedScript string `json:"-"`
+}
+
+// TimePeriodRange maps an hour threshold to a period value.
+type TimePeriodRange struct {
+	MaxHour int `json:"maxHour"`
+	Period  int `json:"period"`
+}
+
+// TimePeriodConfig defines how to compute the time period variable from the hour variable.
+type TimePeriodConfig struct {
+	HourVar   int               `json:"hourVar"`
+	PeriodVar int               `json:"periodVar"`
+	Ranges    []TimePeriodRange `json:"ranges"`
+}
+
+// MMOConfig holds game-specific configuration that varies per RMMV project.
+type MMOConfig struct {
+	BlockedPluginCmds  []string                      `json:"blockedPluginCmds"`
+	ServerExecPlugins  map[string]*ServerExecPlugin   `json:"serverExecPlugins"`
+	BroadcastVariables []int                          `json:"broadcastVariables"`
+	BroadcastSwitches  []int                          `json:"broadcastSwitches"`
+	// AlwaysSendSwitches lists switch IDs that are always forwarded to the client
+	// even when the server-side value is unchanged. Use for switches the client may
+	// reset independently (e.g. via event_end safety nets).
+	AlwaysSendSwitches []int                          `json:"alwaysSendSwitches"`
+	TimePeriod         *TimePeriodConfig              `json:"timePeriod"`
+	SafeScriptPrefixes []string                       `json:"safeScriptPrefixes"`
+	SafeScreenMethods  []string                       `json:"safeScreenMethods"`
+	Battle             *BattleMMOConfig               `json:"battle"`
+}
+
+// BattleMMOConfig holds battle-specific configuration (YEP plugin integration).
+type BattleMMOConfig struct {
+	// BaseTroopID mirrors YEP_BaseTroopEvents: the troop whose event pages are
+	// merged into every battle's TroopEventRunner at initialization time.
+	// Set to 0 (default) to disable.
+	BaseTroopID int `json:"baseTroopId"`
+}
+
+// BlockedPluginCmdSet returns the blocked plugin commands as a set for O(1) lookup.
+func (c *MMOConfig) BlockedPluginCmdSet() map[string]bool {
+	m := make(map[string]bool, len(c.BlockedPluginCmds))
+	for _, cmd := range c.BlockedPluginCmds {
+		m[cmd] = true
+	}
+	return m
+}
+
+// BroadcastVarSet returns broadcast variable IDs as a set.
+func (c *MMOConfig) BroadcastVarSet() map[int]bool {
+	m := make(map[int]bool, len(c.BroadcastVariables))
+	for _, id := range c.BroadcastVariables {
+		m[id] = true
+	}
+	return m
+}
+
+// BroadcastSwitchSet returns broadcast switch IDs as a set.
+func (c *MMOConfig) BroadcastSwitchSet() map[int]bool {
+	m := make(map[int]bool, len(c.BroadcastSwitches))
+	for _, id := range c.BroadcastSwitches {
+		m[id] = true
+	}
+	return m
+}
+
+// AlwaysSendSwitchSet returns always-send switch IDs as a set.
+func (c *MMOConfig) AlwaysSendSwitchSet() map[int]bool {
+	m := make(map[int]bool, len(c.AlwaysSendSwitches))
+	for _, id := range c.AlwaysSendSwitches {
+		m[id] = true
+	}
+	return m
+}
+
+// SafeScreenMethodSet returns safe $gameScreen methods as a set.
+func (c *MMOConfig) SafeScreenMethodSet() map[string]bool {
+	m := make(map[string]bool, len(c.SafeScreenMethods))
+	for _, method := range c.SafeScreenMethods {
+		m[method] = true
+	}
+	return m
+}
+
+// ComputeTimePeriod returns the period value for a given hour.
+// Returns 0 if no time period config is set.
+func (c *MMOConfig) ComputeTimePeriod(hour int) int {
+	if c.TimePeriod == nil {
+		return 0
+	}
+	for _, r := range c.TimePeriod.Ranges {
+		if hour < r.MaxHour {
+			return r.Period
+		}
+	}
+	return 0
 }
 
 // TagSkillEntry represents a single entry in TagSkillList.json.
@@ -693,7 +969,53 @@ func (rl *ResourceLoader) Load() error {
 	rl.loadTagSkillList() // optional, ignore errors
 	rl.preParseAllMeta()
 	rl.prebuildDataArrays()
+	rl.loadInitState()   // optional, ignore errors
+	rl.loadMMOConfig()   // optional, ignore errors
 	return nil
+}
+
+// loadInitState loads InitState.json as raw JSON for client-side initialization.
+// The file is optional; missing file is not an error.
+func (rl *ResourceLoader) loadInitState() {
+	path := filepath.Join(rl.DataPath, "InitState.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return // file not found is fine
+	}
+	// Validate it's valid JSON
+	if json.Valid(data) {
+		rl.InitState = json.RawMessage(data)
+	}
+}
+
+// loadMMOConfig loads MMOConfig.json and its referenced plugin script files.
+// The file is optional; missing file is not an error (framework uses defaults).
+func (rl *ResourceLoader) loadMMOConfig() {
+	path := filepath.Join(rl.DataPath, "MMOConfig.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return // file not found is fine
+	}
+	var cfg MMOConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return
+	}
+	// Load script files for each server-exec plugin.
+	gameRoot := filepath.Dir(rl.DataPath) // parent of data/ is the game root
+	for name, plugin := range cfg.ServerExecPlugins {
+		if plugin == nil || plugin.ScriptFile == "" {
+			continue
+		}
+		scriptPath := filepath.Join(gameRoot, filepath.FromSlash(plugin.ScriptFile))
+		scriptData, err := os.ReadFile(scriptPath)
+		if err != nil {
+			// Script file missing — remove plugin from config so it won't be called.
+			delete(cfg.ServerExecPlugins, name)
+			continue
+		}
+		plugin.LoadedScript = string(scriptData)
+	}
+	rl.MMOConfig = &cfg
 }
 
 // metaTagRe matches RMMV meta tags including kaeru.js semicolon extension.

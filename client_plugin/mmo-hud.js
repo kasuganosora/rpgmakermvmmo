@@ -540,7 +540,9 @@
      * @returns {void}
      */
     QuestTracker.prototype.initialize = function () {
-        L2_Base.prototype.initialize.call(this, Graphics.boxWidth - QT_W - 4, MM_SIZE + 12, QT_W, QT_H);
+        var hudCfg = (window.MMO_CLIENT_CONFIG && window.MMO_CLIENT_CONFIG.hud) || {};
+        var qtY = (hudCfg.minimap === true) ? MM_SIZE + 12 : 4;
+        L2_Base.prototype.initialize.call(this, Graphics.boxWidth - QT_W - 4, qtY, QT_W, QT_H);
         /** @type {Array<Object>} 当前追踪的任务列表（最多3个） */
         this._quests = [];
     };
@@ -636,14 +638,24 @@
      */
     Scene_Map.prototype.createAllWindows = function () {
         _Scene_Map_createAllWindows.call(this);
-        this._mmoStatusBar = new StatusBar();
-        this._mmoMinimap = new Minimap();
-        this._mmoQuestTrack = new QuestTracker();
-        this.addChild(this._mmoStatusBar);
-        this.addChild(this._mmoMinimap);
-        this.addChild(this._mmoQuestTrack);
-        // 若有缓存的角色数据，立即应用
-        if ($MMO._lastSelf) this._mmoStatusBar.setData($MMO._lastSelf);
+        var hudCfg = (window.MMO_CLIENT_CONFIG && window.MMO_CLIENT_CONFIG.hud) || {};
+
+        if (hudCfg.statusBar === true) {
+            this._mmoStatusBar = new StatusBar();
+            this.addChild(this._mmoStatusBar);
+            // 若有缓存的角色数据，立即应用
+            if ($MMO._lastSelf) this._mmoStatusBar.setData($MMO._lastSelf);
+        }
+
+        if (hudCfg.minimap === true) {
+            this._mmoMinimap = new Minimap();
+            this.addChild(this._mmoMinimap);
+        }
+
+        if (hudCfg.questTracker === true) {
+            this._mmoQuestTrack = new QuestTracker();
+            this.addChild(this._mmoQuestTrack);
+        }
     };
 
     /**

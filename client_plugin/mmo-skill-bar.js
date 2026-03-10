@@ -34,8 +34,9 @@
     // ═══════════════════════════════════════════════════════════
     //  常量配置
     // ═══════════════════════════════════════════════════════════
-    /** @type {number} 快捷栏格子数（F1-F12）。 */
-    var SLOT_COUNT = 12;
+    /** @type {number} 快捷栏格子数（F1-F12），从客户端配置读取。 */
+    var SLOT_COUNT = (window.MMO_CLIENT_CONFIG && window.MMO_CLIENT_CONFIG.skillBar &&
+                     window.MMO_CLIENT_CONFIG.skillBar.slotCount) || 12;
     /** @type {number} 每格像素尺寸。 */
     var SLOT_SIZE = 34;
     /** @type {number} 格间距（像素）。 */
@@ -235,9 +236,12 @@
      */
     Scene_Map.prototype.createAllWindows = function () {
         _Scene_Map_createAllWindows2.call(this);
-        this._mmoSkillBar = new SkillBar();
-        this.addChild(this._mmoSkillBar);
-        $MMO.registerBottomUI(this._mmoSkillBar);
+        if (window.MMO_CLIENT_CONFIG && window.MMO_CLIENT_CONFIG.skillBar &&
+            window.MMO_CLIENT_CONFIG.skillBar.enabled === true) {
+            this._mmoSkillBar = new SkillBar();
+            this.addChild(this._mmoSkillBar);
+            $MMO.registerBottomUI(this._mmoSkillBar);
+        }
     };
 
     // ═══════════════════════════════════════════════════════════

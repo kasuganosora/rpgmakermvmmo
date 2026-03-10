@@ -6,58 +6,40 @@ import (
 
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/player"
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/world"
+	"github.com/kasuganosora/rpgmakermvmmo/server/resource"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
-
-// Whitelist variables that should be broadcast to all clients when changed.
-// These are typically time/weather related variables.
-var whitelistVariableIDs = map[int]bool{
-	202: true, // ターン (day counter)
-	203: true, // 曜日 (day of week)
-	204: true, // 時間(h)
-	205: true, // 時間(m)
-	206: true, // 時間帯 (time period)
-	207: true, // 天候 (weather)
-	211: true, // 時間表示 (formatted time display)
-}
-
-// Whitelist switches that should be broadcast to all clients when changed.
-var whitelistSwitchIDs = map[int]bool{
-	11:  true, // 時間切り替えフラグ (time switch flag)
-	12:  true, // 時計オン (clock on)
-	20:  true, // リアルタイム処理 (real-time processing)
-	31:  true, // その場で時間経過 (time progression on spot)
-	53:  true, // 日照 (sunlight)
-	54:  true, // 日没 (sunset)
-	55:  true, // 天候・雨 (rain)
-	56:  true, // 天候・雲 (clouds)
-	57:  true, // 天候・陽光 (sunny)
-	58:  true, // 天候・瘴気 (miasma)
-	87:  true, // 日数経過開始 (day count start)
-	89:  true, // 平日 (weekday)
-	103: true, // 時間経過オンオフ (time passage toggle)
-	104: true, // 時間経過呼び出し (time passage call)
-}
 
 // TemplateEventHandlers handles TemplateEvent.js related WebSocket messages.
 // This provides server-side storage for self-variables (TemplateEvent.js extension)
 // and variable/switch synchronization between client and server.
 type TemplateEventHandlers struct {
-	db *gorm.DB
-	wm *world.WorldManager
-	sm *player.SessionManager
+	db     *gorm.DB
+	wm     *world.WorldManager
+	sm     *player.SessionManager
+	res    *resource.ResourceLoader
 	logger *zap.Logger
+
+	// Cached whitelist sets (built once from MMOConfig).
+	broadcastVarSet    map[int]bool
+	broadcastSwitchSet map[int]bool
 }
 
 // NewTemplateEventHandlers creates TemplateEventHandlers.
-func NewTemplateEventHandlers(db *gorm.DB, wm *world.WorldManager, sm *player.SessionManager, logger *zap.Logger) *TemplateEventHandlers {
-	return &TemplateEventHandlers{
+func NewTemplateEventHandlers(db *gorm.DB, wm *world.WorldManager, sm *player.SessionManager, res *resource.ResourceLoader, logger *zap.Logger) *TemplateEventHandlers {
+	h := &TemplateEventHandlers{
 		db:     db,
 		wm:     wm,
 		sm:     sm,
+		res:    res,
 		logger: logger,
 	}
+	if res != nil && res.MMOConfig != nil {
+		h.broadcastVarSet = res.MMOConfig.BroadcastVarSet()
+		h.broadcastSwitchSet = res.MMOConfig.BroadcastSwitchSet()
+	}
+	return h
 }
 
 // RegisterHandlers registers TemplateEvent-related WS handlers on the router.
@@ -84,9 +66,9 @@ func (h *TemplateEventHandlers) RegisterHandlers(r *Router) {
 func (h *TemplateEventHandlers) setupChangeCallbacks() {
 	gs := h.wm.GameState()
 
-	// Broadcast variable changes to all clients
+	// Broadcast variable changes to all clients (whitelist from MMOConfig)
 	gs.SetOnVariableChange(func(variableID, value int) {
-		if !whitelistVariableIDs[variableID] {
+		if !h.broadcastVarSet[variableID] {
 			return
 		}
 		payload, _ := json.Marshal(map[string]interface{}{
@@ -97,9 +79,9 @@ func (h *TemplateEventHandlers) setupChangeCallbacks() {
 		h.sm.BroadcastAll(pkt)
 	})
 
-	// Broadcast switch changes to all clients
+	// Broadcast switch changes to all clients (whitelist from MMOConfig)
 	gs.SetOnSwitchChange(func(switchID int, value bool) {
-		if !whitelistSwitchIDs[switchID] {
+		if !h.broadcastSwitchSet[switchID] {
 			return
 		}
 		payload, _ := json.Marshal(map[string]interface{}{

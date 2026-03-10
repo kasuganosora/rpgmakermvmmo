@@ -317,6 +317,25 @@
     /** 移除菜单中的"整队"命令 — MMO 通过服务器管理队伍。 */
     Window_MenuCommand.prototype.addFormationCommand = function () {};
 
+    // YEP_MainMenuManager 整合：隐藏与 MMO 功能重复的主菜单命令。
+    // MMOClientConfig.hiddenMenuCommands 数组中列出需隐藏的命令符号（小写），
+    // 例如 ["item", "equip"] 可隐藏 RMMV 原生 Item/Equipment 菜单（已由 MMO 背包替代）。
+    (function () {
+        var _hidden = window.MMO_CLIENT_CONFIG && Array.isArray(window.MMO_CLIENT_CONFIG.hiddenMenuCommands)
+            ? window.MMO_CLIENT_CONFIG.hiddenMenuCommands.map(function (s) { return s.toLowerCase(); })
+            : [];
+        if (_hidden.length === 0) return;
+
+        var _WMC_makeCommandList = Window_MenuCommand.prototype.makeCommandList;
+        Window_MenuCommand.prototype.makeCommandList = function () {
+            _WMC_makeCommandList.call(this);
+            // 过滤掉配置中列出的命令。
+            this._list = this._list.filter(function (cmd) {
+                return _hidden.indexOf(String(cmd.symbol).toLowerCase()) === -1;
+            });
+        };
+    })();
+
     // ═══════════════════════════════════════════════════════════
     //  移动同步：每次移动后将玩家位置发送到服务器。
     //  若不同步，服务器保存的始终是初始位置，
@@ -459,6 +478,14 @@
                 if (!_a.save.key) _a.save.key = [0,0,0,0,0,0,0,0,0,0,0,0,0,0];
                 if (!_a.save.keyTroop) _a.save.keyTroop = [0,0,0,0,0,0,0,0,0,0,0,0,0,0];
                 if (!_a.save.teacher) _a.save.teacher = [0,0,0,0,0,0];
+                if (!_a.save.luna) _a.save.luna = 1;
+                // CE 1046 (状態更新) 根据 save.luna 设置周期状态。
+                // 服务端不执行 CE 1046，在此根据 luna 值初始化默认状态。
+                // luna=1 时 CE 1046 的逻辑走到最底部 else → state 97 (安全日)。
+                if (!_a.isStateAffected(96) && !_a.isStateAffected(97) &&
+                    !_a.isStateAffected(98) && !_a.isStateAffected(99)) {
+                    _a.addState(97);
+                }
             }
             // Actor 2 存储色调数组，CallStand.js 用于衣装/武器的颜色染色。
             var _a2 = $gameActors.actor(2);
@@ -466,6 +493,12 @@
                 if (!_a2.toneArray) _a2.toneArray = new Array(1000);
                 if (!_a2.toneWeapon) _a2.toneWeapon = new Array(100);
             }
+        }
+
+        // Switch 85: CE 845 (エロゲージ描画) 的开关。原版由 CE 72 (動画画面終了)
+        // 在视频播放结束后设置，但 MMO 不播放视频，所以需要在此初始化。
+        if ($gameSwitches) {
+            $gameSwitches._data[85] = true;
         }
 
         // 播放服务器指定的地图 BGM/BGS。
@@ -572,8 +605,15 @@
         } else {
             $MMO._serverEventActive = false;
         }
-        // 标记事件结束：关闭 switch 15（"事件进行中"标志）。
-        if ($gameSwitches) $gameSwitches._data[15] = false;
+        // event_end 时清除 switch 15（"事件进行中"）作为安全网。
+        // switch 15 的开启由服务端 CE 10 通过 switch_change 消息管理。
+        // 重新开启 switch 85（CE 845 エロゲージ描画）。
+        // CE 11 会关闭 switch 85，原版由 CE 72 重新开启，
+        // 但 MMO 不播放视频所以 CE 72 不会执行。
+        if ($gameSwitches) {
+            $gameSwitches._data[15] = false;
+            $gameSwitches._data[85] = true;
+        }
         // 强制清理可能阻塞 canMove() 的残留状态：
         // 移动路线强制、穿透、等待计数、消息窗口。
         if ($gamePlayer) {
@@ -826,11 +866,23 @@
     };
 
     // ═══════════════════════════════════════════════════════════
-    //  禁用 RMMV 菜单。ESC 改为关闭最顶层窗口/切换系统菜单。
-    //  右键用于玩家上下文菜单（组队/交易等）。
+    //  菜单行为控制。
+    //  escMenu: false（默认）— 禁用 RMMV 菜单，ESC 关闭 MMO 窗口/切换系统菜单。
+    //  escMenu: true — ESC 打开 RMMV 原生菜单（Scene_Menu）。
+    //    * 有 MMO 窗口开着时 ESC 优先关闭窗口，不开菜单。
+    //    * 右键始终用于玩家上下文菜单（组队/交易），不触发 RMMV 菜单。
     // ═══════════════════════════════════════════════════════════
-    Scene_Map.prototype.isMenuCalled = function () { return false; };
-    Scene_Map.prototype.callMenu = function () {};
+    if (window.MMO_CLIENT_CONFIG && window.MMO_CLIENT_CONFIG.escMenu === true) {
+        // escMenu 模式：仅在无可见 MMO 窗口时响应 ESC 开菜单；
+        // 忽略右键（TouchInput.isCancelled），避免干扰 MMO 右键上下文菜单。
+        Scene_Map.prototype.isMenuCalled = function () {
+            if ($MMO._gameWindows.some(function (w) { return w.visible; })) return false;
+            return Input.isTriggered('escape') || Input.isTriggered('cancel');
+        };
+    } else {
+        Scene_Map.prototype.isMenuCalled = function () { return false; };
+        Scene_Map.prototype.callMenu = function () {};
+    }
 
     /**
      * 全局键盘快捷键监听。
@@ -880,10 +932,16 @@
     var _Scene_Map_update_core = Scene_Map.prototype.update;
     Scene_Map.prototype.update = function () {
         _Scene_Map_update_core.call(this);
-        // ESC：关闭最顶层窗口，或切换系统菜单。
+        // ESC 处理：
+        //   escMenu=false：关闭最顶层 MMO 窗口，无窗口则切换系统菜单。
+        //   escMenu=true ：关闭最顶层 MMO 窗口（有窗口时阻止 isMenuCalled）；
+        //                  无窗口时 isMenuCalled 返回 true，RMMV 自动打开 Scene_Menu。
         if (Input.isTriggered('cancel') || Input.isTriggered('escape')) {
             if (!$MMO.closeTopWindow()) {
-                $MMO._triggerAction('system');
+                if (!(window.MMO_CLIENT_CONFIG && window.MMO_CLIENT_CONFIG.escMenu === true)) {
+                    $MMO._triggerAction('system');
+                }
+                // escMenu=true 时无需额外操作，isMenuCalled 已在本帧开启 RMMV 菜单。
             }
         }
         // RMMV 对话/选项窗口或服务器事件执行时隐藏底部 MMO UI。

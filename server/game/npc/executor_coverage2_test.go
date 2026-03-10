@@ -1048,7 +1048,7 @@ func TestExecCulSkillEffect(t *testing.T) {
 	s.Equips = map[int]int{0: 0, 1: 5}
 
 	// Build minimal prebuilt armors with meta
-	res := &resource.ResourceLoader{
+	res := withTestMMOConfig(&resource.ResourceLoader{
 		PrebuiltArmors: []interface{}{
 			nil, nil, nil, nil, nil,
 			map[string]interface{}{
@@ -1056,7 +1056,7 @@ func TestExecCulSkillEffect(t *testing.T) {
 				"meta": map[string]interface{}{"Skill01": []interface{}{float64(21), float64(10)}},
 			},
 		},
-	}
+	})
 	store := newMockInventoryStore()
 	exec := New(store, res, nopLogger())
 	opts := &ExecuteOpts{GameState: gs, TransientVars: make(map[int]interface{})}
@@ -1083,9 +1083,9 @@ func TestExecCulSkillEffect_WithTagSkillList(t *testing.T) {
 
 	tagList := make(map[int]*resource.TagSkillEntry)
 	tagList[21] = &resource.TagSkillEntry{BaseVar: 4221, AddVar: 4221, BaseNum: 100}
-	res := &resource.ResourceLoader{
+	res := withTestMMOConfig(&resource.ResourceLoader{
 		TagSkillList: tagList,
-	}
+	})
 	exec := New(nil, res, nopLogger())
 	opts := &ExecuteOpts{GameState: gs, TransientVars: make(map[int]interface{})}
 
@@ -1109,12 +1109,12 @@ func TestExecParaCheck(t *testing.T) {
 	s.ClassID = 1
 	s.Equips = map[int]int{0: 0, 1: 5}
 
-	res := &resource.ResourceLoader{
+	res := withTestMMOConfig(&resource.ResourceLoader{
 		PrebuiltArmors: []interface{}{
 			nil, nil, nil, nil, nil,
 			map[string]interface{}{"id": float64(5), "meta": map[string]interface{}{"ClothName": "TestCloth"}},
 		},
-	}
+	})
 	store := newMockInventoryStore()
 	store.gold[1] = 500
 	exec := New(store, res, nopLogger())
@@ -1140,7 +1140,7 @@ func TestExecParaCheck_NilStore(t *testing.T) {
 	s := testSessionWithStats(1, 100, 100, 50, 50, 10, 0)
 	s.ClassID = 1
 	s.Equips = map[int]int{0: 0, 1: 0}
-	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	exec := New(nil, testResMMO(), nopLogger())
 	opts := &ExecuteOpts{GameState: gs, TransientVars: make(map[int]interface{})}
 
 	// No store means gold lookup fails gracefully
@@ -1155,7 +1155,7 @@ func TestExecParaCheck_ClassGt2(t *testing.T) {
 	s := testSessionWithStats(1, 100, 100, 50, 50, 10, 0)
 	s.ClassID = 3 // > 2, 発情 should be forced to 0
 	s.Equips = map[int]int{0: 0, 1: 0}
-	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	exec := New(nil, testResMMO(), nopLogger())
 	opts := &ExecuteOpts{GameState: gs, TransientVars: make(map[int]interface{})}
 
 	exec.execParaCheck(s, opts)
@@ -1660,7 +1660,7 @@ func TestDispatch_CulSkillEffect(t *testing.T) {
 	s := testSession(1)
 	s.ClassID = 1
 	s.Equips = map[int]int{0: 0, 1: 0}
-	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	exec := New(nil, testResMMO(), nopLogger())
 	opts := &ExecuteOpts{GameState: gs, TransientVars: make(map[int]interface{})}
 
 	page := &resource.EventPage{
@@ -1683,7 +1683,7 @@ func TestDispatch_ParaCheck(t *testing.T) {
 	s.Equips = map[int]int{0: 0, 1: 0}
 	store := newMockInventoryStore()
 	store.gold[1] = 100
-	exec := New(store, &resource.ResourceLoader{}, nopLogger())
+	exec := New(store, testResMMO(), nopLogger())
 	opts := &ExecuteOpts{GameState: gs, TransientVars: make(map[int]interface{})}
 
 	page := &resource.EventPage{
@@ -1977,7 +1977,7 @@ func TestStepUntilWait_InstanceCommands(t *testing.T) {
 func TestStepUntilWait_BlockedPlugin(t *testing.T) {
 	gs := newMockGameState()
 	s := testSession(1)
-	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	exec := New(nil, testResMMO(), nopLogger())
 	opts := &ExecuteOpts{MapID: 1, GameState: gs}
 
 	ev := &ParallelEventState{
@@ -3027,7 +3027,7 @@ func TestDispatch_CmdEnd_IndentGtZero(t *testing.T) {
 
 func TestDispatch_Script_SafeForward(t *testing.T) {
 	s := testSession(1)
-	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	exec := New(nil, testResMMO(), nopLogger())
 
 	page := &resource.EventPage{
 		List: []*resource.EventCommand{
@@ -3052,7 +3052,7 @@ func TestDispatch_Script_SafeForward(t *testing.T) {
 
 func TestDispatch_Script_AudioManagerForward(t *testing.T) {
 	s := testSession(1)
-	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	exec := New(nil, testResMMO(), nopLogger())
 
 	page := &resource.EventPage{
 		List: []*resource.EventCommand{
@@ -3306,7 +3306,7 @@ func TestExecCulSkillEffect_NilEquips(t *testing.T) {
 	s := testSession(1)
 	s.ClassID = 1
 	s.Equips = nil
-	exec := New(nil, &resource.ResourceLoader{}, nopLogger())
+	exec := New(nil, testResMMO(), nopLogger())
 	opts := &ExecuteOpts{GameState: gs, TransientVars: make(map[int]interface{})}
 
 	exec.execCulSkillEffect(s, opts)

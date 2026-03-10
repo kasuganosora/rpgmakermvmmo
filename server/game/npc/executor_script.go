@@ -130,9 +130,6 @@ func (e *Executor) execMutableScript(script string, s *player.PlayerSession, opt
 		switchChanges: make(map[int]bool),
 		varAnyChanges: opts.TransientVars,
 	}
-	if mutations.varAnyChanges == nil {
-		mutations.varAnyChanges = make(map[int]interface{})
-	}
 
 	injectScriptGameStateMutable(vm, gs, true, mutations)
 	if s != nil {

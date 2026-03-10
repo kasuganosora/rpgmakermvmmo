@@ -23,6 +23,9 @@ type NPCRuntime struct {
 	moveTimer int // ticks until next movement attempt
 	routeIdx  int // current index in custom MoveRoute
 
+	// ChaseAI handles YEP_EventChasePlayer behavior (nil if event has no chase tags).
+	ChaseAI *ChaseAI
+
 	// Dirty flag — set when position/direction changes, cleared after broadcast
 	dirty bool
 }
@@ -139,34 +142,26 @@ func getStartComments(page *resource.EventPage) string {
 // operators: ==, !=, >=, <=, >, <, &&, ||, and string/numeric literals.
 func evalTEExpression(expr string, mapID, eventID int, state GameStateReader) bool {
 	// Replace \sv[N] with self-variable values.
+	// Each regex has one \d+ capture group, so sub[1] is always a valid integer.
 	expr = svRegex.ReplaceAllStringFunc(expr, func(match string) string {
 		sub := svRegex.FindStringSubmatch(match)
-		if len(sub) >= 2 {
-			idx, _ := strconv.Atoi(sub[1])
-			return strconv.Itoa(state.GetSelfVariable(mapID, eventID, idx))
-		}
-		return "0"
+		idx, _ := strconv.Atoi(sub[1])
+		return strconv.Itoa(state.GetSelfVariable(mapID, eventID, idx))
 	})
 
 	// Replace \v[N] with game variable values.
 	expr = varRegex.ReplaceAllStringFunc(expr, func(match string) string {
 		sub := varRegex.FindStringSubmatch(match)
-		if len(sub) >= 2 {
-			id, _ := strconv.Atoi(sub[1])
-			return strconv.Itoa(state.GetVariable(id))
-		}
-		return "0"
+		id, _ := strconv.Atoi(sub[1])
+		return strconv.Itoa(state.GetVariable(id))
 	})
 
 	// Replace \s[N] with game switch values (true=1, false=0).
 	expr = switchRegex.ReplaceAllStringFunc(expr, func(match string) string {
 		sub := switchRegex.FindStringSubmatch(match)
-		if len(sub) >= 2 {
-			id, _ := strconv.Atoi(sub[1])
-			if state.GetSwitch(id) {
-				return "1"
-			}
-			return "0"
+		id, _ := strconv.Atoi(sub[1])
+		if state.GetSwitch(id) {
+			return "1"
 		}
 		return "0"
 	})
@@ -368,6 +363,11 @@ func (room *MapRoom) populateNPCs() {
 			Dir:        dir,
 			ActivePage: activePage,
 			MapEvent:   ev,
+			ChaseAI:    ParseChaseAI(ev),
+		}
+		if npc.ChaseAI != nil {
+			npc.ChaseAI.HomeX = x
+			npc.ChaseAI.HomeY = y
 		}
 		room.npcs = append(room.npcs, npc)
 
@@ -517,6 +517,36 @@ func ExtractIconOnEvent(ev *resource.MapEvent, page *resource.EventPage) int {
 	return 0
 }
 
+// miniLabelRegex matches YEP_EventMiniLabel comment tags: <Mini Label: text>
+var miniLabelRegex = regexp.MustCompile(`(?i)<Mini Label:\s*(.+?)>`)
+
+// ExtractMiniLabel scans the active page's command list for <Mini Label: text>
+// comment tags (YEP_EventMiniLabel plugin). Returns the label text, or "" if not found.
+func ExtractMiniLabel(page *resource.EventPage) string {
+	if page == nil {
+		return ""
+	}
+	for _, cmd := range page.List {
+		if cmd == nil || (cmd.Code != 108 && cmd.Code != 408) {
+			continue
+		}
+		if len(cmd.Parameters) == 0 {
+			continue
+		}
+		s, ok := cmd.Parameters[0].(string)
+		if !ok {
+			continue
+		}
+		if m := miniLabelRegex.FindStringSubmatch(s); m != nil {
+			text := strings.TrimSpace(m[1])
+			if text != "" {
+				return text
+			}
+		}
+	}
+	return ""
+}
+
 // isFunctionalMarker checks if the given image name is an editor-only marker
 // that should be hidden from players. Only matches specific known markers.
 // NOTE: RMMV's "!" prefix (e.g., !Flame, !Door, !Chest) means "object character"
@@ -563,6 +593,10 @@ func (room *MapRoom) NPCSnapshot() []map[string]interface{} {
 			// YEP_IconsOnEvents: extract <Icon on Event: N> from commands/note.
 			if icon := ExtractIconOnEvent(n.MapEvent, n.ActivePage); icon > 0 {
 				snap["icon_on_event"] = icon
+			}
+			// YEP_EventMiniLabel: extract <Mini Label: text> from page comments.
+			if label := ExtractMiniLabel(n.ActivePage); label != "" {
+				snap["label"] = label
 			}
 		} else {
 			// No active page — NPC is invisible
@@ -840,6 +874,10 @@ func (room *MapRoom) NPCSnapshotForPlayer(state GameStateReader) []map[string]in
 			// YEP_IconsOnEvents: extract <Icon on Event: N> from commands/note.
 			if icon := ExtractIconOnEvent(n.MapEvent, activePage); icon > 0 {
 				snap["icon_on_event"] = icon
+			}
+			// YEP_EventMiniLabel: extract <Mini Label: text> from page comments.
+			if label := ExtractMiniLabel(activePage); label != "" {
+				snap["label"] = label
 			}
 		} else {
 			snap["walk_name"] = ""

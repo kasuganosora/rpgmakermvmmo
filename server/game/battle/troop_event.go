@@ -35,6 +35,7 @@ type TroopEventRunner struct {
 	waitForAck     func()               // blocks until client acknowledges (for Show Text)
 	actorCount     func() int           // returns number of actors in battle
 	actorDBID      func(index int) int  // returns actor database ID at battle index
+	enemyCount     func() int           // returns number of enemies in battle
 }
 
 // TroopEventConfig configures a TroopEventRunner.
@@ -59,6 +60,7 @@ type TroopEventConfig struct {
 	WaitForAck     func() // blocks until client acknowledges (for Show Text)
 	ActorCount     func() int          // returns number of actors in battle
 	ActorDBID      func(index int) int // returns actor database ID at battle index
+	EnemyCount     func() int          // returns number of enemies in battle
 }
 
 // NewTroopEventRunner creates a runner for troop battle events.
@@ -90,7 +92,16 @@ func NewTroopEventRunner(cfg TroopEventConfig) *TroopEventRunner {
 		waitForAck:    cfg.WaitForAck,
 		actorCount:    cfg.ActorCount,
 		actorDBID:     cfg.ActorDBID,
+		enemyCount:    cfg.EnemyCount,
 	}
+}
+
+// getEnemyCount returns the number of enemies, falling back to 8 (RMMV default).
+func (r *TroopEventRunner) getEnemyCount() int {
+	if r.enemyCount != nil {
+		return r.enemyCount()
+	}
+	return 8
 }
 
 // RunTurnStart evaluates span=0 (battle-once) and span=1 (turn) pages at turn start.
@@ -632,7 +643,7 @@ func (r *TroopEventRunner) handleChangeEnemyHP(cmd resource.EventCommand) {
 
 	if enemyIdx == -1 {
 		// All enemies.
-		for i := 0; i < 8; i++ {
+		for i := 0; i < r.getEnemyCount(); i++ {
 			r.changeEnemyHP(i, val)
 		}
 	} else {
@@ -660,7 +671,7 @@ func (r *TroopEventRunner) handleChangeEnemyMP(cmd resource.EventCommand) {
 	}
 
 	if enemyIdx == -1 {
-		for i := 0; i < 8; i++ {
+		for i := 0; i < r.getEnemyCount(); i++ {
 			r.changeEnemyMP(i, val)
 		}
 	} else {
@@ -685,7 +696,7 @@ func (r *TroopEventRunner) handleChangeEnemyState(cmd resource.EventCommand) {
 	}
 
 	if enemyIdx == -1 {
-		for i := 0; i < 8; i++ {
+		for i := 0; i < r.getEnemyCount(); i++ {
 			handler(false, i, stateID)
 		}
 	} else {
@@ -713,7 +724,7 @@ func (r *TroopEventRunner) handleChangeEnemyTP(cmd resource.EventCommand) {
 	}
 
 	if enemyIdx == -1 {
-		for i := 0; i < 8; i++ {
+		for i := 0; i < r.getEnemyCount(); i++ {
 			r.changeEnemyTP(i, val)
 		}
 	} else {
@@ -746,7 +757,7 @@ func (r *TroopEventRunner) handleEnemyRecoverAll(cmd resource.EventCommand) {
 	}
 	enemyIdx := r.paramInt(cmd.Parameters, 0)
 	if enemyIdx == -1 {
-		for i := 0; i < 8; i++ {
+		for i := 0; i < r.getEnemyCount(); i++ {
 			r.recoverEnemy(i)
 		}
 	} else {
@@ -822,11 +833,12 @@ func (r *TroopEventRunner) handleShowText(cmd resource.EventCommand, list []reso
 		lines = append(lines, r.paramString(list[*idx].Parameters, 0))
 		*idx++
 	}
-	// Forward as battle dialogue event.
-	if r.emit != nil && len(lines) > 0 {
+	// Forward as battle dialogue event (emit even with no continuation lines).
+	if r.emit != nil {
+		textPayload := strings.Join(lines, "\n")
 		r.emit(&EventTroopCommand{
 			Code:   101,
-			Params: append(cmd.Parameters, strings.Join(lines, "\n")),
+			Params: append(cmd.Parameters, textPayload),
 		})
 		// Wait for client to finish displaying the text before continuing.
 		if r.waitForAck != nil {

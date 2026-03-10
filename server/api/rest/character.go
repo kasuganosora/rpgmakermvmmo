@@ -128,12 +128,19 @@ func (h *CharacterHandler) Create(c *gin.Context) {
 		}
 	}
 
-	// Initialize game variables and equipment from the original game's CE 1.
+	// Initialize game switches, variables and equipment from the original game's CE 1.
 	// ExtractCharInit statically parses CE 1 (and called sub-CEs) to extract
-	// Control Variables (code 122) and EquipChange plugin commands (code 356),
-	// replacing previously hardcoded values.
+	// Control Switches (code 121), Control Variables (code 122) and
+	// EquipChange plugin commands (code 356), replacing previously hardcoded values.
 	if h.res != nil {
 		if initData := h.res.ExtractCharInit(1); initData != nil {
+			for _, sw := range initData.Switches {
+				if sw.Value { // 只保存 ON 的开关（DB 默认为 OFF）
+					h.db.Create(&model.CharSwitch{
+						CharID: char.ID, SwitchID: sw.SwitchID, Value: true,
+					})
+				}
+			}
 			for _, v := range initData.Variables {
 				h.db.Create(&model.CharVariable{
 					CharID: char.ID, VariableID: v.VariableID, Value: v.Value,

@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -163,6 +165,13 @@ func main() {
 		}
 		return ps.VariablesSnapshot()
 	})
+	battleMgr.SetSwitchSnapshotFn(func(charID int64) map[int]bool {
+		ps, err := wm.PlayerStateManager().GetOrLoad(charID)
+		if err != nil {
+			return nil
+		}
+		return ps.SwitchesSnapshot()
+	})
 	battleMgr.RegisterHandlers(wsRouter)
 
 	npcH := apows.NewNPCHandlers(db, res, wm, logger)
@@ -182,7 +191,7 @@ func main() {
 	partyH.RegisterHandlers(wsRouter)
 
 	// TemplateEvent.js hook handlers (for self-variables and RandomPos synchronization)
-	templateEventH := apows.NewTemplateEventHandlers(db, wm, sm, logger)
+	templateEventH := apows.NewTemplateEventHandlers(db, wm, sm, res, logger)
 	templateEventH.RegisterHandlers(wsRouter)
 
 	wsRouter.On("chat_send", chatH.HandleSend)
@@ -324,7 +333,14 @@ func main() {
 		r.StaticFile("/", cfg.Server.GameDir+"/index.html")
 		// NoRoute fallback: try to serve from game dir (for js/, data/, img/, audio/, fonts/).
 		r.NoRoute(func(c *gin.Context) {
-			path := cfg.Server.GameDir + c.Request.URL.Path
+			cleaned := filepath.Clean(c.Request.URL.Path)
+			path := filepath.Join(cfg.Server.GameDir, cleaned)
+			absGameDir, _ := filepath.Abs(cfg.Server.GameDir)
+			absPath, _ := filepath.Abs(path)
+			if !strings.HasPrefix(absPath, absGameDir) {
+				c.JSON(403, gin.H{"error": "forbidden"})
+				return
+			}
 			if _, err := os.Stat(path); err == nil {
 				c.File(path)
 				return

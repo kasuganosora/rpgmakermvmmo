@@ -36,10 +36,13 @@ func (h *MailHandler) List(c *gin.Context) {
 	}
 
 	var mails []model.Mail
-	h.db.Where("to_char_id = ? AND (expire_at IS NULL OR expire_at > ?)", charID, time.Now()).
+	if err := h.db.Where("to_char_id = ? AND (expire_at IS NULL OR expire_at > ?)", charID, time.Now()).
 		Order("created_at DESC").
 		Limit(50).
-		Find(&mails)
+		Find(&mails).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"mails": mails})
 }
 

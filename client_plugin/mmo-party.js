@@ -168,7 +168,8 @@
     function showInviteDialog(data) {
         if (_inviteDialog) return;
 
-        var countdown = 30;
+        var countdown = (window.MMO_CLIENT_CONFIG && window.MMO_CLIENT_CONFIG.party &&
+                         window.MMO_CLIENT_CONFIG.party.inviteTimeoutSeconds) || 30;
         var dlg = new L2_Dialog({
             title: 'Party Invite',
             content: (data.from_name || '?') + ' invites you to a party.\n' +
@@ -226,9 +227,12 @@
      */
     Scene_Map.prototype.createAllWindows = function () {
         _Scene_Map_createAllWindows3.call(this);
-        this._partyPanel = new PartyPanel();
-        this.addChild(this._partyPanel);
-        $MMO._partyPanel = this._partyPanel;
+        if (window.MMO_CLIENT_CONFIG && window.MMO_CLIENT_CONFIG.party &&
+            window.MMO_CLIENT_CONFIG.party.enabled === true) {
+            this._partyPanel = new PartyPanel();
+            this.addChild(this._partyPanel);
+            $MMO._partyPanel = this._partyPanel;
+        }
     };
 
     // ═══════════════════════════════════════════════════════════

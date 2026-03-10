@@ -383,7 +383,8 @@
                 title: '好友请求',
                 content: msg,
                 type: 'info',
-                duration: (options.timeout || 5000) / 1000 * 60, // 毫秒转帧数
+                duration: (options.timeout || (window.MMO_CLIENT_CONFIG && window.MMO_CLIENT_CONFIG.social &&
+                           window.MMO_CLIENT_CONFIG.social.notificationTimeoutMs) || 5000) / 1000 * 60, // 毫秒转帧数
                 closable: true,
                 onClose: function () {}
             });
@@ -396,7 +397,8 @@
                 };
             }
         } else {
-            L2_Notification.info('提示', msg, (options.timeout || 5000) / 1000 * 60);
+            L2_Notification.info('提示', msg, (options.timeout || (window.MMO_CLIENT_CONFIG && window.MMO_CLIENT_CONFIG.social &&
+                window.MMO_CLIENT_CONFIG.social.notificationTimeoutMs) || 5000) / 1000 * 60);
         }
     };
 
@@ -412,12 +414,15 @@
      */
     Scene_Map.prototype.createAllWindows = function () {
         _Scene_Map_createAllWindows4.call(this);
-        this._friendList = new FriendListPanel();
-        this._guildInfo = new GuildInfoPanel();
-        this.addChild(this._friendList);
-        this.addChild(this._guildInfo);
-        $MMO._friendListWin = this._friendList;
-        $MMO._guildInfoWin = this._guildInfo;
+        if (window.MMO_CLIENT_CONFIG && window.MMO_CLIENT_CONFIG.social &&
+            window.MMO_CLIENT_CONFIG.social.enabled === true) {
+            this._friendList = new FriendListPanel();
+            this._guildInfo = new GuildInfoPanel();
+            this.addChild(this._friendList);
+            this.addChild(this._guildInfo);
+            $MMO._friendListWin = this._friendList;
+            $MMO._guildInfoWin = this._guildInfo;
+        }
     };
 
     // ═══════════════════════════════════════════════════════════

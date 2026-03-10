@@ -82,6 +82,9 @@
         this._npcIconId = data.icon_on_event || 0;
         this._npcIconSprite = null;
         this._npcIconDrawn = false;
+        // 服务器传来的迷你标签文本（对应 YEP_EventMiniLabel 的 <Mini Label: text>）。
+        this._npcLabel = data.label || '';
+        this._npcLabelSprite = null;
         // 无图像的事件初始设为不可见（updateVisibility 每帧持续维护此状态）。
         if (!walkName && tileId === 0) this.visible = false;
     };
@@ -168,6 +171,15 @@
         // 更新事件图标。
         this._npcIconId = data.icon_on_event || 0;
         this._npcIconDrawn = false;
+        // 更新迷你标签（页面切换时文本可能改变）。
+        var newLabel = data.label || '';
+        if (newLabel !== this._npcLabel) {
+            this._npcLabel = newLabel;
+            if (this._npcLabelSprite && this._npcLabelSprite.parent) {
+                this._npcLabelSprite.parent.removeChild(this._npcLabelSprite);
+            }
+            this._npcLabelSprite = null;
+        }
         // 有图像时显示，否则隐藏。
         this.visible = !!walkName || tileId > 0;
     };
@@ -194,6 +206,7 @@
         if (c._tileId > 0 && !$gameMap.tileset()) return;
         Sprite_Character.prototype.update.call(this);
         this._updateNpcIcon();
+        this._updateNpcLabel();
     };
 
     /**
@@ -240,6 +253,48 @@
         // 每帧更新位置，跟随角色移动。
         this._npcIconSprite.x = this.x;
         this._npcIconSprite.y = this.y - this.height + 12;
+    };
+
+    /**
+     * 更新事件头顶迷你标签精灵（对应 YEP_EventMiniLabel 的 <Mini Label: text>）。
+     * 白色小字 + 半透明黑色背景，定位在角色精灵头顶。
+     */
+    Sprite_ServerNPC.prototype._updateNpcLabel = function () {
+        if (!this._npcLabel) {
+            if (this._npcLabelSprite && this._npcLabelSprite.parent) {
+                this._npcLabelSprite.parent.removeChild(this._npcLabelSprite);
+                this._npcLabelSprite = null;
+            }
+            return;
+        }
+        // 首次创建标签精灵。
+        if (!this._npcLabelSprite) {
+            if (!this.parent) return;
+            var fontSize = 12;
+            var padding = 4;
+            // 用临时 Bitmap 测量文本宽度。
+            var tmp = new Bitmap(1, 1);
+            tmp.fontSize = fontSize;
+            var textW = tmp.measureTextWidth(this._npcLabel);
+            var w = Math.max(textW + padding * 2, 40);
+            var h = fontSize + padding * 2;
+            var bmp = new Bitmap(w, h);
+            bmp.fontSize = fontSize;
+            // 半透明背景。
+            bmp.fillAll('rgba(0,0,0,0.55)');
+            // 白色文字。
+            bmp.textColor = '#ffffff';
+            bmp.drawText(this._npcLabel, padding, 0, w - padding * 2, h, 'center');
+            var sp = new Sprite(bmp);
+            sp.anchor.x = 0.5;
+            sp.anchor.y = 1;
+            sp.z = 6;
+            this._npcLabelSprite = sp;
+            this.parent.addChild(sp);
+        }
+        // 每帧跟随角色位置（标签绘制在精灵头顶上方 4px）。
+        this._npcLabelSprite.x = this.x;
+        this._npcLabelSprite.y = this.y - this.height - 4;
     };
 
     // ═══════════════════════════════════════════════════════════
@@ -344,9 +399,12 @@
             var self = this;
             Object.keys(this._sprites).forEach(function (id) {
                 var sp = self._sprites[id];
-                // 图标精灵是 tilemap 的兄弟节点，需要单独移除。
+                // 图标/标签精灵是 tilemap 的兄弟节点，需要单独移除。
                 if (sp && sp._npcIconSprite && sp._npcIconSprite.parent) {
                     sp._npcIconSprite.parent.removeChild(sp._npcIconSprite);
+                }
+                if (sp && sp._npcLabelSprite && sp._npcLabelSprite.parent) {
+                    sp._npcLabelSprite.parent.removeChild(sp._npcLabelSprite);
                 }
                 if (sp && sp.parent) sp.parent.removeChild(sp);
             });
@@ -506,17 +564,13 @@
     var _Game_Map_updateEvents = Game_Map.prototype.updateEvents;
     Game_Map.prototype.updateEvents = function () {
         // ---------------------------------------------------------------
-        // 同步 switch 15（"事件进行中"标志）。
-        // 原版游戏由 CE 10 在事件开始时设置，但 MMO 中 CE 10 在服务端执行，
-        // 开关变更可能未同步到客户端。
-        // 在此根据客户端可观测状态推导：对话显示中 或 服务端事件进行中 → s15=true。
-        // CE 201 依赖此开关决定是否显示立绘。
+        // switch 15（"事件进行中"标志）由服务端 CE 10/CE 11 正常执行时通过
+        // switch_change 消息同步到客户端，无需在此合成。
+        // 之前的合成逻辑把 _serverEventActive 等同于 switch 15，但原版中
+        // switch 15 只在 CE 10 显式设置（且需 switch 30 条件），例如 Event 156
+        //（开始游戏）在"開始/只看概要"选择前并不调用 CE 10，因此 switch 15
+        // 应保持 OFF。合成逻辑强制 ON 导致 CE 201 误显示立绘。
         // ---------------------------------------------------------------
-        if ($gameSwitches) {
-            var inServerEvent = !!$MMO._serverEventActive ||
-                ($gameMessage && $gameMessage.isBusy());
-            $gameSwitches._data[15] = inServerEvent;
-        }
 
         // 对每个公共事件先调用 refresh() 再 update()，
         // 确保开关变化后 interpreter 被正确创建。
@@ -532,48 +586,6 @@
                     // 若引用了未初始化的自定义属性（如 $gameActors.actor(1).QTE）会抛错。
                     // 捕获异常防止一个 CE 的错误中断所有 CE 的执行。
                     console.warn('[MMO] CE update error (CE' + this._commonEvents[i]._commonEventId + '):', ex.message);
-                }
-                // DEBUG: 每 300 帧 (~5 秒) 输出 CE 201 关键变量
-                var ceId = this._commonEvents[i]._commonEventId;
-                if (ceId === 201 && Graphics.frameCount % 300 === 0) {
-                    var hasInterp = !!this._commonEvents[i]._interpreter;
-                    var s15 = $gameSwitches ? $gameSwitches._data[15] : '?';
-                    var s48 = $gameSwitches ? $gameSwitches._data[48] : '?';
-                    var s101 = $gameSwitches ? $gameSwitches._data[101] : '?';
-                    var s45 = $gameSwitches ? $gameSwitches._data[45] : '?';
-                    var s46 = $gameSwitches ? $gameSwitches._data[46] : '?';
-                    var p60 = $gameScreen ? !!$gameScreen.picture(60) : '?';
-                    var p66 = $gameScreen ? !!$gameScreen.picture(66) : '?';
-                    var p35 = $gameScreen ? !!$gameScreen.picture(35) : '?';
-                    var eq1 = ($gameActors && $gameActors._data[1] && $gameActors._data[1]._equips[1]) ? $gameActors._data[1]._equips[1]._itemId : '?';
-                    console.log('[MMO] CE201 dbg: interp=' + hasInterp + ' s15=' + s15 + ' s45=' + s45 + ' s46=' + s46 + ' s48=' + s48 + ' s101=' + s101 + ' p60=' + p60 + ' p66=' + p66 + ' p35=' + p35 + ' eq1=' + eq1);
-                    // Check picture data detail
-                    var pic35 = $gameScreen ? $gameScreen.picture(35) : null;
-                    if (pic35) {
-                        console.log('[MMO] PIC35 data: name=' + pic35.name() + ' x=' + pic35.x() + ' y=' + pic35.y() + ' sx=' + pic35.scaleX() + ' sy=' + pic35.scaleY() + ' op=' + pic35.opacity());
-                    }
-                    // Check sprite rendering state
-                    var scene = SceneManager._scene;
-                    var ss = scene && scene._spriteset;
-                    var pc = ss && ss._pictureContainer;
-                    if (pc) {
-                        var sp35 = null;
-                        for (var k = 0; k < pc.children.length; k++) {
-                            if (pc.children[k]._pictureId === 35) { sp35 = pc.children[k]; break; }
-                        }
-                        if (sp35) {
-                            var bm = sp35.bitmap;
-                            console.log('[MMO] SP35 sprite: vis=' + sp35.visible + ' x=' + sp35.x + ' y=' + sp35.y + ' op=' + sp35.opacity + ' sx=' + sp35.scale.x + ' sy=' + sp35.scale.y + ' bm=' + (bm ? (bm.isReady() ? bm.width + 'x' + bm.height : 'loading') : 'null') + ' name=' + sp35._pictureName);
-                        } else {
-                            console.log('[MMO] SP35 sprite: NOT FOUND in pictureContainer (' + pc.children.length + ' children)');
-                        }
-                        // Check container visibility
-                        console.log('[MMO] PicContainer: vis=' + pc.visible + ' x=' + pc.x + ' y=' + pc.y + ' children=' + pc.children.length);
-                    }
-                    // Check var 916 (pose ID) and switch 131 (transformation)
-                    var v916 = $gameVariables ? $gameVariables.value(916) : '?';
-                    var s131 = $gameSwitches ? $gameSwitches._data[131] : '?';
-                    console.log('[MMO] CE201 extra: v916=' + v916 + ' s131=' + s131);
                 }
             }
         }
@@ -870,8 +882,8 @@
         if ($gameMessage && $gameMessage.isBusy()) {
             $gameMessage.clear();
         }
-        // 标记事件结束：关闭 switch 15（"事件进行中"标志）。
-        // 客户端并行 CE 201 依赖此开关决定是否显示立绘。
+        // 清除 switch 15 作为事件结束安全网。
+        // switch 15 的开启由服务端 CE 10 通过 switch_change 管理。
         if ($gameSwitches) {
             $gameSwitches._data[15] = false;
         }

@@ -182,8 +182,8 @@ func (a *templateEventAdapter) Apply(rl *ResourceLoader, params map[string]strin
 			applyTemplate(ev, tmplEv, eventOverride)
 
 			// IntegrateNote: merge template and original event notes.
-			// Only applies when the event has <OverRide>/<上書き> tag or AutoOverride is on.
-			if integrateNote > 0 && (autoOverride || hasOverrideTag(ev.Note)) {
+			// Only applies unconditionally when integrateNote > 0 (matches TemplateEvent.js client behavior).
+			if integrateNote > 0 {
 				integrateNotes(ev, tmplEv, integrateNote)
 			}
 			applied++
@@ -360,14 +360,16 @@ func (a *regionRestrictionsAdapter) Name() string { return "YEP_RegionRestrictio
 
 func (a *regionRestrictionsAdapter) Apply(rl *ResourceLoader, params map[string]string) error {
 	rr := &RegionRestrictions{
-		EventRestrict: parseIntList(params["Event Restrict"]),
-		AllRestrict:   parseIntList(params["All Restrict"]),
-		EventAllow:    parseIntList(params["Event Allow"]),
-		AllAllow:      parseIntList(params["All Allow"]),
+		PlayerRestrict: parseIntList(params["Player Restrict"]),
+		PlayerAllow:    parseIntList(params["Player Allow"]),
+		EventRestrict:  parseIntList(params["Event Restrict"]),
+		AllRestrict:    parseIntList(params["All Restrict"]),
+		EventAllow:     parseIntList(params["Event Allow"]),
+		AllAllow:       parseIntList(params["All Allow"]),
 	}
 	rl.RegionRestr = rr
-	fmt.Printf("[YEP_RegionRestrictions] event_restrict=%v all_restrict=%v event_allow=%v all_allow=%v\n",
-		rr.EventRestrict, rr.AllRestrict, rr.EventAllow, rr.AllAllow)
+	fmt.Printf("[YEP_RegionRestrictions] player_restrict=%v event_restrict=%v all_restrict=%v\n",
+		rr.PlayerRestrict, rr.EventRestrict, rr.AllRestrict)
 	return nil
 }
 

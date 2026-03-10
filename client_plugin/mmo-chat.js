@@ -43,8 +43,12 @@
     // ═══════════════════════════════════════════════════════════
     //  常量配置
     // ═══════════════════════════════════════════════════════════
-    /** @type {Array<string>} 全部频道标识符列表。 */
-    var CHANNELS = ['world', 'party', 'guild', 'battle', 'system', 'private'];
+    /** @type {Array<string>} 全部频道标识符列表，从客户端配置读取。 */
+    var CHANNELS = (window.MMO_CLIENT_CONFIG && window.MMO_CLIENT_CONFIG.chat &&
+                    Array.isArray(window.MMO_CLIENT_CONFIG.chat.channels) &&
+                    window.MMO_CLIENT_CONFIG.chat.channels.length > 0)
+                   ? window.MMO_CLIENT_CONFIG.chat.channels
+                   : ['world', 'party', 'guild', 'battle', 'system', 'private'];
 
     /** @type {Object} 频道显示名称映射。 */
     var CHANNEL_LABELS = {
@@ -62,8 +66,9 @@
         private: '#DD88FF'
     };
 
-    /** @type {number} 每频道最大消息历史条数。 */
-    var MAX_MESSAGES = 100;
+    /** @type {number} 每频道最大消息历史条数，从客户端配置读取。 */
+    var MAX_MESSAGES = (window.MMO_CLIENT_CONFIG && window.MMO_CLIENT_CONFIG.chat &&
+                        window.MMO_CLIENT_CONFIG.chat.maxMessages) || 100;
     /** @type {number} 聊天框宽度。 */
     var CHAT_W = 260;
     /** @type {number} 聊天框高度。 */
@@ -82,8 +87,9 @@
     // ═══════════════════════════════════════════════════════════
     //  全局状态
     // ═══════════════════════════════════════════════════════════
-    /** @type {Object} 各频道消息历史，键为频道名，值为消息数组。 */
-    $MMO._chatHistory = { world: [], party: [], guild: [], battle: [], system: [], private: [] };
+    /** @type {Object} 各频道消息历史，键为频道名，值为消息数组。按 CHANNELS 动态初始化。 */
+    $MMO._chatHistory = {};
+    CHANNELS.forEach(function (ch) { $MMO._chatHistory[ch] = []; });
     /** @type {string} 当前活跃频道。 */
     $MMO._chatChannel = 'world';
     /** @type {Object} 各频道未读消息计数。 */
@@ -554,9 +560,15 @@
      */
     Scene_Map.prototype.createAllWindows = function () {
         _Scene_Map_createAllWindows6.call(this);
-        _chatBox = new ChatBox();
-        this.addChild(_chatBox);
-        $MMO.registerBottomUI(_chatBox);
+        if (window.MMO_CLIENT_CONFIG && window.MMO_CLIENT_CONFIG.chat &&
+            window.MMO_CLIENT_CONFIG.chat.enabled === true) {
+            _chatBox = new ChatBox();
+            this.addChild(_chatBox);
+            $MMO.registerBottomUI(_chatBox);
+            // Re-register Enter key listener (removed in terminate).
+            window.removeEventListener('keydown', _chatKeydownHandler);
+            window.addEventListener('keydown', _chatKeydownHandler);
+        }
     };
 
     /** @type {Function} 原始 Scene_Map.start 引用。 */

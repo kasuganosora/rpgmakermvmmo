@@ -20,10 +20,17 @@ type CharInitEquip struct {
 	SlotIndex int
 }
 
+// CharInitSwitch 表示角色创建时需要初始化的一个开关。
+type CharInitSwitch struct {
+	SwitchID int
+	Value    bool
+}
+
 // CharInitData 包含从游戏 CE 中提取的角色初始化数据。
 type CharInitData struct {
 	Variables []CharInitVar
 	Equips    []CharInitEquip
+	Switches  []CharInitSwitch
 }
 
 // equipSlotTypeMap 将 EquipChange 插件命令的槽位类型名映射到槽位索引。
@@ -75,6 +82,17 @@ func (rl *ResourceLoader) ExtractCharInit(ceID int) *CharInitData {
 	for i, j := 0, len(data.Variables)-1; i < j; i, j = i+1, j-1 {
 		data.Variables[i], data.Variables[j] = data.Variables[j], data.Variables[i]
 	}
+
+	// 去重开关：同一开关多次赋值只保留最后一次。
+	seenSw := make(map[int]bool)
+	for i := len(raw.Switches) - 1; i >= 0; i-- {
+		sw := raw.Switches[i]
+		if !seenSw[sw.SwitchID] {
+			seenSw[sw.SwitchID] = true
+			data.Switches = append(data.Switches, sw)
+		}
+	}
+
 	return data
 }
 
@@ -93,6 +111,8 @@ func (rl *ResourceLoader) extractFromCE(ceID int, data *CharInitData, vars map[i
 			continue
 		}
 		switch cmd.Code {
+		case 121: // Control Switches
+			extractSwitchAssignment(cmd.Parameters, data)
 		case 122: // Control Variables
 			extractVarAssignment(cmd.Parameters, data, vars)
 		case 117: // Call Common Event
@@ -128,6 +148,17 @@ func extractVarAssignment(params []interface{}, data *CharInitData, vars map[int
 	for id := startID; id <= endID; id++ {
 		vars[id] = val
 		data.Variables = append(data.Variables, CharInitVar{VariableID: id, Value: val})
+	}
+}
+
+// extractSwitchAssignment 解析 code 121 (Control Switches) 指令。
+// 参数: [0]=startID, [1]=endID, [2]=value (0=ON, 1=OFF)
+func extractSwitchAssignment(params []interface{}, data *CharInitData) {
+	startID := paramIntRaw(params, 0)
+	endID := paramIntRaw(params, 1)
+	value := paramIntRaw(params, 2) == 0 // 0=ON, 1=OFF
+	for id := startID; id <= endID; id++ {
+		data.Switches = append(data.Switches, CharInitSwitch{SwitchID: id, Value: value})
 	}
 }
 
@@ -176,5 +207,5 @@ func paramIntRaw(params []interface{}, idx int) int {
 
 // String returns a human-readable summary for logging.
 func (d *CharInitData) String() string {
-	return fmt.Sprintf("CharInitData: %d variables, %d equips", len(d.Variables), len(d.Equips))
+	return fmt.Sprintf("CharInitData: %d switches, %d variables, %d equips", len(d.Switches), len(d.Variables), len(d.Equips))
 }
