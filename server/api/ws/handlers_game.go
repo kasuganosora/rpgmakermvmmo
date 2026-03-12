@@ -57,6 +57,14 @@ func (gh *GameHandlers) getInitState() interface{} {
 	return gh.res.InitState
 }
 
+// getCombatMode returns the effective combat mode from MMOConfig, defaulting to "hybrid".
+func (gh *GameHandlers) getCombatMode() string {
+	if gh.res != nil && gh.res.MMOConfig != nil && gh.res.MMOConfig.Battle != nil {
+		return gh.res.MMOConfig.Battle.GetCombatMode()
+	}
+	return "hybrid"
+}
+
 // SetAutorunFunc sets the callback for executing autorun events when a player enters a map.
 func (gh *GameHandlers) SetAutorunFunc(fn AutorunFunc) {
 	gh.autorunFn = fn
@@ -810,6 +818,7 @@ func (gh *GameHandlers) EnterMapRoom(s *player.PlayerSession, mapID, x, y, dir i
 		"switches":    jsonSwitches,
 		"equips":      equippedItems,
 		"init_state":  gh.getInitState(),
+		"combat_mode": gh.getCombatMode(),
 	})
 	s.Send(&player.Packet{Type: "map_init", Payload: initPayload})
 

@@ -36,6 +36,7 @@
         'mmo-other-players.js',
         'mmo-npc.js',
         'mmo-battle.js',
+        'mmo-realtime-battle.js',
         'mmo-battle-core.js',
         'mmo-hud.js',
         'mmo-skill-bar.js',
