@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/kasuganosora/rpgmakermvmmo/server/game/ai"
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/battle"
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/item"
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/player"
@@ -149,7 +150,7 @@ func (bh *BattleHandlers) handleMonsterDeath(
 	room *world.MapRoom,
 	monster *world.MonsterRuntime,
 ) {
-	monster.SetState(6) // StateDead placeholder
+	monster.SetState(ai.StateDead)
 
 	// Calculate drops.
 	drops := battle.CalculateDrops(monster.Template)
@@ -246,8 +247,8 @@ func (bh *BattleHandlers) awardExp(s *player.PlayerSession, exp int) {
 		}
 
 		// Sync back to session so disconnect save has correct values.
-		s.Level = char.Level
-		s.Exp = char.Exp
+		s.SetLevel(char.Level)
+		s.SetExp(char.Exp)
 
 		expPayload, err := json.Marshal(map[string]interface{}{
 			"exp":       exp,

@@ -63,8 +63,39 @@ func (wm *WorldManager) GetOrCreate(mapID int) *MapRoom {
 	room = newMapRoom(mapID, wm.res, wm.state, wm.logger)
 	wm.rooms[mapID] = room
 	go room.Run()
+	// Set up monster spawners from MMOConfig if configured.
+	wm.setupSpawners(room, mapID)
 	wm.logger.Info("map room created", zap.Int("map_id", mapID))
 	return room
+}
+
+// setupSpawners creates a Spawner for the room from MMOConfig.MonsterSpawns.
+func (wm *WorldManager) setupSpawners(room *MapRoom, mapID int) {
+	if wm.res == nil || wm.res.MMOConfig == nil {
+		return
+	}
+	var configs []SpawnConfig
+	for _, sc := range wm.res.MMOConfig.MonsterSpawns {
+		if sc.MapID != mapID {
+			continue
+		}
+		configs = append(configs, SpawnConfig{
+			MapID:      sc.MapID,
+			MonsterID:  sc.EnemyID,
+			X:          sc.X,
+			Y:          sc.Y,
+			MaxCount:   sc.MaxCount,
+			RespawnSec: sc.RespawnSec,
+			AIOverride: sc.AIOverride,
+		})
+	}
+	if len(configs) == 0 {
+		return
+	}
+	sp := NewSpawner(room, wm.res, configs, wm.logger)
+	sp.SpawnAll()
+	wm.logger.Info("monster spawner initialized",
+		zap.Int("map_id", mapID), zap.Int("spawn_groups", len(configs)))
 }
 
 // Get returns the MapRoom for mapID, or nil if it does not exist.

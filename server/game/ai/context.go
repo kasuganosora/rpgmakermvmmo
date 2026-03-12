@@ -1,13 +1,49 @@
 package ai
 
-import "time"
+import (
+	"time"
+
+	"github.com/kasuganosora/rpgmakermvmmo/server/resource"
+)
 
 // AIContext is passed to every behavior tree node during a tick.
-// It provides access to the monster, the map room, and shared resources.
 type AIContext struct {
-	Monster interface{ GetState() MonsterState }
-	Room    RoomAccessor
-	DeltaMS int64 // milliseconds since last tick
+	Monster        MonsterAccessor
+	Room           RoomAccessor
+	DeltaMS        int64 // milliseconds since last tick
+	Config         *AIProfile
+	ThreatTable    *ThreatTable
+	DamageCallback func(m MonsterAccessor, targetCharID int64) // called by AttackTarget node
+}
+
+// MonsterAccessor provides read/write access to monster state for BT nodes.
+type MonsterAccessor interface {
+	GetState() MonsterState
+	SetState(MonsterState)
+	Position() (x, y int)
+	SetPosition(x, y, dir int)
+	SpawnPosition() (x, y int)
+	GetHP() int
+	GetMaxHP() int
+	GetTarget() int64
+	SetTarget(int64)
+	GetAgi() int
+	GetCachedPath() []Point
+	SetCachedPath(path []Point, target Point)
+	GetCachedTarget() Point
+	CanMove() bool
+	ResetMoveTimer(ticks int)
+	CanAttack() bool
+	ResetAttackTimer(ticks int)
+	MarkDirty()
+}
+
+// RoomAccessor abstracts MapRoom access for the AI layer.
+type RoomAccessor interface {
+	PlayersInRange(x, y, radius int) []PlayerInfo
+	PlayerByID(charID int64) *PlayerInfo
+	TryMoveMonster(m MonsterAccessor, dir int) bool
+	GetPassMap() *resource.PassabilityMap
 }
 
 // MonsterState enumerates the high-level AI states of a monster.
@@ -22,17 +58,11 @@ const (
 	StateDead
 )
 
-// RoomAccessor abstracts MapRoom access for the AI layer.
-// Implemented by *world.MapRoom — declared here as an interface to avoid import cycle.
-type RoomAccessor interface {
-	PlayersInRange(x, y, radius int) []PlayerInfo
-}
-
 // PlayerInfo is the minimal player data the AI needs.
 type PlayerInfo struct {
-	CharID    int64
-	X, Y      int
-	HP        int
+	CharID int64
+	X, Y   int
+	HP     int
 }
 
 // TimeSince is a test-injectable time source.

@@ -4,23 +4,42 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kasuganosora/rpgmakermvmmo/server/game/ai"
 	"github.com/kasuganosora/rpgmakermvmmo/server/resource"
 	"go.uber.org/zap"
 )
 
 // Spawner manages monster respawn timers for a MapRoom.
 type Spawner struct {
-	room    *MapRoom
-	res     *resource.ResourceLoader
-	configs []SpawnConfig
-	mu      sync.Mutex
-	stopCh  chan struct{}
-	logger  *zap.Logger
+	room           *MapRoom
+	res            *resource.ResourceLoader
+	configs        []SpawnConfig
+	customProfiles map[string]*ai.AIProfile // from MMOConfig
+	mu             sync.Mutex
+	stopCh         chan struct{}
+	logger         *zap.Logger
 }
 
 // NewSpawner creates a Spawner for a MapRoom.
 func NewSpawner(room *MapRoom, res *resource.ResourceLoader, configs []SpawnConfig, logger *zap.Logger) *Spawner {
-	return &Spawner{room: room, res: res, configs: configs, stopCh: make(chan struct{}), logger: logger}
+	sp := &Spawner{room: room, res: res, configs: configs, stopCh: make(chan struct{}), logger: logger}
+	// Convert MMOConfig custom profiles to ai.AIProfile.
+	if res != nil && res.MMOConfig != nil && res.MMOConfig.MonsterAIProfiles != nil {
+		sp.customProfiles = make(map[string]*ai.AIProfile, len(res.MMOConfig.MonsterAIProfiles))
+		for name, rp := range res.MMOConfig.MonsterAIProfiles {
+			sp.customProfiles[name] = &ai.AIProfile{
+				Name:                name,
+				AggroRange:          rp.AggroRange,
+				LeashRange:          rp.LeashRange,
+				AttackRange:         rp.AttackRange,
+				AttackCooldownTicks: rp.AttackCooldownTicks,
+				MoveIntervalTicks:   rp.MoveIntervalTicks,
+				WanderRadius:        rp.WanderRadius,
+				FleeHPPercent:       rp.FleeHPPercent,
+			}
+		}
+	}
+	return sp
 }
 
 // SpawnAll spawns all configured monsters immediately (called on room creation).
@@ -51,13 +70,28 @@ func (sp *Spawner) spawnGroup(cfgIndex int, cfg SpawnConfig) {
 	// Count existing alive monsters for this spawnID.
 	alive := 0
 	for _, m := range sp.room.runtimeMonsters {
-		if m.SpawnID == cfgIndex && m.State != 6 { // 6 = StateDead equivalent
+		if m.SpawnID == cfgIndex && m.State != ai.StateDead {
 			alive++
 		}
 	}
+	// Resolve AI profile: spawn config override > enemy Note > nil (no AI).
+	var profile *ai.AIProfile
+	if cfg.AIOverride != "" {
+		profile = ai.ParseAIProfile("<AI:"+cfg.AIOverride+">", sp.customProfiles)
+	}
+	if profile == nil {
+		profile = ai.ParseAIProfile(template.Note, sp.customProfiles)
+	}
+	var tree *ai.BehaviorTree
+	if profile != nil {
+		tree = ai.BuildTree(profile)
+	}
+
 	toSpawn := cfg.MaxCount - alive
 	for i := 0; i < toSpawn; i++ {
 		m := NewMonster(template, cfgIndex, cfg.X+i, cfg.Y)
+		m.Profile = profile
+		m.AITree = tree
 		sp.room.runtimeMonsters[m.InstID] = m
 		sp.room.monsters = append(sp.room.monsters, &MonsterInstance{
 			ID:      m.InstID,
@@ -98,7 +132,11 @@ func (sp *Spawner) RespawnAfter(cfgIndex int, delay time.Duration) {
 	}()
 }
 
-// Stop cancels any pending respawn goroutines.
+// Stop cancels any pending respawn goroutines. Safe to call multiple times.
 func (sp *Spawner) Stop() {
-	close(sp.stopCh)
+	select {
+	case <-sp.stopCh:
+	default:
+		close(sp.stopCh)
+	}
 }

@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/kasuganosora/rpgmakermvmmo/server/game/ai"
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/player"
 	"github.com/kasuganosora/rpgmakermvmmo/server/resource"
 	"go.uber.org/zap"
@@ -68,7 +69,7 @@ func newMapRoom(mapID int, res *resource.ResourceLoader, state *GameState, logge
 		drops:           make(map[int64]*DropRuntimeEntry),
 		res:             res,
 		state:           state,
-		broadcastQ:      make(chan []byte, 512),
+		broadcastQ:      make(chan []byte, 2048),
 		stopCh:          make(chan struct{}),
 		logger:          logger,
 	}
@@ -165,12 +166,38 @@ func (room *MapRoom) cleanStaleSessions() {
 
 	// Broadcast player_leave outside the lock.
 	for _, id := range stale {
-		payload, _ := json.Marshal(map[string]interface{}{"char_id": id})
+		payload, _ := json.Marshal(&struct {
+			CharID int64 `json:"char_id"`
+		}{id})
 		pkt, _ := json.Marshal(&player.Packet{Type: "player_leave", Payload: payload})
 		room.broadcastRaw(pkt)
 		room.logger.Info("removed stale player from room",
 			zap.Int64("char_id", id), zap.Int("map_id", room.MapID))
 	}
+}
+
+// playerSyncPayload is the typed struct for player_sync JSON serialization.
+// Using a struct instead of map[string]interface{} reduces allocations from 20 to 2 per player.
+type playerSyncPayload struct {
+	CharID int64  `json:"char_id"`
+	X      int    `json:"x"`
+	Y      int    `json:"y"`
+	Dir    int    `json:"dir"`
+	HP     int    `json:"hp"`
+	MP     int    `json:"mp"`
+	State  string `json:"state"`
+}
+
+// monsterSyncPayload is the typed struct for monster_sync JSON serialization.
+type monsterSyncPayload struct {
+	InstID int64  `json:"inst_id"`
+	X      int    `json:"x"`
+	Y      int    `json:"y"`
+	Dir    int    `json:"dir"`
+	HP     int    `json:"hp"`
+	MaxHP  int    `json:"max_hp"`
+	Name   string `json:"name"`
+	State  int    `json:"state"`
 }
 
 // broadcastDirtyPlayers sends player_sync for any player whose position changed.
@@ -184,14 +211,14 @@ func (room *MapRoom) broadcastDirtyPlayers() {
 		}
 		x, y, dir := s.Position()
 		hp, _, mp, _ := s.Stats()
-		payload, _ := json.Marshal(map[string]interface{}{
-			"char_id": s.CharID,
-			"x":       x,
-			"y":       y,
-			"dir":     dir,
-			"hp":      hp,
-			"mp":      mp,
-			"state":   "normal",
+		payload, _ := json.Marshal(&playerSyncPayload{
+			CharID: s.CharID,
+			X:      x,
+			Y:      y,
+			Dir:    dir,
+			HP:     hp,
+			MP:     mp,
+			State:  "normal",
 		})
 		pkt, _ := json.Marshal(&player.Packet{
 			Type:    "player_sync",
@@ -201,7 +228,7 @@ func (room *MapRoom) broadcastDirtyPlayers() {
 	}
 }
 
-// tickMonsters runs one AI tick for each live monster.
+// tickMonsters runs one AI tick for each live monster and broadcasts dirty state.
 func (room *MapRoom) tickMonsters() {
 	room.mu.RLock()
 	rms := make([]*MonsterRuntime, 0, len(room.runtimeMonsters))
@@ -211,11 +238,57 @@ func (room *MapRoom) tickMonsters() {
 	room.mu.RUnlock()
 
 	for _, m := range rms {
-		if m.GetState() == 6 { // dead
+		if m.GetState() == ai.StateDead {
 			continue
 		}
+		// Decrement timers.
+		m.mu.Lock()
+		if m.MoveTimer > 0 {
+			m.MoveTimer--
+		}
+		if m.AttackTimer > 0 {
+			m.AttackTimer--
+		}
+		m.mu.Unlock()
+
 		if m.AITree != nil {
-			// TODO: build ai.AIContext and tick the behavior tree
+			ctx := &ai.AIContext{
+				Monster:     m,
+				Room:        room,
+				DeltaMS:     tickInterval.Milliseconds(),
+				Config:      m.Profile,
+				ThreatTable: m.Threat,
+			}
+			m.AITree.Tick(ctx)
+		}
+	}
+
+	// Broadcast dirty monsters.
+	for _, m := range rms {
+		m.mu.Lock()
+		isDirty := m.dirty
+		m.dirty = false
+		x, y, dir, hp, maxHP, state := m.X, m.Y, m.Dir, m.HP, m.MaxHP, m.State
+		instID := m.InstID
+		name := ""
+		if m.Template != nil {
+			name = m.Template.Name
+		}
+		m.mu.Unlock()
+
+		if isDirty {
+			payload, _ := json.Marshal(&monsterSyncPayload{
+				InstID: instID,
+				X:      x,
+				Y:      y,
+				Dir:    dir,
+				HP:     hp,
+				MaxHP:  maxHP,
+				Name:   name,
+				State:  int(state),
+			})
+			pkt, _ := json.Marshal(&player.Packet{Type: "monster_sync", Payload: payload})
+			room.broadcastRaw(pkt)
 		}
 	}
 }

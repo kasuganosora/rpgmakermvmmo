@@ -49,6 +49,14 @@ func NewGameHandlers(db *gorm.DB, wm *world.WorldManager, sm *player.SessionMana
 	return &GameHandlers{db: db, wm: wm, sm: sm, res: res, logger: logger}
 }
 
+// getInitState returns InitState from resource loader, or nil if res is nil.
+func (gh *GameHandlers) getInitState() interface{} {
+	if gh.res == nil {
+		return nil
+	}
+	return gh.res.InitState
+}
+
 // SetAutorunFunc sets the callback for executing autorun events when a player enters a map.
 func (gh *GameHandlers) SetAutorunFunc(fn AutorunFunc) {
 	gh.autorunFn = fn
@@ -187,13 +195,34 @@ func (gh *GameHandlers) HandleMove(_ context.Context, s *player.PlayerSession, r
 
 	// Grace period after map transfer/resetpos: skip SPEED check only (not passability).
 	// Reduced to 1s to minimize exploitation window. Passability always enforced.
-	inGrace := time.Since(s.LastTransfer) < 1*time.Second
+	inGrace := !s.CheckTransferCooldown(1 * time.Second)
 
 	if !inGrace {
 		// Distance check: allow at most 1 tile per tick with 1.3× tolerance.
 		// Use Euclidean distance to properly handle diagonal movement.
-		dx := float64(req.X - curX)
-		dy := float64(req.Y - curY)
+		// Account for map wrapping: on looping maps, the shortest delta may wrap.
+		ddx := req.X - curX
+		ddy := req.Y - curY
+		if gh.res != nil {
+			if pm := gh.res.Passability[s.MapID]; pm != nil {
+				if pm.IsLoopH() && pm.Width > 0 {
+					if ddx > pm.Width/2 {
+						ddx -= pm.Width
+					} else if ddx < -pm.Width/2 {
+						ddx += pm.Width
+					}
+				}
+				if pm.IsLoopV() && pm.Height > 0 {
+					if ddy > pm.Height/2 {
+						ddy -= pm.Height
+					} else if ddy < -pm.Height/2 {
+						ddy += pm.Height
+					}
+				}
+			}
+		}
+		dx := float64(ddx)
+		dy := float64(ddy)
 		dist := math.Sqrt(dx*dx + dy*dy)
 		if dist > maxMovePerTick {
 			gh.logger.Warn("speed hack detected",
@@ -219,15 +248,30 @@ func (gh *GameHandlers) HandleMove(_ context.Context, s *player.PlayerSession, r
 		pm := gh.res.Passability[s.MapID]
 		if pm != nil {
 			// Determine the movement direction from position delta.
+			// Account for map wrapping: large positive delta means we wrapped backwards.
 			moveDir := req.Dir
-			ddx, ddy := req.X-curX, req.Y-curY
-			if ddx == 1 && ddy == 0 {
+			mdx, mdy := req.X-curX, req.Y-curY
+			if pm.IsLoopH() && pm.Width > 0 {
+				if mdx > pm.Width/2 {
+					mdx -= pm.Width
+				} else if mdx < -pm.Width/2 {
+					mdx += pm.Width
+				}
+			}
+			if pm.IsLoopV() && pm.Height > 0 {
+				if mdy > pm.Height/2 {
+					mdy -= pm.Height
+				} else if mdy < -pm.Height/2 {
+					mdy += pm.Height
+				}
+			}
+			if mdx == 1 && mdy == 0 {
 				moveDir = 6 // right
-			} else if ddx == -1 && ddy == 0 {
+			} else if mdx == -1 && mdy == 0 {
 				moveDir = 4 // left
-			} else if ddx == 0 && ddy == 1 {
+			} else if mdx == 0 && mdy == 1 {
 				moveDir = 2 // down
-			} else if ddx == 0 && ddy == -1 {
+			} else if mdx == 0 && mdy == -1 {
 				moveDir = 8 // up
 			}
 
@@ -243,12 +287,6 @@ func (gh *GameHandlers) HandleMove(_ context.Context, s *player.PlayerSession, r
 			// Skip tile passability if region explicitly allows movement.
 			regionAllowed := gh.res.RegionRestr != nil && gh.res.RegionRestr.IsPlayerAllowed(destRegion)
 			if !regionAllowed {
-				// Check source tile: can leave in the move direction.
-				if !pm.CanPass(curX, curY, moveDir) {
-					sendMoveReject(s)
-					return nil
-				}
-				// Check destination tile: can enter from the reverse direction.
 				revDir := moveDir
 				switch moveDir {
 				case 2:
@@ -260,7 +298,25 @@ func (gh *GameHandlers) HandleMove(_ context.Context, s *player.PlayerSession, r
 				case 8:
 					revDir = 2
 				}
-				if !pm.CanPass(req.X, req.Y, revDir) {
+				// Event tiles override static map when present (RMMV allTiles behavior).
+				// Use event tile result if decided, otherwise fall back to static pm.
+				srcOK, dstOK := true, true
+				if room := gh.wm.GetPlayerRoom(s); room != nil {
+					if ok, decided := room.CheckEventTileOnly(curX, curY, moveDir); decided {
+						srcOK = ok
+					} else {
+						srcOK = pm.CanPass(curX, curY, moveDir)
+					}
+					if ok, decided := room.CheckEventTileOnly(req.X, req.Y, revDir); decided {
+						dstOK = ok
+					} else {
+						dstOK = pm.CanPass(req.X, req.Y, revDir)
+					}
+				} else {
+					srcOK = pm.CanPass(curX, curY, moveDir)
+					dstOK = pm.CanPass(req.X, req.Y, revDir)
+				}
+				if !srcOK || !dstOK {
 					sendMoveReject(s)
 					return nil
 				}
@@ -459,7 +515,7 @@ func (gh *GameHandlers) HandleResetPos(_ context.Context, s *player.PlayerSessio
 
 	// Set cooldown and transfer grace period (resetpos causes same desync as transfers).
 	s.SetResetPosCooldown()
-	s.LastTransfer = time.Now()
+	s.SetLastTransfer()
 
 	// Send new position to the requesting player.
 	payload, _ := json.Marshal(map[string]interface{}{
@@ -510,7 +566,7 @@ func (gh *GameHandlers) TransferPlayer(s *player.PlayerSession, mapID, x, y, dir
 		// This avoids sending map_init (which causes scene reload) and prevents
 		// the client from entering a transitional state that blocks effect acks.
 		s.SetPosition(x, y, dir)
-		s.LastTransfer = time.Now()
+		s.SetLastTransfer()
 
 		// Notify the client to reposition via reserveTransfer (lightweight for same-map).
 		payload, _ := json.Marshal(map[string]interface{}{
@@ -558,9 +614,9 @@ func (gh *GameHandlers) EnterMapRoom(s *player.PlayerSession, mapID, x, y, dir i
 		leaveMap(s, gh.wm, gh.logger)
 	}
 
-	s.MapID = mapID
+	s.SetMapInfo(mapID, s.InstanceID)
 	s.SetPosition(x, y, dir)
-	s.LastTransfer = time.Now()
+	s.SetLastTransfer()
 
 	// Clear NPC channels to prevent stale dialog acks from previous map.
 	s.ClearNPCChannels()
@@ -753,7 +809,7 @@ func (gh *GameHandlers) EnterMapRoom(s *player.PlayerSession, mapID, x, y, dir i
 		"variables":   jsonVars,
 		"switches":    jsonSwitches,
 		"equips":      equippedItems,
-		"init_state":  gh.res.InitState,
+		"init_state":  gh.getInitState(),
 	})
 	s.Send(&player.Packet{Type: "map_init", Payload: initPayload})
 

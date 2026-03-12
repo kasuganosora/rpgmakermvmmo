@@ -151,10 +151,11 @@ func TestBuildPassability_SkipsShadowAndRegionLayers(t *testing.T) {
 	}
 }
 
-// TestBuildPassability_BottomLayerFirst verifies that RMMV's layer iteration
-// order is correct: layer 0 (bottom) is checked first, not layer 3 (top).
-// The first non-star tile determines passability.
-func TestBuildPassability_BottomLayerFirst(t *testing.T) {
+// TestBuildPassability_TopLayerFirst verifies that RMMV's layer iteration
+// order is correct: layers are checked top-to-bottom (3→0), matching RMMV's
+// layeredTiles() which returns [z=3, z=2, z=1, z=0]. The first non-star
+// tile encountered determines passability.
+func TestBuildPassability_TopLayerFirst(t *testing.T) {
 	w, h := 1, 1
 	// Layer 0: tile 1 (passable, flag=0)
 	// Layer 1: tile 2 (blocked, flag=0x0F)
@@ -180,12 +181,178 @@ func TestBuildPassability_BottomLayerFirst(t *testing.T) {
 	pm := rl.Passability[1]
 	require.NotNil(t, pm)
 
-	// Layer 0 (tile 1, passable) should win since it's checked first.
-	// If the server incorrectly iterates top-to-bottom, layer 1 (blocked) would win.
+	// RMMV iterates top-to-bottom: layer 3 (star, skip) → layer 2 (star, skip) →
+	// layer 1 (tile 2, blocked, flag=0x0F) → stop. Layer 1 determines passability.
+	for _, dir := range []int{2, 4, 6, 8} {
+		assert.False(t, pm.CanPass(0, 0, dir),
+			"dir=%d: layer 1 (blocked) should take priority because it's checked before layer 0", dir)
+	}
+}
+
+// TestBuildPassability_TopLayerPassable verifies that when the top non-star layer is
+// passable, the tile is passable even if a lower layer would block.
+func TestBuildPassability_TopLayerPassable(t *testing.T) {
+	w, h := 1, 1
+	// Layer 0: tile 2 (blocked, flag=0x0F)
+	// Layer 1: tile 0 (star, skipped)
+	// Layer 2: tile 1 (passable, flag=0) — first non-star from top
+	// Layer 3: tile 0 (star, skipped)
+	data := make([]int, 4*w*h)
+	data[0] = 2 // layer 0: blocked
+	data[1] = 0 // layer 1: star
+	data[2] = 1 // layer 2: passable
+	data[3] = 0 // layer 3: star
+
+	flags := make([]int, 16)
+	flags[0] = 0x10 // star
+	flags[1] = 0    // passable
+	flags[2] = 0x0F // blocked
+
+	rl := NewLoader("", "")
+	rl.Tilesets = []*Tileset{{ID: 1, Flags: flags}}
+	rl.Maps = map[int]*MapData{
+		1: {ID: 1, Width: w, Height: h, TilesetID: 1, Data: data},
+	}
+	rl.buildPassability()
+
+	pm := rl.Passability[1]
+	require.NotNil(t, pm)
+
+	// Layer 2 (passable) is the first non-star from top, should win.
 	for _, dir := range []int{2, 4, 6, 8} {
 		assert.True(t, pm.CanPass(0, 0, dir),
-			"dir=%d: layer 0 (passable) should take priority over layer 1 (blocked)", dir)
+			"dir=%d: layer 2 (passable) should win as first non-star from top", dir)
 	}
+}
+
+// ---- MapData scroll/loop helpers ----
+
+func TestMapData_ScrollType(t *testing.T) {
+	tests := []struct {
+		scrollType int
+		loopH      bool
+		loopV      bool
+	}{
+		{0, false, false},
+		{1, false, true},
+		{2, true, false},
+		{3, true, true},
+	}
+	for _, tc := range tests {
+		md := &MapData{Width: 20, Height: 15, ScrollType: tc.scrollType}
+		assert.Equal(t, tc.loopH, md.IsLoopHorizontal(), "scrollType=%d loopH", tc.scrollType)
+		assert.Equal(t, tc.loopV, md.IsLoopVertical(), "scrollType=%d loopV", tc.scrollType)
+	}
+}
+
+func TestMapData_RoundX_NoLoop(t *testing.T) {
+	md := &MapData{Width: 20, Height: 15, ScrollType: 0}
+	assert.Equal(t, -1, md.RoundX(-1))
+	assert.Equal(t, 0, md.RoundX(0))
+	assert.Equal(t, 20, md.RoundX(20))
+}
+
+func TestMapData_RoundX_HorizontalLoop(t *testing.T) {
+	md := &MapData{Width: 20, Height: 15, ScrollType: 2}
+	assert.Equal(t, 19, md.RoundX(-1))
+	assert.Equal(t, 0, md.RoundX(0))
+	assert.Equal(t, 0, md.RoundX(20))
+	assert.Equal(t, 5, md.RoundX(25))
+}
+
+func TestMapData_RoundY_NoLoop(t *testing.T) {
+	md := &MapData{Width: 20, Height: 15, ScrollType: 0}
+	assert.Equal(t, -1, md.RoundY(-1))
+	assert.Equal(t, 15, md.RoundY(15))
+}
+
+func TestMapData_RoundY_VerticalLoop(t *testing.T) {
+	md := &MapData{Width: 20, Height: 15, ScrollType: 1}
+	assert.Equal(t, 14, md.RoundY(-1))
+	assert.Equal(t, 0, md.RoundY(0))
+	assert.Equal(t, 0, md.RoundY(15))
+	assert.Equal(t, 5, md.RoundY(20))
+}
+
+// ---- PassabilityMap wrapping ----
+
+func TestPassabilityMap_Wrapping_Flags(t *testing.T) {
+	w, h := 10, 10
+	data := make([]int, 4*w*h) // all zeros = star tiles
+	flags := make([]int, 8)
+	flags[0] = 0x10 // star
+
+	rl := NewLoader("", "")
+	rl.Tilesets = []*Tileset{{ID: 1, Flags: flags}}
+	rl.Maps = map[int]*MapData{
+		1: {ID: 1, Width: w, Height: h, TilesetID: 1, Data: data, ScrollType: 3},
+	}
+	rl.buildPassability()
+	pm := rl.Passability[1]
+	require.NotNil(t, pm)
+	assert.True(t, pm.IsLoopH())
+	assert.True(t, pm.IsLoopV())
+}
+
+func TestPassabilityMap_RoundX_Wrapping(t *testing.T) {
+	pm := NewPassabilityMap(10, 10)
+	// No wrapping by default.
+	assert.Equal(t, -1, pm.RoundX(-1))
+	assert.Equal(t, 10, pm.RoundX(10))
+}
+
+func TestPassabilityMap_IsValid_NoLoop(t *testing.T) {
+	pm := NewPassabilityMap(10, 10)
+	assert.True(t, pm.IsValid(0, 0))
+	assert.True(t, pm.IsValid(9, 9))
+	assert.False(t, pm.IsValid(-1, 0))
+	assert.False(t, pm.IsValid(10, 0))
+	assert.False(t, pm.IsValid(0, -1))
+	assert.False(t, pm.IsValid(0, 10))
+}
+
+func TestPassabilityMap_CanPass_Wrapping(t *testing.T) {
+	// Create a looping map with specific passability.
+	w, h := 5, 5
+	// Layer 0 only, tile IDs = column index.
+	data := make([]int, w*h)
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			data[y*w+x] = 1 // passable tile
+		}
+	}
+	// Block tile at (0,0).
+	data[0] = 2
+
+	flags := make([]int, 8)
+	flags[1] = 0x00 // passable
+	flags[2] = 0x0F // blocked all directions
+
+	rl := NewLoader("", "")
+	rl.Tilesets = []*Tileset{{ID: 1, Flags: flags}}
+	rl.Maps = map[int]*MapData{
+		1: {ID: 1, Width: w, Height: h, TilesetID: 1, Data: data, ScrollType: 2}, // horizontal loop
+	}
+	rl.buildPassability()
+	pm := rl.Passability[1]
+	require.NotNil(t, pm)
+
+	// (0,0) is blocked.
+	assert.False(t, pm.CanPass(0, 0, 2))
+	// (1,0) is passable.
+	assert.True(t, pm.CanPass(1, 0, 2))
+	// x=-1 wraps to x=4 (passable).
+	assert.True(t, pm.CanPass(-1, 0, 2))
+	// x=5 wraps to x=0 (blocked).
+	assert.False(t, pm.CanPass(5, 0, 2))
+}
+
+func TestPassabilityMap_RegionAt_Wrapping(t *testing.T) {
+	pm := NewPassabilityMap(5, 5)
+	pm.SetRegion(4, 4, 42)
+	// Without loop: out of bounds returns 0.
+	assert.Equal(t, 0, pm.RegionAt(-1, 0))
+	assert.Equal(t, 42, pm.RegionAt(4, 4))
 }
 
 // ---- ResourceLoader construction ----

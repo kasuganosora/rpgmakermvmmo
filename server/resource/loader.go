@@ -161,21 +161,23 @@ type EnemyAction struct {
 }
 
 type Enemy struct {
-	ID     int    `json:"id"`
-	Name   string `json:"name"`
-	HP     int    // maxHP — populated from params[0]
-	MP     int    // maxMP — populated from params[1]
-	Atk    int    // populated from params[2]
-	Def    int    // populated from params[3]
-	Mat    int    // populated from params[4]
-	Mdf    int    // populated from params[5]
-	Agi    int    // populated from params[6]
-	Luk    int    // populated from params[7]
-	Exp       int           `json:"exp"`
-	Gold      int           `json:"gold"`
-	DropItems []EnemyDrop   `json:"dropItems"`
-	Actions   []EnemyAction `json:"actions"`
-	Traits    []Trait       `json:"traits"`
+	ID          int    `json:"id"`
+	Name        string `json:"name"`
+	Note        string `json:"note"`        // Note tags for AI config, etc.
+	BattlerName string `json:"battlerName"` // enemy graphic name
+	HP          int    // maxHP — populated from params[0]
+	MP          int    // maxMP — populated from params[1]
+	Atk         int    // populated from params[2]
+	Def         int    // populated from params[3]
+	Mat         int    // populated from params[4]
+	Mdf         int    // populated from params[5]
+	Agi         int    // populated from params[6]
+	Luk         int    // populated from params[7]
+	Exp         int           `json:"exp"`
+	Gold        int           `json:"gold"`
+	DropItems   []EnemyDrop   `json:"dropItems"`
+	Actions     []EnemyAction `json:"actions"`
+	Traits      []Trait       `json:"traits"`
 }
 
 // UnmarshalJSON implements custom unmarshaling for Enemy.
@@ -359,7 +361,8 @@ type MapData struct {
 	DisplayName string      `json:"displayName"`
 	Width       int         `json:"width"`
 	Height      int         `json:"height"`
-	Data        []int       `json:"data"` // tileId array: [layer * height * width + y * width + x]
+	ScrollType  int         `json:"scrollType"` // 0=none, 1=vertical loop, 2=horizontal loop, 3=both
+	Data        []int       `json:"data"`       // tileId array: [layer * height * width + y * width + x]
 	TilesetID   int         `json:"tilesetId"`
 	Events      []*MapEvent `json:"events"` // nil entries are possible (RMMV uses 1-based IDs)
 	AutoplayBgm bool        `json:"autoplayBgm"`
@@ -378,6 +381,32 @@ type MapData struct {
 	// Parsed from map Note tags: <Region N Battleback1: file> / <Region N Battleback2: file>
 	// Built lazily by BuildBattlebackOverrides(); nil until first call.
 	BattlebackOverrides map[int][2]string `json:"-"`
+}
+
+// IsLoopHorizontal returns true if the map wraps horizontally (scrollType 2 or 3).
+func (md *MapData) IsLoopHorizontal() bool {
+	return md.ScrollType == 2 || md.ScrollType == 3
+}
+
+// IsLoopVertical returns true if the map wraps vertically (scrollType 1 or 3).
+func (md *MapData) IsLoopVertical() bool {
+	return md.ScrollType == 1 || md.ScrollType == 3
+}
+
+// RoundX wraps x coordinate for horizontal looping maps.
+func (md *MapData) RoundX(x int) int {
+	if md.IsLoopHorizontal() {
+		return ((x % md.Width) + md.Width) % md.Width
+	}
+	return x
+}
+
+// RoundY wraps y coordinate for vertical looping maps.
+func (md *MapData) RoundY(y int) int {
+	if md.IsLoopVertical() {
+		return ((y % md.Height) + md.Height) % md.Height
+	}
+	return y
 }
 
 // TransferTarget holds the destination of a map transfer event.
@@ -576,6 +605,9 @@ type PassabilityMap struct {
 	data [][][4]bool
 	// regions[y][x] = region ID (RMMV layer 5); nil if map has < 6 layers.
 	regions [][]int
+	// Map wrapping (RMMV scrollType). Set from MapData.ScrollType during buildPassability.
+	loopH bool // horizontal loop (scrollType 2 or 3)
+	loopV bool // vertical loop (scrollType 1 or 3)
 }
 
 func newPassabilityMap(w, h int) *PassabilityMap {
@@ -628,8 +660,41 @@ func (pm *PassabilityMap) SetRegion(x, y, regionID int) {
 	pm.regions[y][x] = regionID
 }
 
+// IsLoopH returns true if this map loops horizontally.
+func (pm *PassabilityMap) IsLoopH() bool { return pm.loopH }
+
+// IsLoopV returns true if this map loops vertically.
+func (pm *PassabilityMap) IsLoopV() bool { return pm.loopV }
+
+// RoundX wraps x coordinate for horizontal looping maps.
+func (pm *PassabilityMap) RoundX(x int) int {
+	if pm.loopH {
+		return ((x % pm.Width) + pm.Width) % pm.Width
+	}
+	return x
+}
+
+// RoundY wraps y coordinate for vertical looping maps.
+func (pm *PassabilityMap) RoundY(y int) int {
+	if pm.loopV {
+		return ((y % pm.Height) + pm.Height) % pm.Height
+	}
+	return y
+}
+
+// IsValid checks if (x, y) is within map bounds, accounting for wrapping.
+// On looping axes, the coordinate is always valid (it wraps).
+func (pm *PassabilityMap) IsValid(x, y int) bool {
+	xOK := pm.loopH || (x >= 0 && x < pm.Width)
+	yOK := pm.loopV || (y >= 0 && y < pm.Height)
+	return xOK && yOK
+}
+
 // CanPass reports whether movement in the given RPG Maker direction (2/4/6/8) is allowed at (x,y).
+// Supports map wrapping: coordinates are rounded for looping maps.
 func (pm *PassabilityMap) CanPass(x, y, dir int) bool {
+	x = pm.RoundX(x)
+	y = pm.RoundY(y)
 	if x < 0 || x >= pm.Width || y < 0 || y >= pm.Height {
 		return false
 	}
@@ -647,7 +712,10 @@ func (pm *PassabilityMap) CanPass(x, y, dir int) bool {
 }
 
 // RegionAt returns the region ID at (x, y), or 0 if out of bounds / no region data.
+// Supports map wrapping: coordinates are rounded for looping maps.
 func (pm *PassabilityMap) RegionAt(x, y int) int {
+	x = pm.RoundX(x)
+	y = pm.RoundY(y)
 	if pm.regions == nil || x < 0 || x >= pm.Width || y < 0 || y >= pm.Height {
 		return 0
 	}
@@ -843,6 +911,30 @@ type MMOConfig struct {
 	SafeScriptPrefixes []string                       `json:"safeScriptPrefixes"`
 	SafeScreenMethods  []string                       `json:"safeScreenMethods"`
 	Battle             *BattleMMOConfig               `json:"battle"`
+	MonsterSpawns      []MonsterSpawnConfig           `json:"monsterSpawns"`
+	MonsterAIProfiles  map[string]*MonsterAIProfile   `json:"monsterAIProfiles"`
+}
+
+// MonsterSpawnConfig defines where and how monsters spawn on a map.
+type MonsterSpawnConfig struct {
+	MapID      int    `json:"mapId"`
+	EnemyID    int    `json:"enemyId"`
+	X          int    `json:"x"`
+	Y          int    `json:"y"`
+	MaxCount   int    `json:"maxCount"`
+	RespawnSec int    `json:"respawnSec"`
+	AIOverride string `json:"aiOverride"` // optional: override enemy's Note AI profile
+}
+
+// MonsterAIProfile defines a custom AI behavior profile.
+type MonsterAIProfile struct {
+	AggroRange         int `json:"aggroRange"`
+	LeashRange         int `json:"leashRange"`
+	AttackRange        int `json:"attackRange"`
+	AttackCooldownTicks int `json:"attackCooldownTicks"`
+	MoveIntervalTicks  int `json:"moveIntervalTicks"`
+	WanderRadius       int `json:"wanderRadius"`
+	FleeHPPercent      int `json:"fleeHPPercent"`
 }
 
 // BattleMMOConfig holds battle-specific configuration (YEP plugin integration).
@@ -1352,6 +1444,9 @@ func (rl *ResourceLoader) loadMaps() error {
 // CAN block passage when their direction bit is set.
 //
 // Also extracts region IDs from layer 5 of the map data.
+// BuildPassabilityExported is an exported wrapper for buildPassability, for use in tests.
+func (rl *ResourceLoader) BuildPassabilityExported() { rl.buildPassability() }
+
 func (rl *ResourceLoader) buildPassability() {
 	// Build a map from tilesetID → tileset for quick lookup.
 	tilesetMap := make(map[int]*Tileset)
@@ -1368,12 +1463,16 @@ func (rl *ResourceLoader) buildPassability() {
 		if !ok || len(ts.Flags) == 0 {
 			// No tileset data – mark everything passable.
 			pm := newPassabilityMap(md.Width, md.Height)
+			pm.loopH = md.IsLoopHorizontal()
+			pm.loopV = md.IsLoopVertical()
 			rl.extractRegions(pm, md)
 			rl.Passability[mapID] = pm
 			continue
 		}
 
 		pm := newPassabilityMap(md.Width, md.Height)
+		pm.loopH = md.IsLoopHorizontal()
+		pm.loopV = md.IsLoopVertical()
 		layers := len(md.Data) / (md.Width * md.Height)
 
 		// RMMV direction bits: bit0=down(2), bit1=left(4), bit2=right(6), bit3=up(8)
@@ -1391,10 +1490,10 @@ func (rl *ResourceLoader) buildPassability() {
 				// Check each direction independently, matching RMMV's checkPassage.
 				for di, bit := range dirBits {
 					passable := false
-					// Iterate layers from bottom (0) to top (3), matching RMMV's
-					// layeredTiles() order in checkPassage. The FIRST non-star
-					// tile encountered determines passability for that direction.
-					for layer := 0; layer < tileLayers; layer++ {
+					// Iterate layers from top (3) to bottom (0), matching RMMV's
+					// layeredTiles() which returns [z=3, z=2, z=1, z=0].
+					// The FIRST non-star tile encountered determines passability.
+					for layer := tileLayers - 1; layer >= 0; layer-- {
 						tileID := md.Data[layer*md.Height*md.Width+y*md.Width+x]
 						if tileID < 0 || tileID >= len(ts.Flags) {
 							continue

@@ -7,6 +7,14 @@ import (
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/player"
 )
 
+// npcSyncPayload is the typed struct for npc_sync JSON serialization.
+type npcSyncPayload struct {
+	EventID int `json:"event_id"`
+	X       int `json:"x"`
+	Y       int `json:"y"`
+	Dir     int `json:"dir"`
+}
+
 // RMMV MoveFrequency → tick interval mapping.
 // MoveFrequency 1 (lowest) to 5 (highest).
 // At 20 TPS: frequency 3 = ~60 ticks = 3 seconds between moves.
@@ -99,11 +107,11 @@ func (room *MapRoom) tickNPCs() {
 
 	// Broadcast outside the lock.
 	for _, npc := range dirtyNPCs {
-		payload, _ := json.Marshal(map[string]interface{}{
-			"event_id": npc.EventID,
-			"x":        npc.X,
-			"y":        npc.Y,
-			"dir":      npc.Dir,
+		payload, _ := json.Marshal(&npcSyncPayload{
+			EventID: npc.EventID,
+			X:       npc.X,
+			Y:       npc.Y,
+			Dir:     npc.Dir,
 		})
 		pkt, _ := json.Marshal(&player.Packet{Type: "npc_sync", Payload: payload})
 		room.broadcastRaw(pkt)
@@ -279,9 +287,12 @@ func (room *MapRoom) tryMoveNPC(npc *NPCRuntime, dir int) bool {
 	dx, dy := dirDelta(dir)
 	nx, ny := npc.X+dx, npc.Y+dy
 
-	// 1. Bounds check — always enforced to prevent out-of-map movement.
+	// 1. Bounds/wrapping check — apply coordinate wrapping for looping maps,
+	// then verify the result is in bounds (non-looping axes must be in range).
 	if room.passMap != nil {
-		if nx < 0 || nx >= room.passMap.Width || ny < 0 || ny >= room.passMap.Height {
+		nx = room.passMap.RoundX(nx)
+		ny = room.passMap.RoundY(ny)
+		if !room.passMap.IsValid(nx, ny) {
 			return false
 		}
 	} else {
@@ -305,7 +316,7 @@ func (room *MapRoom) tryMoveNPC(npc *NPCRuntime, dir int) bool {
 		return true
 	}
 
-	// 3-5. Region and tile passability checks.
+	// 3-5. Region and tile passability checks (including event tile passability).
 	regionAllowed := false
 	if room.passMap != nil {
 		// Check YEP_RegionRestrictions on the DESTINATION tile.
@@ -322,11 +333,12 @@ func (room *MapRoom) tryMoveNPC(npc *NPCRuntime, dir int) bool {
 
 		if !regionAllowed {
 			// Source tile: can we leave in this direction?
-			if !room.passMap.CanPass(npc.X, npc.Y, dir) {
+			// CheckPassage combines event tile checks with static passability.
+			if !room.CheckPassage(npc.X, npc.Y, dir) {
 				return false
 			}
 			// Destination tile: can we enter from the reverse direction?
-			if !room.passMap.CanPass(nx, ny, reverseDir(dir)) {
+			if !room.CheckPassage(nx, ny, reverseDir(dir)) {
 				return false
 			}
 		}
