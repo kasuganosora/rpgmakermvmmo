@@ -4,6 +4,7 @@ package npc
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/player"
 	"github.com/kasuganosora/rpgmakermvmmo/server/model"
@@ -130,6 +131,10 @@ type InventoryStore interface {
 	IsEquipped(ctx context.Context, charID int64, itemID, kind int) (bool, error)
 	// HasSkill 检查角色是否习得了指定技能。
 	HasSkill(ctx context.Context, charID int64, skillID int) (bool, error)
+	// LearnSkill 为角色添加技能记录（幂等：已存在则忽略）。
+	LearnSkill(ctx context.Context, charID int64, skillID int) error
+	// ForgetSkill 删除角色的技能记录（不存在则忽略）。
+	ForgetSkill(ctx context.Context, charID int64, skillID int) error
 	// SetEquipSlot 更新角色装备槽位（slot→itemID），同时更新 DB inventory 记录。
 	// itemID=0 表示卸下该槽位装备。kind: 2=武器, 3=防具。
 	SetEquipSlot(ctx context.Context, charID int64, slotIndex, itemID, kind int) error
@@ -189,10 +194,13 @@ type Executor struct {
 	res    *resource.ResourceLoader // RMMV 资源数据（只读）
 	logger *zap.Logger
 
-	// Cached config sets built once from MMOConfig (lazy init).
-	blockedCmdSet  map[string]bool // blocked plugin commands
-	safeScreenSet  map[string]bool // safe $gameScreen methods
-	alwaysSendSet  map[int]bool    // switches always forwarded even when value unchanged
+	// Cached config sets built once from MMOConfig via sync.Once (shared across goroutines).
+	blockedCmdSet     map[string]bool
+	blockedCmdSetOnce sync.Once
+	safeScreenSet     map[string]bool
+	safeScreenSetOnce sync.Once
+	alwaysSendSet     map[int]bool
+	alwaysSendSetOnce sync.Once
 }
 
 // New 创建 Executor，接受 InventoryStore 接口以支持测试 mock。
@@ -276,32 +284,33 @@ func (s *gormInventoryStore) GetItem(ctx context.Context, charID int64, itemID i
 	return inv.Qty, nil
 }
 
-// AddItem 增加物品数量，若不存在则创建新记录。
+// AddItem 增加物品数量，若不存在则创建新记录。事务保证 First+Create/Update 的原子性。
 func (s *gormInventoryStore) AddItem(ctx context.Context, charID int64, itemID, qty int) error {
-	var inv model.Inventory
-	err := s.db.WithContext(ctx).
-		Where("char_id = ? AND item_id = ? AND kind = 1", charID, itemID).
-		First(&inv).Error
-	if err != nil {
-		inv = model.Inventory{CharID: charID, ItemID: itemID, Kind: model.ItemKindItem, Qty: qty}
-		return s.db.WithContext(ctx).Create(&inv).Error
-	}
-	return s.db.WithContext(ctx).Model(&inv).Update("qty", inv.Qty+qty).Error
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var inv model.Inventory
+		err := tx.Where("char_id = ? AND item_id = ? AND kind = 1", charID, itemID).First(&inv).Error
+		if err != nil {
+			inv = model.Inventory{CharID: charID, ItemID: itemID, Kind: model.ItemKindItem, Qty: qty}
+			return tx.Create(&inv).Error
+		}
+		return tx.Model(&inv).Update("qty", inv.Qty+qty).Error
+	})
 }
 
-// RemoveItem 减少物品数量，数量归零时删除记录。
+// RemoveItem 减少物品数量，数量归零时删除记录。事务保证 First+Delete/Update 的原子性。
 func (s *gormInventoryStore) RemoveItem(ctx context.Context, charID int64, itemID, qty int) error {
-	var inv model.Inventory
-	if err := s.db.WithContext(ctx).
-		Where("char_id = ? AND item_id = ? AND kind = 1", charID, itemID).
-		First(&inv).Error; err != nil {
-		return fmt.Errorf("item %d not found in inventory", itemID)
-	}
-	newQty := inv.Qty - qty
-	if newQty <= 0 {
-		return s.db.WithContext(ctx).Delete(&inv).Error
-	}
-	return s.db.WithContext(ctx).Model(&inv).Update("qty", newQty).Error
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var inv model.Inventory
+		if err := tx.Where("char_id = ? AND item_id = ? AND kind = 1", charID, itemID).
+			First(&inv).Error; err != nil {
+			return fmt.Errorf("item %d not found in inventory", itemID)
+		}
+		newQty := inv.Qty - qty
+		if newQty <= 0 {
+			return tx.Delete(&inv).Error
+		}
+		return tx.Model(&inv).Update("qty", newQty).Error
+	})
 }
 
 // HasItemOfKind 检查角色是否拥有指定类型和 ID 的物品。
@@ -340,6 +349,25 @@ func (s *gormInventoryStore) HasSkill(ctx context.Context, charID int64, skillID
 	return count > 0, nil
 }
 
+// LearnSkill 为角色添加技能记录（幂等：已存在则忽略）。
+func (s *gormInventoryStore) LearnSkill(ctx context.Context, charID int64, skillID int) error {
+	has, err := s.HasSkill(ctx, charID, skillID)
+	if err != nil {
+		return err
+	}
+	if has {
+		return nil
+	}
+	return s.db.WithContext(ctx).Create(&model.CharSkill{CharID: charID, SkillID: skillID, Level: 1}).Error
+}
+
+// ForgetSkill 删除角色的技能记录（不存在则忽略）。
+func (s *gormInventoryStore) ForgetSkill(ctx context.Context, charID int64, skillID int) error {
+	return s.db.WithContext(ctx).
+		Where("char_id = ? AND skill_id = ?", charID, skillID).
+		Delete(&model.CharSkill{}).Error
+}
+
 // SetEquipSlot 更新角色装备槽位。卸下旧装备、装上新装备。
 func (s *gormInventoryStore) SetEquipSlot(ctx context.Context, charID int64, slotIndex, itemID, kind int) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -376,30 +404,31 @@ func (s *gormInventoryStore) SetEquipSlot(ctx context.Context, charID int64, slo
 	})
 }
 
-// AddArmorOrWeapon 向背包添加武器/防具。
+// AddArmorOrWeapon 向背包添加武器/防具。事务保证 First+Create/Update 的原子性。
 func (s *gormInventoryStore) AddArmorOrWeapon(ctx context.Context, charID int64, itemID, kind, qty int) error {
-	var inv model.Inventory
-	err := s.db.WithContext(ctx).
-		Where("char_id = ? AND item_id = ? AND kind = ?", charID, itemID, kind).
-		First(&inv).Error
-	if err != nil {
-		inv = model.Inventory{CharID: charID, ItemID: itemID, Kind: kind, Qty: qty}
-		return s.db.WithContext(ctx).Create(&inv).Error
-	}
-	return s.db.WithContext(ctx).Model(&inv).Update("qty", inv.Qty+qty).Error
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var inv model.Inventory
+		err := tx.Where("char_id = ? AND item_id = ? AND kind = ?", charID, itemID, kind).First(&inv).Error
+		if err != nil {
+			inv = model.Inventory{CharID: charID, ItemID: itemID, Kind: kind, Qty: qty}
+			return tx.Create(&inv).Error
+		}
+		return tx.Model(&inv).Update("qty", inv.Qty+qty).Error
+	})
 }
 
-// RemoveArmorOrWeapon 从背包移除武器/防具。
+// RemoveArmorOrWeapon 从背包移除武器/防具。事务保证 First+Delete/Update 的原子性。
 func (s *gormInventoryStore) RemoveArmorOrWeapon(ctx context.Context, charID int64, itemID, kind, qty int) error {
-	var inv model.Inventory
-	if err := s.db.WithContext(ctx).
-		Where("char_id = ? AND item_id = ? AND kind = ?", charID, itemID, kind).
-		First(&inv).Error; err != nil {
-		return fmt.Errorf("armor/weapon %d (kind %d) not found", itemID, kind)
-	}
-	newQty := inv.Qty - qty
-	if newQty <= 0 {
-		return s.db.WithContext(ctx).Delete(&inv).Error
-	}
-	return s.db.WithContext(ctx).Model(&inv).Update("qty", newQty).Error
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var inv model.Inventory
+		if err := tx.Where("char_id = ? AND item_id = ? AND kind = ?", charID, itemID, kind).
+			First(&inv).Error; err != nil {
+			return fmt.Errorf("armor/weapon %d (kind %d) not found", itemID, kind)
+		}
+		newQty := inv.Qty - qty
+		if newQty <= 0 {
+			return tx.Delete(&inv).Error
+		}
+		return tx.Model(&inv).Update("qty", newQty).Error
+	})
 }

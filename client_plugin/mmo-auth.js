@@ -507,7 +507,7 @@
 
         // ── 标题文字 ──
         this.addChild(new L2_Typography((gw - 300) / 2, 115, 300, {
-            text: 'MMO LOGIN', level: 'h1', align: 'center', color: L2_Theme.textGold
+            text: ($dataSystem && $dataSystem.gameTitle) || 'MMO LOGIN', level: 'h1', align: 'center', color: L2_Theme.textGold
         }));
 
         // ── 毛玻璃面板（高度由布局自动计算） ──

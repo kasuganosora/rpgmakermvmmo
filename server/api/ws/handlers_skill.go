@@ -127,13 +127,56 @@ func (sh *SkillItemHandlers) HandleUseItem(_ context.Context, s *player.PlayerSe
 		sendError(s, "use item failed: "+err.Error())
 		return nil
 	}
-	// TODO: apply item effects (HP/MP restore, buff) based on Items.json effects[]
+	// Apply item effects (HP/MP recovery, state removal) from Items.json.
+	sh.applyItemEffects(s, inv.ItemID)
 
 	// Notify client of the consumed item so the inventory UI stays in sync.
 	item.NotifyUpdate(s, nil, []model.Inventory{{ID: inv.ID, ItemID: inv.ItemID, Kind: inv.Kind, Qty: 1}})
 
 	sh.logger.Info("item used", zap.Int64("char_id", s.CharID), zap.Int64("inv_id", req.InvID), zap.Int("item_id", inv.ItemID))
 	return nil
+}
+
+// applyItemEffects applies the effects[] from Items.json to the player session.
+// RMMV effect codes: 11=recover HP, 12=recover MP, 22=remove state.
+func (sh *SkillItemHandlers) applyItemEffects(s *player.PlayerSession, itemID int) {
+	if sh.res == nil || itemID <= 0 || itemID >= len(sh.res.Items) {
+		return
+	}
+	it := sh.res.Items[itemID]
+	if it == nil {
+		return
+	}
+	for _, eff := range it.Effects {
+		switch eff.Code {
+		case 11: // Recover HP: value1 = rate (0-1 of maxHP), value2 = flat
+			hp, maxHP, mp, maxMP := s.Stats()
+			heal := int(eff.Value1*float64(maxHP)) + int(eff.Value2)
+			newHP := hp + heal
+			if newHP > maxHP {
+				newHP = maxHP
+			}
+			if newHP < 0 {
+				newHP = 0
+			}
+			s.SetStats(newHP, maxHP, mp, maxMP)
+		case 12: // Recover MP: value1 = rate (0-1 of maxMP), value2 = flat
+			hp, maxHP, mp, maxMP := s.Stats()
+			heal := int(eff.Value1*float64(maxMP)) + int(eff.Value2)
+			newMP := mp + heal
+			if newMP > maxMP {
+				newMP = maxMP
+			}
+			if newMP < 0 {
+				newMP = 0
+			}
+			s.SetStats(hp, maxHP, newMP, maxMP)
+		case 22: // Remove State: dataId = stateID
+			if eff.DataID > 0 {
+				s.RemoveState(eff.DataID)
+			}
+		}
+	}
 }
 
 // ------------------------------------------------------------------ shop_buy
@@ -161,13 +204,14 @@ func (sh *SkillItemHandlers) HandleShopBuy(_ context.Context, s *player.PlayerSe
 		req.Qty = 1
 	}
 
-	if s.ShopGoods == nil {
+	shopGoods := s.GetShopGoods()
+	if shopGoods == nil {
 		sendError(s, "no shop open")
 		return nil
 	}
 
 	// Validate item is in the active shop and resolve price.
-	price, err := sh.findShopPrice(s.ShopGoods, req.GoodsType, req.ItemID)
+	price, err := sh.findShopPrice(shopGoods, req.GoodsType, req.ItemID)
 	if err != nil {
 		sendError(s, err.Error())
 		return nil
@@ -299,7 +343,7 @@ func (sh *SkillItemHandlers) HandleShopSell(_ context.Context, s *player.PlayerS
 
 // HandleShopClose clears the active shop goods from the session.
 func (sh *SkillItemHandlers) HandleShopClose(_ context.Context, s *player.PlayerSession, _ json.RawMessage) error {
-	s.ShopGoods = nil
+	s.SetShopGoods(nil)
 	return nil
 }
 

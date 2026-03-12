@@ -739,7 +739,8 @@
         // 不在 Scene_Map 时暂存，进入场景后处理。
         if (!(SceneManager._scene instanceof Scene_Map)) {
             console.warn('[MMO-NPC] 收到 npc_dialog 但不在 Scene_Map，暂存');
-            $MMO._queuedDialog = data;
+            if (!$MMO._queuedDialogs) $MMO._queuedDialogs = [];
+            $MMO._queuedDialogs.push(data);
             return;
         }
 
@@ -763,10 +764,10 @@
         if ($MMO && $MMO.send) {
             $MMO.send('scene_ready', {});
         }
-        // 处理暂存的对话（场景加载期间收到的消息）。
-        if ($MMO._queuedDialog) {
-            var data = $MMO._queuedDialog;
-            $MMO._queuedDialog = null;
+        // 处理暂存的对话队列（场景加载期间收到的消息）。
+        // 只取队列首项显示；后续消息由服务端在收到 ack 后重新发送。
+        if ($MMO._queuedDialogs && $MMO._queuedDialogs.length > 0) {
+            var data = $MMO._queuedDialogs.shift();
             $MMO._npcDialogActive = true;
             $MMO._npcDialogPending = true;
             $gameMessage.setFaceImage(data.face || '', data.face_index || 0);
@@ -816,7 +817,8 @@
         var choiceBg = data.choice_background || 0;
 
         if (!(SceneManager._scene instanceof Scene_Map)) {
-            $MMO._queuedDialog = data;
+            if (!$MMO._queuedDialogs) $MMO._queuedDialogs = [];
+            $MMO._queuedDialogs.push(data);
             return;
         }
 
@@ -991,21 +993,25 @@
         switch (code) {
         // --- 画面效果 ---
         case 221: // 淡出画面 — RMMV 使用 fadeSpeed()=24 帧
-            $gameScreen.startFadeOut(24);
+            if ($gameScreen) $gameScreen.startFadeOut(24);
             break;
         case 222: // 淡入画面 — RMMV 使用 fadeSpeed()=24 帧
-            $gameScreen.startFadeIn(24);
+            if ($gameScreen) $gameScreen.startFadeIn(24);
             break;
         case 223: // 更改画面色调 — [色调数组, 持续帧数, 等待]
-            var tone = p[0] || [0, 0, 0, 0];
-            $gameScreen.startTint(tone, paramInt(p, 1) || 60);
+            if ($gameScreen) {
+                var tone = p[0] || [0, 0, 0, 0];
+                $gameScreen.startTint(tone, paramInt(p, 1) || 60);
+            }
             break;
         case 224: // 闪烁画面 — [颜色数组, 持续帧数, 等待]
-            var color = p[0] || [255, 255, 255, 170];
-            $gameScreen.startFlash(color, paramInt(p, 1) || 30);
+            if ($gameScreen) {
+                var color = p[0] || [255, 255, 255, 170];
+                $gameScreen.startFlash(color, paramInt(p, 1) || 30);
+            }
             break;
         case 225: // 震动画面 — [强度, 速度, 持续帧数, 等待]
-            $gameScreen.startShake(paramInt(p, 0) || 5, paramInt(p, 1) || 5, paramInt(p, 2) || 30);
+            if ($gameScreen) $gameScreen.startShake(paramInt(p, 0) || 5, paramInt(p, 1) || 5, paramInt(p, 2) || 30);
             break;
 
         // --- 天气效果 ---

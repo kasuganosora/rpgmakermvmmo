@@ -818,9 +818,10 @@ func TestInjectScriptMath_AllFunctions(t *testing.T) {
 	v, _ = vm.RunString("Math.min(7, 3)")
 	assert.EqualValues(t, 3, v.ToInteger())
 
-	// random
+	// random — should return value in [0, 1)
 	v, _ = vm.RunString("Math.random()")
-	assert.Equal(t, float64(0.5), v.ToFloat())
+	r := v.ToFloat()
+	assert.True(t, r >= 0.0 && r < 1.0, "Math.random() should be in [0,1), got %v", r)
 
 	// floor, ceil, round
 	v, _ = vm.RunString("Math.floor(3.7)")

@@ -6,6 +6,12 @@ import (
 	"github.com/kasuganosora/rpgmakermvmmo/server/resource"
 )
 
+// GroupInfo provides group-level context for monsters in a group.
+type GroupInfo struct {
+	GroupType    string // "assist" | "linked" | "pack"
+	LeaderTarget int64 // pack mode: leader's current target charID (0 = none)
+}
+
 // AIContext is passed to every behavior tree node during a tick.
 type AIContext struct {
 	Monster        MonsterAccessor
@@ -14,6 +20,8 @@ type AIContext struct {
 	Config         *AIProfile
 	ThreatTable    *ThreatTable
 	DamageCallback func(m MonsterAccessor, targetCharID int64) // called by AttackTarget node
+	GroupInfo      *GroupInfo // nil if not in a group
+	OnLeash        func() // called when monster returns to spawn (for linked group leash)
 }
 
 // MonsterAccessor provides read/write access to monster state for BT nodes.

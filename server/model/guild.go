@@ -24,8 +24,9 @@ type Guild struct {
 
 // GuildMember links a character to a guild with a rank.
 type GuildMember struct {
-	GuildID  int64     `gorm:"primaryKey;index:idx_guild_member" json:"guild_id"`
-	CharID   int64     `gorm:"primaryKey;index:idx_char_guild" json:"char_id"`
+	ID       int64     `gorm:"primaryKey;autoIncrement" json:"id"`
+	GuildID  int64     `gorm:"index:idx_guild_member;not null" json:"guild_id"`
+	CharID   int64     `gorm:"index:idx_char_guild;not null" json:"char_id"`
 	Rank     int       `gorm:"default:3" json:"rank"`
 	JoinedAt time.Time `gorm:"autoCreateTime" json:"joined_at"`
 }

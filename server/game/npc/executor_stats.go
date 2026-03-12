@@ -25,17 +25,19 @@ func (e *Executor) applyChangeHP(ctx context.Context, s *player.PlayerSession, p
 	}
 	allowDeath := paramInt(params, 5) != 0
 
-	s.HP += amount
-	if s.HP > s.MaxHP {
-		s.HP = s.MaxHP
+	hp, maxHP, mp, maxMP := s.Stats()
+	hp += amount
+	if hp > maxHP {
+		hp = maxHP
 	}
-	if s.HP <= 0 {
+	if hp <= 0 {
 		if allowDeath {
-			s.HP = 0
+			hp = 0
 		} else {
-			s.HP = 1
+			hp = 1
 		}
 	}
+	s.SetStats(hp, maxHP, mp, maxMP)
 
 	// 转发给客户端用于视觉更新
 	e.sendEffect(s, &resource.EventCommand{Code: CmdChangeHP, Parameters: params})
@@ -51,13 +53,15 @@ func (e *Executor) applyChangeMP(ctx context.Context, s *player.PlayerSession, p
 		amount = -amount
 	}
 
-	s.MP += amount
-	if s.MP > s.MaxMP {
-		s.MP = s.MaxMP
+	hp, maxHP, mp, maxMP := s.Stats()
+	mp += amount
+	if mp > maxMP {
+		mp = maxMP
 	}
-	if s.MP < 0 {
-		s.MP = 0
+	if mp < 0 {
+		mp = 0
 	}
+	s.SetStats(hp, maxHP, mp, maxMP)
 
 	e.sendEffect(s, &resource.EventCommand{Code: CmdChangeMP, Parameters: params})
 }
@@ -81,8 +85,8 @@ func (e *Executor) applyChangeState(ctx context.Context, s *player.PlayerSession
 // 参数格式：[0]=固定角色, [1]=角色ID/变量ID。
 // 将 HP 和 MP 恢复至上限。
 func (e *Executor) applyRecoverAll(ctx context.Context, s *player.PlayerSession, params []interface{}, opts *ExecuteOpts) {
-	s.HP = s.MaxHP
-	s.MP = s.MaxMP
+	_, maxHP, _, maxMP := s.Stats()
+	s.SetStats(maxHP, maxHP, maxMP, maxMP)
 	s.ClearStates()
 	e.sendEffect(s, &resource.EventCommand{Code: CmdRecoverAll, Parameters: params})
 }
@@ -96,10 +100,11 @@ func (e *Executor) applyChangeEXP(ctx context.Context, s *player.PlayerSession, 
 	if paramInt(params, 2) == 1 {
 		amount = -amount
 	}
-	s.Exp += int64(amount)
-	if s.Exp < 0 {
-		s.Exp = 0
+	exp := s.GetExp() + int64(amount)
+	if exp < 0 {
+		exp = 0
 	}
+	s.SetExp(exp)
 	e.sendEffect(s, &resource.EventCommand{Code: CmdChangeEXP, Parameters: params})
 }
 
@@ -112,10 +117,11 @@ func (e *Executor) applyChangeLevel(ctx context.Context, s *player.PlayerSession
 	if paramInt(params, 2) == 1 {
 		amount = -amount
 	}
-	s.Level += amount
-	if s.Level < 1 {
-		s.Level = 1
+	level := s.GetLevel() + amount
+	if level < 1 {
+		level = 1
 	}
+	s.SetLevel(level)
 	e.sendEffect(s, &resource.EventCommand{Code: CmdChangeLevel, Parameters: params})
 }
 
@@ -129,15 +135,15 @@ func (e *Executor) applyChangeClass(ctx context.Context, s *player.PlayerSession
 		return
 	}
 
-	oldClassID := s.ClassID
-	s.ClassID = classID
+	oldClassID := s.GetClassID()
+	s.SetClassID(classID)
 
 	// 根据新职业的基础参数等比缩放 HP/MP
 	if e.res != nil {
 		oldClass := e.res.ClassByID(oldClassID)
 		newClass := e.res.ClassByID(classID)
-		if oldClass != nil && newClass != nil && s.Level > 0 {
-			level := s.Level
+		level := s.GetLevel()
+		if oldClass != nil && newClass != nil && level > 0 {
 			if level > 99 {
 				level = 99
 			}
@@ -145,14 +151,20 @@ func (e *Executor) applyChangeClass(ctx context.Context, s *player.PlayerSession
 			newMHP := classParam(newClass, 0, level)
 			newMMP := classParam(newClass, 1, level)
 
+			_, _, _, maxMP := s.Stats()
+			newHP, newMaxHP := newMHP, newMHP
+			newMP, newMaxMP := 0, maxMP
 			if newMHP > 0 {
-				s.MaxHP = newMHP
-				s.HP = newMHP // 职业变更时完全恢复 HP（匹配 ProjectB 的 ParaCheck 行为）
+				// 职业变更时完全恢复 HP（匹配 ProjectB 的 ParaCheck 行为）
+				newHP = newMHP
+				newMaxHP = newMHP
 			}
 			if newMMP > 0 {
-				s.MaxMP = newMMP
-				s.MP = 0 // MP 归零（魔法消耗型资源，变身后重新积累）
+				// MP 归零（魔法消耗型资源，变身后重新积累）
+				newMP = 0
+				newMaxMP = newMMP
 			}
+			s.SetStats(newHP, newMaxHP, newMP, newMaxMP)
 		}
 	}
 
@@ -211,6 +223,29 @@ func (e *Executor) processBattle(ctx context.Context, s *player.PlayerSession, p
 		zap.Int("troop_id", troopID))
 	e.sendEffect(s, &resource.EventCommand{Code: CmdBattleProcessing, Parameters: params})
 	return 0 // 默认胜利
+}
+
+// applyChangeSkill 处理 RMMV 技能变更指令（代码 318）。
+// 参数格式：[0]=固定角色(0)/变量(1), [1]=角色ID/变量ID, [2]=操作(0=学习,1=遗忘), [3]=技能ID。
+// 服务端持久化到 CharSkill 表，成功后转发给客户端。
+func (e *Executor) applyChangeSkill(ctx context.Context, s *player.PlayerSession, params []interface{}) {
+	op := paramInt(params, 2)
+	skillID := paramInt(params, 3)
+	if skillID <= 0 {
+		return
+	}
+	var err error
+	if op == 0 { // 学习
+		err = e.store.LearnSkill(ctx, s.CharID, skillID)
+	} else { // 遗忘
+		err = e.store.ForgetSkill(ctx, s.CharID, skillID)
+	}
+	if err != nil {
+		e.logger.Error("applyChangeSkill: DB error",
+			zap.Int("op", op), zap.Int("skill_id", skillID), zap.Error(err))
+		return
+	}
+	e.sendEffect(s, &resource.EventCommand{Code: CmdChangeSkill, Parameters: params})
 }
 
 // ---- 装备变更 ----
@@ -342,9 +377,17 @@ func (e *Executor) applyChangeWeapons(ctx context.Context, s *player.PlayerSessi
 // 参数格式：[0]=actorId, [1]=etypeId, [2]=itemId。
 // etypeId 在 RMMV 中是装备类型（1=武器,2=盾,3=头,4=身体,5=饰品）。
 // 对于 ProjectB 使用 TMEquipSlotEx，etypeId 直接映射到槽位索引（非标准）。
+// 注意：服务端当前只追踪 actor 1（session 玩家），非 actor 1 的装备变更仅转发客户端。
 func (e *Executor) applyChangeEquipment(ctx context.Context, s *player.PlayerSession, params []interface{}, opts *ExecuteOpts) {
+	actorID := paramInt(params, 0)
 	etypeID := paramInt(params, 1)
 	itemID := paramInt(params, 2)
+
+	// 服务端只持久化 actor 1 的装备状态；其他角色仅转发客户端处理。
+	if actorID != 1 {
+		e.sendEffect(s, &resource.EventCommand{Code: CmdChangeEquipment, Parameters: params})
+		return
+	}
 
 	// etypeId 在 TMEquipSlotEx 下就是槽位索引
 	slotIndex := etypeID
@@ -362,6 +405,53 @@ func (e *Executor) applyChangeEquipment(ctx context.Context, s *player.PlayerSes
 	}
 
 	e.sendEffect(s, &resource.EventCommand{Code: CmdChangeEquipment, Parameters: params})
+}
+
+// applyChangeName 处理 RMMV 角色名变更指令（代码 320）。
+// 参数格式：[0]=actorId, [1]=name。
+// 更新会话内存状态（重连时由 disconnect handler 持久化到 DB）。
+func (e *Executor) applyChangeName(s *player.PlayerSession, params []interface{}) {
+	actorID := paramInt(params, 0)
+	if actorID != 1 {
+		e.sendEffect(s, &resource.EventCommand{Code: CmdChangeName, Parameters: params})
+		return
+	}
+	if len(params) > 1 {
+		if name, ok := params[1].(string); ok && name != "" {
+			s.SetCharName(name)
+		}
+	}
+	e.sendEffect(s, &resource.EventCommand{Code: CmdChangeName, Parameters: params})
+}
+
+// applyChangeActorImage 处理 RMMV 角色图像变更指令（代码 322）。
+// 参数格式：[0]=actorId, [1]=characterName, [2]=characterIndex,
+//
+//	[3]=faceName, [4]=faceIndex, [5]=battlerName。
+//
+// 更新会话内存状态（重连时由 disconnect handler 持久化到 DB）。
+func (e *Executor) applyChangeActorImage(s *player.PlayerSession, params []interface{}) {
+	actorID := paramInt(params, 0)
+	if actorID != 1 {
+		e.sendEffect(s, &resource.EventCommand{Code: CmdChangeActorImage, Parameters: params})
+		return
+	}
+	walkName := ""
+	if len(params) > 1 {
+		if v, ok := params[1].(string); ok {
+			walkName = v
+		}
+	}
+	walkIndex := paramInt(params, 2)
+	faceName := ""
+	if len(params) > 3 {
+		if v, ok := params[3].(string); ok {
+			faceName = v
+		}
+	}
+	faceIndex := paramInt(params, 4)
+	s.SetActorImages(walkName, walkIndex, faceName, faceIndex)
+	e.sendEffect(s, &resource.EventCommand{Code: CmdChangeActorImage, Parameters: params})
 }
 
 // resolveTextVarRef 替换字符串中的 \v[N] / \V[N] 变量引用为实际值。

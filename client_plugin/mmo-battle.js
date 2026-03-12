@@ -511,7 +511,12 @@
      * 4. 如果都没命中，则执行原始的地图点击处理（角色移动等）
      */
     Scene_Map.prototype.processMapTouch = function () {
-        if (TouchInput.isTriggered()) {
+        if (TouchInput.isTriggered() && $gameMap) {
+            // 检查 L2_InputBlocker：UI 面板上方的点击不应穿透到战斗操作
+            if (typeof L2_InputBlocker !== 'undefined' &&
+                L2_InputBlocker.isBlocking(TouchInput.x, TouchInput.y)) {
+                return;
+            }
             // 将屏幕像素坐标转换为地图格子坐标
             var tileX = Math.floor((TouchInput.x + $gameMap.displayX() * $gameMap.tileWidth()) / $gameMap.tileWidth());
             var tileY = Math.floor((TouchInput.y + $gameMap.displayY() * $gameMap.tileHeight()) / $gameMap.tileHeight());
@@ -667,7 +672,7 @@
             var tileW = $gameMap.tileWidth(), tileH = $gameMap.tileHeight();
             // 将格子坐标转换为屏幕坐标
             var screenX = (data.x - $gameMap.displayX() + 0.5) * tileW;
-            var screenY = (data.y - $gameMap.displayY()) * tileH;
+            var screenY = (data.y - $gameMap.displayY() + 1.0) * tileH;
             MonsterManager.showDamage(screenX, screenY, data.damage, data.is_crit, false);
         }
     });
@@ -684,11 +689,11 @@
      * @param {boolean} data.is_crit - 是否暴击
      */
     $MMO.on('skill_effect', function (data) {
-        if (data.damage !== undefined && $gameMap && SceneManager._scene) {
+        if (data.damage !== undefined && $gameMap && SceneManager._scene && SceneManager._scene._spriteset) {
             var tileW = $gameMap.tileWidth(), tileH = $gameMap.tileHeight();
             // 将格子坐标转换为屏幕坐标
             var screenX = (data.target_x - $gameMap.displayX() + 0.5) * tileW;
-            var screenY = (data.target_y - $gameMap.displayY()) * tileH;
+            var screenY = (data.target_y - $gameMap.displayY() + 1.0) * tileH;
             // Math.abs 取绝对值显示，负值 damage 标记为治疗
             MonsterManager.showDamage(screenX, screenY, Math.abs(data.damage), data.is_crit, data.damage < 0);
         }

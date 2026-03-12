@@ -3,7 +3,7 @@ package ws
 import (
 	"context"
 	"encoding/json"
-	"time"
+	"sync/atomic"
 
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/ai"
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/battle"
@@ -15,6 +15,92 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
+
+// dropIDCounter generates globally unique drop IDs.
+var dropIDCounter int64
+
+// buildPlayerStats computes CharacterStats from session data (class base + equipment bonuses).
+// Uses the in-memory session Equips map (always up-to-date) instead of DB queries.
+func (bh *BattleHandlers) buildPlayerStats(s *player.PlayerSession) *battle.CharacterStats {
+	hp, maxHP, mp, _ := s.Stats()
+	level := s.GetLevel()
+	if level < 1 {
+		level = 1
+	}
+	classID := s.GetClassID()
+
+	// Start with class base params at current level.
+	// RMMV Params[paramID][level]: 0=MHP, 1=MMP, 2=ATK, 3=DEF, 4=MAT, 5=MDF, 6=AGI, 7=LUK
+	var baseParams [8]int
+	baseParams[0] = maxHP
+	baseParams[1] = mp // fallback: current MP as base
+	if bh.res != nil {
+		cls := bh.res.ClassByID(classID)
+		if cls != nil {
+			idx := level
+			for p := 0; p < 8; p++ {
+				if p < len(cls.Params) {
+					row := cls.Params[p]
+					if idx < len(row) && row[idx] > 0 {
+						baseParams[p] = row[idx]
+					}
+				}
+			}
+		}
+	}
+
+	// Add equipment bonuses from session equip map.
+	equips := s.EquipsSnapshot()
+	if bh.res != nil {
+		for _, itemID := range equips {
+			if itemID <= 0 {
+				continue
+			}
+			// Check weapons.
+			for _, w := range bh.res.Weapons {
+				if w != nil && w.ID == itemID {
+					es := resource.EquipStatsFromParams(w.Params)
+					baseParams[0] += es.MaxHP
+					baseParams[1] += es.MaxMP
+					baseParams[2] += es.Atk
+					baseParams[3] += es.Def
+					baseParams[4] += es.Mat
+					baseParams[5] += es.Mdf
+					baseParams[6] += es.Agi
+					baseParams[7] += es.Luk
+					break
+				}
+			}
+			// Check armors.
+			for _, a := range bh.res.Armors {
+				if a != nil && a.ID == itemID {
+					es := resource.EquipStatsFromParams(a.Params)
+					baseParams[0] += es.MaxHP
+					baseParams[1] += es.MaxMP
+					baseParams[2] += es.Atk
+					baseParams[3] += es.Def
+					baseParams[4] += es.Mat
+					baseParams[5] += es.Mdf
+					baseParams[6] += es.Agi
+					baseParams[7] += es.Luk
+					break
+				}
+			}
+		}
+	}
+
+	return &battle.CharacterStats{
+		HP:    hp,
+		MP:    mp,
+		Atk:   baseParams[2],
+		Def:   baseParams[3],
+		Mat:   baseParams[4],
+		Mdf:   baseParams[5],
+		Agi:   baseParams[6],
+		Luk:   baseParams[7],
+		Level: level,
+	}
+}
 
 // BattleHandlers handles combat-related WS messages.
 type BattleHandlers struct {
@@ -33,6 +119,64 @@ func NewBattleHandlers(db *gorm.DB, wm *world.WorldManager, res *resource.Resour
 func (bh *BattleHandlers) RegisterHandlers(r *Router) {
 	r.On("attack", bh.HandleAttack)
 	r.On("pickup_item", bh.HandlePickup)
+	r.On("revive_request", bh.HandleReviveRequest)
+
+	// Inject monster→player damage callback into WorldManager.
+	bh.wm.SetMonsterDamageFunc(bh.handleMonsterAttackPlayer)
+}
+
+// handleMonsterAttackPlayer is called by monster AI when an AttackTarget node fires.
+func (bh *BattleHandlers) handleMonsterAttackPlayer(m *world.MonsterRuntime, targetCharID int64, room *world.MapRoom) {
+	s := room.GetPlayerSession(targetCharID)
+	if s == nil || s.IsDead() {
+		return
+	}
+
+	// Build monster attacker stats from template.
+	t := m.Template
+	if t == nil {
+		return
+	}
+	atkStats := &battle.CharacterStats{
+		HP: m.HP, MP: 0,
+		Atk: t.Atk, Def: t.Def, Mat: t.Mat, Mdf: t.Mdf,
+		Agi: t.Agi, Luk: t.Luk,
+		Level: 1,
+	}
+
+	// Build player defender stats.
+	defStats := bh.buildPlayerStats(s)
+
+	dmgCtx := &battle.DamageContext{
+		Attacker: atkStats,
+		Defender: defStats,
+	}
+	result := battle.Calculate(dmgCtx)
+
+	newHP, dead := s.ApplyDamage(result.FinalDamage)
+
+	// Broadcast battle_result (monster → player).
+	px, py, _ := s.Position()
+	brPayload, err := json.Marshal(map[string]interface{}{
+		"attacker_id":   m.InstID,
+		"attacker_type": "monster",
+		"target_id":     targetCharID,
+		"target_type":   "player",
+		"damage":        result.FinalDamage,
+		"is_crit":       result.IsCrit,
+		"target_hp":     newHP,
+		"x":             px,
+		"y":             py,
+	})
+	if err != nil {
+		return
+	}
+	brPkt, _ := json.Marshal(&player.Packet{Type: "battle_result", Payload: brPayload})
+	room.Broadcast(brPkt)
+
+	if dead {
+		bh.handlePlayerDeath(s, room)
+	}
 }
 
 // ------------------------------------------------------------------ attack
@@ -43,11 +187,38 @@ type attackReq struct {
 	SkillID    int   `json:"skill_id"`    // 0 = basic attack
 }
 
+// battleConfig returns the BattleMMOConfig (may be nil).
+func (bh *BattleHandlers) battleConfig() *resource.BattleMMOConfig {
+	if bh.res != nil && bh.res.MMOConfig != nil {
+		return bh.res.MMOConfig.Battle
+	}
+	return nil
+}
+
 // HandleAttack processes a player attack request.
 func (bh *BattleHandlers) HandleAttack(_ context.Context, s *player.PlayerSession, raw json.RawMessage) error {
 	var req attackReq
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return err
+	}
+
+	// Combat mode check: field attacks disabled in "turnbased" mode.
+	cfg := bh.battleConfig()
+	if cfg.GetCombatMode() == "turnbased" {
+		sendError(s, "field attacks disabled in turn-based mode")
+		return nil
+	}
+
+	// Dead players cannot attack.
+	if s.IsDead() {
+		sendError(s, "cannot attack while dead")
+		return nil
+	}
+
+	// GCD check.
+	if !s.CheckAttackGCD(cfg.GetGCDMs()) {
+		sendError(s, "attack on cooldown")
+		return nil
 	}
 
 	room := bh.wm.GetPlayerRoom(s)
@@ -56,13 +227,8 @@ func (bh *BattleHandlers) HandleAttack(_ context.Context, s *player.PlayerSessio
 		return nil
 	}
 
-	// Build attacker stats from session.
-	atkStats := &battle.CharacterStats{
-		HP: s.HP, MP: s.MP,
-		// These should be loaded from DB; simplified here using session values.
-		Atk: 10, Def: 5, Mat: 10, Mdf: 5, Agi: 10, Luk: 10,
-		Level: 1,
-	}
+	// Build attacker stats from session (class base params + equipment bonuses).
+	atkStats := bh.buildPlayerStats(s)
 
 	// Look up skill.
 	var skill *resource.Skill
@@ -71,6 +237,16 @@ func (bh *BattleHandlers) HandleAttack(_ context.Context, s *player.PlayerSessio
 			if sk != nil && sk.ID == req.SkillID {
 				skill = sk
 				break
+			}
+		}
+	}
+
+	// Skill cost enforcement.
+	if cfg != nil && cfg.EnforceSkillCosts && skill != nil {
+		if skill.MPCost > 0 {
+			if !s.ConsumeMP(skill.MPCost) {
+				sendError(s, "not enough MP")
+				return nil
 			}
 		}
 	}
@@ -100,6 +276,24 @@ func (bh *BattleHandlers) attackMonster(
 		return
 	}
 
+	// Range validation (Manhattan distance). Only enforced when battle config exists.
+	if cfg := bh.battleConfig(); cfg != nil {
+		maxRange := cfg.GetAttackRange()
+		px, py, _ := s.Position()
+		dx := px - monster.X
+		if dx < 0 {
+			dx = -dx
+		}
+		dy := py - monster.Y
+		if dy < 0 {
+			dy = -dy
+		}
+		if dx+dy > maxRange {
+			sendError(s, "target out of range")
+			return
+		}
+	}
+
 	// Build defender stats from monster template.
 	t := monster.Template
 	defStats := &battle.CharacterStats{
@@ -118,7 +312,7 @@ func (bh *BattleHandlers) attackMonster(
 
 	dead := monster.TakeDamage(result.FinalDamage, s.CharID)
 
-	// Broadcast battle_result.
+	// Broadcast battle_result (includes monster x/y for client damage popup positioning).
 	brPayload, err := json.Marshal(map[string]interface{}{
 		"attacker_id":   s.CharID,
 		"target_id":     instID,
@@ -128,6 +322,8 @@ func (bh *BattleHandlers) attackMonster(
 		"effects":       []interface{}{},
 		"target_hp":     monster.HP,
 		"target_max_hp": monster.MaxHP,
+		"x":             monster.X,
+		"y":             monster.Y,
 	})
 	if err != nil {
 		bh.logger.Error("failed to marshal battle_result payload", zap.Error(err))
@@ -152,12 +348,17 @@ func (bh *BattleHandlers) handleMonsterDeath(
 ) {
 	monster.SetState(ai.StateDead)
 
+	// Clear threat table on death.
+	if monster.Threat != nil {
+		monster.Threat.Clear()
+	}
+
 	// Calculate drops.
 	drops := battle.CalculateDrops(monster.Template)
 	var dropInfos []interface{}
-	dropID := int64(1)
 	x, y := monster.X, monster.Y
 	for _, d := range drops {
+		dropID := atomic.AddInt64(&dropIDCounter, 1)
 		di := map[string]interface{}{
 			"drop_id":   dropID,
 			"item_type": d.ItemType,
@@ -168,7 +369,6 @@ func (bh *BattleHandlers) handleMonsterDeath(
 		}
 		dropInfos = append(dropInfos, di)
 		room.AddDrop(dropID, d.ItemType, d.ItemID, x, y)
-		dropID++
 	}
 
 	// Broadcast monster_death.
@@ -207,16 +407,10 @@ func (bh *BattleHandlers) handleMonsterDeath(
 		room.Broadcast(spawnPkt)
 	}
 
-	// Schedule respawn: select on room stop channel so the goroutine doesn't
-	// outlive the room and cause a leak.
-	go func() {
-		select {
-		case <-time.After(30 * time.Second):
-			room.RemoveMonster(monster.InstID)
-		case <-room.StopChan():
-			// Room was stopped; skip respawn.
-		}
-	}()
+	// Delegate cleanup + respawn to the room's spawner system.
+	// If a spawner is configured, it uses SpawnConfig.RespawnSec;
+	// otherwise the monster is simply removed after 5s (RMMV default: no respawn).
+	room.NotifyMonsterDeath(monster.InstID)
 }
 
 func (bh *BattleHandlers) awardExp(s *player.PlayerSession, exp int) {
@@ -262,6 +456,82 @@ func (bh *BattleHandlers) awardExp(s *player.PlayerSession, exp int) {
 		}
 		s.Send(&player.Packet{Type: "exp_gain", Payload: expPayload})
 	}()
+}
+
+// ------------------------------------------------------------------ player death / revive
+
+// handlePlayerDeath is called when a player's HP reaches 0.
+func (bh *BattleHandlers) handlePlayerDeath(s *player.PlayerSession, room *world.MapRoom) {
+	// Apply exp penalty if configured.
+	cfg := bh.battleConfig()
+	if cfg != nil && cfg.DeathPenaltyExpPct > 0 {
+		go bh.applyDeathPenalty(s, cfg.DeathPenaltyExpPct)
+	}
+
+	// Notify the dead player (triggers gray death overlay on client).
+	s.Send(&player.Packet{Type: "player_death"})
+
+	// Broadcast to room so other players see the death effect.
+	deathPayload, _ := json.Marshal(map[string]interface{}{
+		"char_id": s.CharID,
+	})
+	pkt, _ := json.Marshal(&player.Packet{Type: "player_die_effect", Payload: deathPayload})
+	room.Broadcast(pkt)
+}
+
+// applyDeathPenalty deducts a percentage of current-level exp on death.
+func (bh *BattleHandlers) applyDeathPenalty(s *player.PlayerSession, pct int) {
+	exp := s.GetExp()
+	penalty := exp * int64(pct) / 100
+	if penalty <= 0 {
+		return
+	}
+	newExp := exp - penalty
+	if newExp < 0 {
+		newExp = 0
+	}
+	s.SetExp(newExp)
+
+	// Persist to DB.
+	if bh.db != nil {
+		bh.db.Model(&model.Character{}).Where("id = ?", s.CharID).Update("exp", newExp)
+	}
+}
+
+// HandleReviveRequest processes a client's request to revive after death.
+func (bh *BattleHandlers) HandleReviveRequest(_ context.Context, s *player.PlayerSession, _ json.RawMessage) error {
+	if !s.IsDead() {
+		return nil
+	}
+
+	cfg := bh.battleConfig()
+
+	// Determine revive HP (50% of max by default).
+	_, maxHP, _, _ := s.Stats()
+	reviveHP := maxHP / 2
+	if reviveHP < 1 {
+		reviveHP = 1
+	}
+	s.Revive(reviveHP)
+
+	// Check if we need to transfer to a revive map.
+	if cfg != nil && cfg.DeathReviveMapID > 0 {
+		// Send transfer command to client (the transfer handler will move the player).
+		transferPayload, _ := json.Marshal(map[string]interface{}{
+			"map_id": cfg.DeathReviveMapID,
+			"x":      cfg.DeathReviveX,
+			"y":      cfg.DeathReviveY,
+		})
+		s.Send(&player.Packet{Type: "revive_transfer", Payload: transferPayload})
+	}
+
+	// Send revive confirmation (hides death overlay).
+	revivePayload, _ := json.Marshal(map[string]interface{}{
+		"hp": reviveHP,
+	})
+	s.Send(&player.Packet{Type: "player_revive", Payload: revivePayload})
+
+	return nil
 }
 
 // ------------------------------------------------------------------ pickup_item

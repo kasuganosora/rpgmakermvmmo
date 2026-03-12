@@ -74,6 +74,9 @@ type PlayerSession struct {
 	mapGen       uint64     // incremented on each map entry; used to cancel stale autorun goroutines
 	needEventEnd bool       // set when event transferred player; autorun should send event_end
 
+	// Field combat: last attack timestamp for GCD enforcement.
+	lastAttackTime time.Time
+
 	// 反作弊：速度异常计数。每次检测到 speed hack 时 +1，
 	// 每 speedHackWindow 重置。累计超过 speedHackKickThreshold 则断开连接。
 	speedHackCount int
@@ -304,14 +307,15 @@ func (s *PlayerSession) Stats() (hp, maxHP, mp, maxMP int) {
 
 // HasState returns whether the player has the given state active.
 func (s *PlayerSession) HasState(stateID int) bool {
-	if s.States == nil {
-		return false
-	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.States[stateID]
 }
 
 // AddState adds a state to the player.
 func (s *PlayerSession) AddState(stateID int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.States == nil {
 		s.States = make(map[int]bool)
 	}
@@ -320,16 +324,33 @@ func (s *PlayerSession) AddState(stateID int) {
 
 // RemoveState removes a state from the player.
 func (s *PlayerSession) RemoveState(stateID int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	delete(s.States, stateID)
 }
 
 // ClearStates removes all states (used by RecoverAll).
 func (s *PlayerSession) ClearStates() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.States = nil
+}
+
+// StatesSnapshot returns a copy of the active states map for safe iteration.
+func (s *PlayerSession) StatesSnapshot() map[int]bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := make(map[int]bool, len(s.States))
+	for k, v := range s.States {
+		cp[k] = v
+	}
+	return cp
 }
 
 // SetEquip sets an equipped item for a slot.
 func (s *PlayerSession) SetEquip(slotIndex, itemID int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.Equips == nil {
 		s.Equips = make(map[int]int)
 	}
@@ -338,10 +359,144 @@ func (s *PlayerSession) SetEquip(slotIndex, itemID int) {
 
 // GetEquip returns the item ID for a slot (0 if empty).
 func (s *PlayerSession) GetEquip(slotIndex int) int {
-	if s.Equips == nil {
-		return 0
-	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.Equips[slotIndex]
+}
+
+// EquipsSnapshot returns a copy of the equips map for safe iteration.
+func (s *PlayerSession) EquipsSnapshot() map[int]int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := make(map[int]int, len(s.Equips))
+	for k, v := range s.Equips {
+		cp[k] = v
+	}
+	return cp
+}
+
+// SetMapInfo atomically sets MapID and InstanceID together.
+func (s *PlayerSession) SetMapInfo(mapID int, instanceID int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.MapID = mapID
+	s.InstanceID = instanceID
+}
+
+// GetMapInfo returns MapID and InstanceID atomically.
+func (s *PlayerSession) GetMapInfo() (mapID int, instanceID int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.MapID, s.InstanceID
+}
+
+// GetMapID returns MapID thread-safely.
+func (s *PlayerSession) GetMapID() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.MapID
+}
+
+// SetLevel sets the player's level thread-safely.
+func (s *PlayerSession) SetLevel(level int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Level = level
+}
+
+// GetLevel returns the player's level thread-safely.
+func (s *PlayerSession) GetLevel() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Level
+}
+
+// SetExp sets the player's experience points thread-safely.
+func (s *PlayerSession) SetExp(exp int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Exp = exp
+}
+
+// GetExp returns the player's experience points thread-safely.
+func (s *PlayerSession) GetExp() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Exp
+}
+
+// SetClassID sets the player's class ID thread-safely.
+func (s *PlayerSession) SetClassID(classID int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ClassID = classID
+}
+
+// GetClassID returns the player's class ID thread-safely.
+func (s *PlayerSession) GetClassID() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ClassID
+}
+
+// SetCharName updates the character name thread-safely.
+func (s *PlayerSession) SetCharName(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.CharName = name
+}
+
+// SetActorImages updates character/face images thread-safely.
+func (s *PlayerSession) SetActorImages(walkName string, walkIndex int, faceName string, faceIndex int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.WalkName = walkName
+	s.WalkIndex = walkIndex
+	s.FaceName = faceName
+	s.FaceIndex = faceIndex
+}
+
+// ActorImages returns the current actor image info thread-safely.
+func (s *PlayerSession) ActorImages() (walkName string, walkIndex int, faceName string, faceIndex int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.WalkName, s.WalkIndex, s.FaceName, s.FaceIndex
+}
+
+// SetShopGoods stores the shop goods list thread-safely.
+func (s *PlayerSession) SetShopGoods(goods [][]interface{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ShopGoods = goods
+}
+
+// GetShopGoods retrieves the shop goods list thread-safely.
+func (s *PlayerSession) GetShopGoods() [][]interface{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ShopGoods
+}
+
+// SetLastTransfer records the current time as the last map-transfer time, thread-safely.
+func (s *PlayerSession) SetLastTransfer() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.LastTransfer = time.Now()
+}
+
+// CheckTransferCooldown returns true when the transfer grace period has elapsed.
+func (s *PlayerSession) CheckTransferCooldown(grace time.Duration) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return time.Since(s.LastTransfer) >= grace
+}
+
+// CoreSnapshot returns HP/MaxHP/MP/MaxMP/Level/Exp/ClassID/MapID as a single locked read.
+// Used by handleDisconnect to safely persist session state.
+func (s *PlayerSession) CoreSnapshot() (hp, maxHP, mp, maxMP, level int, exp int64, classID, mapID int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.HP, s.MaxHP, s.MP, s.MaxMP, s.Level, s.Exp, s.ClassID, s.MapID
 }
 
 // ResetDirty clears the dirty flag and returns whether it was set.
@@ -450,6 +605,61 @@ func (s *PlayerSession) SetInBattle(v bool) {
 // GetContext returns a background context (convenience helper).
 func (s *PlayerSession) GetContext() context.Context {
 	return context.Background()
+}
+
+// CheckAttackGCD returns true if enough time has passed since last attack.
+// If allowed, updates the timestamp atomically.
+func (s *PlayerSession) CheckAttackGCD(gcdMs int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if time.Since(s.lastAttackTime) < time.Duration(gcdMs)*time.Millisecond {
+		return false
+	}
+	s.lastAttackTime = time.Now()
+	return true
+}
+
+// ApplyDamage subtracts dmg from HP (clamped to 0). Returns new HP and whether the player died.
+func (s *PlayerSession) ApplyDamage(dmg int) (newHP int, dead bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.HP -= dmg
+	if s.HP < 0 {
+		s.HP = 0
+	}
+	return s.HP, s.HP == 0
+}
+
+// Revive sets HP to the given value (clamped to MaxHP).
+func (s *PlayerSession) Revive(hp int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if hp > s.MaxHP {
+		hp = s.MaxHP
+	}
+	if hp < 1 {
+		hp = 1
+	}
+	s.HP = hp
+}
+
+// ConsumeMP attempts to deduct cost from MP. Returns false if not enough MP.
+func (s *PlayerSession) ConsumeMP(cost int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.MP < cost {
+		return false
+	}
+	s.MP -= cost
+	return true
+}
+
+// IsDead returns true if HP is 0 and MaxHP > 0 (i.e., stats have been initialized).
+// A session with HP=0 and MaxHP=0 is considered uninitialized, not dead.
+func (s *PlayerSession) IsDead() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.HP <= 0 && s.MaxHP > 0
 }
 
 // ClearNPCChannels drains and clears the NPC-related channels.

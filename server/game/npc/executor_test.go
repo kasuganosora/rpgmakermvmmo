@@ -201,6 +201,18 @@ func (m *mockInventoryStore) HasSkill(_ context.Context, charID int64, skillID i
 	return m.skills[k], nil
 }
 
+func (m *mockInventoryStore) LearnSkill(_ context.Context, charID int64, skillID int) error {
+	k := fmt.Sprintf("%d_%d", charID, skillID)
+	m.skills[k] = true
+	return nil
+}
+
+func (m *mockInventoryStore) ForgetSkill(_ context.Context, charID int64, skillID int) error {
+	k := fmt.Sprintf("%d_%d", charID, skillID)
+	delete(m.skills, k)
+	return nil
+}
+
 func (m *mockInventoryStore) SetEquipSlot(_ context.Context, _ int64, _, _, _ int) error {
 	return nil
 }

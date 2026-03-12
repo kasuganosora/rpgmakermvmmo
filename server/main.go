@@ -127,7 +127,7 @@ func main() {
 
 	// ---- Services ----
 	skillSvc := gskill.NewSkillService(c, res, wm, db, logger)
-	chatH := chat.NewHandler(c, pubsub, sm, wm, cfg.Game, logger)
+	chatH := chat.NewHandler(c, pubsub, sm, wm, partyMgr, cfg.Game, logger)
 	tradeSvc := trade.NewService(db, c, sm, logger)
 	questSvc := quest.NewService(db, nil, logger)
 	_ = questSvc

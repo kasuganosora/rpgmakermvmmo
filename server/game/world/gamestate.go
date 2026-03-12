@@ -262,9 +262,11 @@ func (gs *GameState) GetSwitch(id int) bool {
 }
 
 // SetSwitch sets the value of a global switch and queues it for persistence.
+// Triggers onSwitchChange callback if set (for broadcasting to clients).
 func (gs *GameState) SetSwitch(id int, val bool) {
 	gs.mu.Lock()
 	gs.switches[id] = val
+	onChange := gs.onSwitchChange
 	gs.mu.Unlock()
 
 	gs.queueChange(fmt.Sprintf("sw:%d", id), pendingChange{
@@ -272,6 +274,11 @@ func (gs *GameState) SetSwitch(id int, val bool) {
 		id:  id,
 		val: val,
 	})
+
+	// Trigger callback outside of lock
+	if onChange != nil {
+		onChange(id, val)
+	}
 }
 
 // GetVariable returns the value of a global variable.

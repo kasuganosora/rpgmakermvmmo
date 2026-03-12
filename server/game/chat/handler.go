@@ -11,6 +11,7 @@ import (
 
 	"github.com/kasuganosora/rpgmakermvmmo/server/cache"
 	"github.com/kasuganosora/rpgmakermvmmo/server/config"
+	"github.com/kasuganosora/rpgmakermvmmo/server/game/party"
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/player"
 	"github.com/kasuganosora/rpgmakermvmmo/server/game/world"
 	"go.uber.org/zap"
@@ -24,17 +25,18 @@ const (
 
 // Handler handles all chat WS messages.
 type Handler struct {
-	cache   cache.Cache
-	pubsub  cache.PubSub
-	sm      *player.SessionManager
-	wm      *world.WorldManager
-	gameCfg config.GameConfig
-	logger  *zap.Logger
+	cache    cache.Cache
+	pubsub   cache.PubSub
+	sm       *player.SessionManager
+	wm       *world.WorldManager
+	partyMgr *party.Manager
+	gameCfg  config.GameConfig
+	logger   *zap.Logger
 }
 
 // NewHandler creates a new chat Handler.
-func NewHandler(c cache.Cache, ps cache.PubSub, sm *player.SessionManager, wm *world.WorldManager, gameCfg config.GameConfig, logger *zap.Logger) *Handler {
-	return &Handler{cache: c, pubsub: ps, sm: sm, wm: wm, gameCfg: gameCfg, logger: logger}
+func NewHandler(c cache.Cache, ps cache.PubSub, sm *player.SessionManager, wm *world.WorldManager, partyMgr *party.Manager, gameCfg config.GameConfig, logger *zap.Logger) *Handler {
+	return &Handler{cache: c, pubsub: ps, sm: sm, wm: wm, partyMgr: partyMgr, gameCfg: gameCfg, logger: logger}
 }
 
 type chatSendReq struct {
@@ -61,11 +63,7 @@ func (h *Handler) HandleSend(ctx context.Context, s *player.PlayerSession, raw j
 	case "world":
 		return h.handleWorldChat(ctx, s, req.Content)
 	case "party":
-		// TODO: look up party members and send directly
-		msg := h.buildMsg("party", s, req.Content)
-		msgJSON, _ := json.Marshal(msg)
-		s.Send(&player.Packet{Type: "chat_recv", Payload: msgJSON})
-		return nil
+		return h.handlePartyChat(s, req.Content)
 	case "guild":
 		if s.CharID != 0 {
 			msg := h.buildMsg("guild", s, req.Content)
@@ -179,6 +177,28 @@ func (h *Handler) sendNearby(s *player.PlayerSession, content string) error {
 			p.SendRaw(recvPkt)
 		}
 	})
+	return nil
+}
+
+// handlePartyChat sends a party chat message to all members of the sender's party.
+// If the sender is not in a party, only the sender receives the message (echo).
+func (h *Handler) handlePartyChat(s *player.PlayerSession, content string) error {
+	content = strings.TrimSpace(content)
+	if len(content) == 0 {
+		return nil
+	}
+	msg := h.buildMsg("party", s, content)
+	msgJSON, _ := json.Marshal(msg)
+	recvPkt, _ := json.Marshal(&player.Packet{Type: "chat_recv", Payload: msgJSON})
+
+	if h.partyMgr != nil {
+		if p := h.partyMgr.GetParty(s.CharID); p != nil {
+			p.Broadcast(recvPkt)
+			return nil
+		}
+	}
+	// Not in a party — echo only to sender.
+	s.SendRaw(recvPkt)
 	return nil
 }
 

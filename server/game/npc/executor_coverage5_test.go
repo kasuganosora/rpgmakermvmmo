@@ -765,6 +765,12 @@ func (s *errorMockStore) IsEquipped(_ context.Context, _ int64, _, _ int) (bool,
 func (s *errorMockStore) HasSkill(_ context.Context, _ int64, _ int) (bool, error) {
 	return false, assert.AnError
 }
+func (s *errorMockStore) LearnSkill(_ context.Context, _ int64, _ int) error {
+	return assert.AnError
+}
+func (s *errorMockStore) ForgetSkill(_ context.Context, _ int64, _ int) error {
+	return assert.AnError
+}
 func (s *errorMockStore) SetEquipSlot(_ context.Context, _ int64, _, _, _ int) error {
 	return assert.AnError
 }

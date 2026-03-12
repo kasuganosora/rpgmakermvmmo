@@ -38,6 +38,8 @@ type MonsterRuntime struct {
 	CachedPath   []ai.Point
 	CachedTarget ai.Point
 	AttackTimer  int // ticks until next attack allowed
+	SpawnCfg     *SpawnConfig // pointer to spawn config (for group assist)
+	OnDamaged    func(m *MonsterRuntime, attackerCharID int64) // group assist callback
 	dirty        bool
 
 	mu sync.Mutex
@@ -60,7 +62,6 @@ func (m *MonsterRuntime) SetState(s ai.MonsterState) {
 // TakeDamage applies damage to the monster. Returns true if HP reached 0.
 func (m *MonsterRuntime) TakeDamage(dmg int, attackerID int64) bool {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.HP -= dmg
 	if m.HP < 0 {
 		m.HP = 0
@@ -73,17 +74,26 @@ func (m *MonsterRuntime) TakeDamage(dmg int, attackerID int64) bool {
 	if m.Threat != nil {
 		m.Threat.AddThreat(attackerID, dmg)
 	}
+	onDamaged := m.OnDamaged
+	m.mu.Unlock()
+	// Trigger group assist callback outside the lock.
+	if onDamaged != nil {
+		onDamaged(m, attackerID)
+	}
 	return m.HP == 0
 }
 
 // SpawnConfig describes a monster spawn point on a map.
 type SpawnConfig struct {
-	MapID      int
-	MonsterID  int // Enemies.json ID
-	X, Y       int
-	MaxCount   int
-	RespawnSec int
-	AIOverride string // optional: override enemy's Note AI profile name
+	MapID       int
+	MonsterID   int // Enemies.json ID
+	X, Y        int
+	MaxCount    int
+	RespawnSec  int
+	AIOverride  string // optional: override enemy's Note AI profile name
+	GroupID     string // group identifier for group assist
+	GroupType   string // "assist" | "linked" | "pack"
+	AssistRange int    // assist call range in tiles (assist mode only)
 }
 
 // NewMonster creates a fresh MonsterRuntime from a template.

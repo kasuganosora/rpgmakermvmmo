@@ -95,9 +95,10 @@ func TestEquip_ReplacesExisting(t *testing.T) {
 	svc, session, charID := setupEquip(t)
 	ctx := context.Background()
 
-	// Equip first weapon
-	inv1 := &model.Inventory{CharID: charID, ItemID: 10, Kind: model.ItemKindWeapon, Qty: 1, Equipped: true, SlotIndex: 0}
+	// Create and equip first weapon via Equip method (avoids Create-with-bool issues).
+	inv1 := &model.Inventory{CharID: charID, ItemID: 10, Kind: model.ItemKindWeapon, Qty: 1}
 	require.NoError(t, svc.db.Create(inv1).Error)
+	require.NoError(t, svc.Equip(ctx, session, inv1.ID))
 
 	// Equip second weapon to same slot → should unequip first
 	inv2 := &model.Inventory{CharID: charID, ItemID: 11, Kind: model.ItemKindWeapon, Qty: 1}

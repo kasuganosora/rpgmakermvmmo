@@ -78,12 +78,12 @@ func NewTestServer(t *testing.T) *TestServer {
 
 	// ---- Services ----
 	skillSvc := gskill.NewSkillService(c, res, wm, db, logger)
-	chatH := chat.NewHandler(c, pubsub, sm, wm, config.GameConfig{
+	partyMgr := party.NewManager(logger)
+	chatH := chat.NewHandler(c, pubsub, sm, wm, partyMgr, config.GameConfig{
 		ChatNearbyRange:     10,
 		GlobalChatCooldownS: 180,
 	}, logger)
 	tradeSvc := trade.NewService(db, c, sm, logger)
-	partyMgr := party.NewManager(logger)
 	questSvc := quest.NewService(db, nil, logger)
 	_ = questSvc
 
@@ -231,12 +231,12 @@ func NewTestServerWithResources(t *testing.T, dataPath string) *TestServer {
 	wm := world.NewWorldManager(res, gameState, world.NewGlobalWhitelist(), nil, logger)
 
 	skillSvc := gskill.NewSkillService(c, res, wm, db, logger)
-	chatH := chat.NewHandler(c, pubsub, sm, wm, config.GameConfig{
+	partyMgr := party.NewManager(logger)
+	chatH := chat.NewHandler(c, pubsub, sm, wm, partyMgr, config.GameConfig{
 		ChatNearbyRange:     10,
 		GlobalChatCooldownS: 180,
 	}, logger)
 	tradeSvc := trade.NewService(db, c, sm, logger)
-	partyMgr := party.NewManager(logger)
 	questSvc := quest.NewService(db, nil, logger)
 	_ = questSvc
 

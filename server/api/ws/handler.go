@@ -196,20 +196,27 @@ func (h *Handler) handleDisconnect(s *player.PlayerSession) {
 			defer cancel()
 
 			x, y, dir := s.Position()
+			hp, maxHP, mp, maxMP, level, exp, classID, mapID := s.CoreSnapshot()
+			walkName, walkIndex, faceName, faceIndex := s.ActorImages()
 			err := h.db.WithContext(ctx).Model(&model.Character{}).
 				Where("id = ?", s.CharID).
 				Updates(map[string]interface{}{
-					"map_id":    s.MapID,
-					"map_x":     x,
-					"map_y":     y,
-					"direction": dir,
-					"hp":        s.HP,
-					"max_hp":    s.MaxHP,
-					"mp":        s.MP,
-					"max_mp":    s.MaxMP,
-					"class_id":  s.ClassID,
-					"level":     s.Level,
-					"exp":       s.Exp,
+					"map_id":     mapID,
+					"map_x":      x,
+					"map_y":      y,
+					"direction":  dir,
+					"hp":         hp,
+					"max_hp":     maxHP,
+					"mp":         mp,
+					"max_mp":     maxMP,
+					"class_id":   classID,
+					"level":      level,
+					"exp":        exp,
+					"name":       s.CharName,
+					"walk_name":  walkName,
+					"walk_index": walkIndex,
+					"face_name":  faceName,
+					"face_index": faceIndex,
 				}).Error
 			if err != nil {
 				h.logger.Error("failed to save character state on disconnect",

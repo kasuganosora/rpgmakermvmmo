@@ -118,7 +118,7 @@ func (h *GuildHandler) Join(c *gin.Context) {
 		}
 		return tx.Model(&model.Character{}).Where("id = ?", charID).Update("guild_id", guildID).Error
 	}); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "join failed"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "join failed: " + err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "joined"})

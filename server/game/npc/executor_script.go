@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"math/rand"
 	"regexp"
 	"strings"
 	"time"
@@ -351,19 +352,31 @@ func injectScriptMath(vm *goja.Runtime) {
 		}
 		return v
 	})
-	_ = m.Set("max", func(a, b float64) float64 {
-		if a > b {
-			return a
+	_ = m.Set("max", func(vals ...float64) float64 {
+		if len(vals) == 0 {
+			return math.Inf(-1)
 		}
-		return b
-	})
-	_ = m.Set("min", func(a, b float64) float64 {
-		if a < b {
-			return a
+		result := vals[0]
+		for _, v := range vals[1:] {
+			if v > result {
+				result = v
+			}
 		}
-		return b
+		return result
 	})
-	_ = m.Set("random", func() float64 { return 0.5 })
+	_ = m.Set("min", func(vals ...float64) float64 {
+		if len(vals) == 0 {
+			return math.Inf(1)
+		}
+		result := vals[0]
+		for _, v := range vals[1:] {
+			if v < result {
+				result = v
+			}
+		}
+		return result
+	})
+	_ = m.Set("random", func() float64 { return rand.Float64() }) //nolint:gosec // game logic, not crypto
 	vm.Set("Math", m)
 }
 

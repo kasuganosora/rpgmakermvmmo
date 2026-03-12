@@ -141,6 +141,22 @@ func (bm *BattleSessionManager) RunBattle(
 	troopID int,
 	canEscape, canLose bool,
 ) int {
+	// Combat mode check: turn-based battles disabled in "realtime" mode.
+	if bm.res != nil && bm.res.MMOConfig != nil && bm.res.MMOConfig.Battle != nil {
+		if bm.res.MMOConfig.Battle.GetCombatMode() == "realtime" {
+			bm.logger.Warn("turn-based battle skipped in realtime mode, auto-win",
+				zap.Int64("char_id", s.CharID), zap.Int("troop_id", troopID))
+			return battle.ResultWin
+		}
+	}
+
+	// Prevent double-battle: if the player is already in a battle, auto-win.
+	if s.InBattle() {
+		bm.logger.Warn("player already in battle, auto-win",
+			zap.Int64("char_id", s.CharID), zap.Int("troop_id", troopID))
+		return battle.ResultWin
+	}
+
 	// Look up the troop.
 	if troopID <= 0 || troopID >= len(bm.res.Troops) || bm.res.Troops[troopID] == nil {
 		bm.logger.Warn("troop not found, auto-win", zap.Int("troop_id", troopID))
@@ -227,16 +243,18 @@ func (bm *BattleSessionManager) RunBattle(
 			if bm.db == nil {
 				return
 			}
-			// Decrement item qty; delete row if qty reaches 0.
-			var inv model.Inventory
-			if err := bm.db.Where("char_id = ? AND item_id = ? AND kind = 1 AND equipped = ?",
-				charID, itemID, false).First(&inv).Error; err == nil {
-				if inv.Qty <= 1 {
-					bm.db.Delete(&inv)
-				} else {
-					bm.db.Model(&inv).Update("qty", inv.Qty-1)
+			// Decrement item qty inside a transaction to avoid read-then-write races.
+			_ = bm.db.Transaction(func(tx *gorm.DB) error {
+				var inv model.Inventory
+				if err := tx.Where("char_id = ? AND item_id = ? AND kind = 1 AND equipped = ?",
+					charID, itemID, false).First(&inv).Error; err != nil {
+					return err
 				}
-			}
+				if inv.Qty <= 1 {
+					return tx.Delete(&inv).Error
+				}
+				return tx.Model(&inv).Update("qty", inv.Qty-1).Error
+			})
 		},
 	})
 
@@ -251,6 +269,12 @@ func (bm *BattleSessionManager) RunBattle(
 			nearby := p.GetNearbyMembers(s.MapID, mx, my, 10)
 			for _, m := range nearby {
 				if m.CharID != s.CharID {
+					// Skip party members already in another battle.
+					if m.InBattle() {
+						bm.logger.Debug("party member already in battle, skipping",
+							zap.Int64("char_id", m.CharID))
+						continue
+					}
 					// Skip party members currently in NPC events (EventMu held).
 					if !m.EventMu.TryLock() {
 						bm.logger.Debug("party member busy with event, skipping battle",
@@ -596,20 +620,20 @@ func (bm *BattleSessionManager) syncPostBattleState(ctx context.Context, bi *bat
 			continue
 		}
 
-		// Sync HP/MP back to session.
+		// Sync HP/MP back to session (via mutex-protected accessor).
 		finalHP := a.HP()
 		finalMP := a.MP()
-		p.HP = finalHP
-		p.MP = finalMP
+		_, maxHP, _, maxMP := p.Stats()
+		p.SetStats(finalHP, maxHP, finalMP, maxMP)
 
 		// Sync states: keep states where removeAtBattleEnd == false.
-		p.States = make(map[int]bool)
+		p.ClearStates()
 		if bm.res != nil {
 			for _, se := range a.StateEntries() {
 				if se.StateID > 0 && se.StateID < len(bm.res.States) {
 					stData := bm.res.States[se.StateID]
 					if stData != nil && !stData.RemoveAtBattleEnd {
-						p.States[se.StateID] = true
+						p.AddState(se.StateID)
 					}
 				}
 			}
@@ -617,13 +641,15 @@ func (bm *BattleSessionManager) syncPostBattleState(ctx context.Context, bi *bat
 
 		// Persist HP/MP/MaxHP/MaxMP/ClassID to DB.
 		if bm.db != nil {
+			_, maxHP2, _, maxMP2 := p.Stats()
+			classID := p.GetClassID()
 			if err := bm.db.WithContext(ctx).Model(&model.Character{}).Where("id = ?", p.CharID).
 				Updates(map[string]interface{}{
 					"hp":       finalHP,
 					"mp":       finalMP,
-					"max_hp":   p.MaxHP,
-					"max_mp":   p.MaxMP,
-					"class_id": p.ClassID,
+					"max_hp":   maxHP2,
+					"max_mp":   maxMP2,
+					"class_id": classID,
 				}).Error; err != nil {
 				bm.logger.Error("syncPostBattleState", zap.Int64("char_id", p.CharID), zap.Error(err))
 			}

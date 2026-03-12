@@ -68,7 +68,7 @@ func (e *Executor) sendShopProcessing(s *player.PlayerSession, cmd *resource.Eve
 	// server-authoritative buy/sell validation.
 	allGoods := [][]interface{}{cmd.Parameters}
 	allGoods = append(allGoods, extraGoods...)
-	s.ShopGoods = allGoods
+	s.SetShopGoods(allGoods)
 
 	payload, _ := json.Marshal(map[string]interface{}{
 		"code":       cmd.Code,

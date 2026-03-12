@@ -11,15 +11,16 @@ import (
 
 // WorldManager manages all active MapRoom instances.
 type WorldManager struct {
-	mu          sync.RWMutex
-	rooms       map[int]*MapRoom            // shared rooms (mapID → room)
-	instances   map[int64]*MapRoom          // instance rooms (instanceID → room)
-	instByOwner map[instOwnerKey]int64      // (mapID, ownerID) → instanceID
-	res         *resource.ResourceLoader
-	state       *GameState
-	psm         *PlayerStateManager
-	whitelist   *GlobalWhitelist
-	logger      *zap.Logger
+	mu            sync.RWMutex
+	rooms         map[int]*MapRoom            // shared rooms (mapID → room)
+	instances     map[int64]*MapRoom          // instance rooms (instanceID → room)
+	instByOwner   map[instOwnerKey]int64      // (mapID, ownerID) → instanceID
+	monsterDmgFn  MonsterDamageFunc           // injected by BattleHandlers for monster→player damage
+	res           *resource.ResourceLoader
+	state         *GameState
+	psm           *PlayerStateManager
+	whitelist     *GlobalWhitelist
+	logger        *zap.Logger
 }
 
 // NewWorldManager creates a new WorldManager.
@@ -35,6 +36,14 @@ func NewWorldManager(res *resource.ResourceLoader, state *GameState, wl *GlobalW
 		whitelist:   wl,
 		logger:      logger,
 	}
+}
+
+// SetMonsterDamageFunc sets the global callback for monster→player damage.
+// Injected by BattleHandlers at startup; propagated to every new MapRoom.
+func (wm *WorldManager) SetMonsterDamageFunc(fn MonsterDamageFunc) {
+	wm.mu.Lock()
+	defer wm.mu.Unlock()
+	wm.monsterDmgFn = fn
 }
 
 // GameState returns the global game state.
@@ -61,6 +70,9 @@ func (wm *WorldManager) GetOrCreate(mapID int) *MapRoom {
 		return room
 	}
 	room = newMapRoom(mapID, wm.res, wm.state, wm.logger)
+	if wm.monsterDmgFn != nil {
+		room.SetMonsterDamageFunc(wm.monsterDmgFn)
+	}
 	wm.rooms[mapID] = room
 	go room.Run()
 	// Set up monster spawners from MMOConfig if configured.
@@ -80,13 +92,16 @@ func (wm *WorldManager) setupSpawners(room *MapRoom, mapID int) {
 			continue
 		}
 		configs = append(configs, SpawnConfig{
-			MapID:      sc.MapID,
-			MonsterID:  sc.EnemyID,
-			X:          sc.X,
-			Y:          sc.Y,
-			MaxCount:   sc.MaxCount,
-			RespawnSec: sc.RespawnSec,
-			AIOverride: sc.AIOverride,
+			MapID:       sc.MapID,
+			MonsterID:   sc.EnemyID,
+			X:           sc.X,
+			Y:           sc.Y,
+			MaxCount:    sc.MaxCount,
+			RespawnSec:  sc.RespawnSec,
+			AIOverride:  sc.AIOverride,
+			GroupID:     sc.GroupID,
+			GroupType:   sc.GroupType,
+			AssistRange: sc.AssistRange,
 		})
 	}
 	if len(configs) == 0 {
@@ -94,6 +109,7 @@ func (wm *WorldManager) setupSpawners(room *MapRoom, mapID int) {
 	}
 	sp := NewSpawner(room, wm.res, configs, wm.logger)
 	sp.SpawnAll()
+	room.SetSpawner(sp)
 	wm.logger.Info("monster spawner initialized",
 		zap.Int("map_id", mapID), zap.Int("spawn_groups", len(configs)))
 }

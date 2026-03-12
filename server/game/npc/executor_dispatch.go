@@ -36,9 +36,7 @@ func (e *Executor) isSafeScriptLine(line string) bool {
 			methodEnd = len(rest)
 		}
 		method := rest[:methodEnd]
-		if e.safeScreenSet == nil {
-			e.safeScreenSet = cfg.SafeScreenMethodSet()
-		}
+		e.safeScreenSetOnce.Do(func() { e.safeScreenSet = cfg.SafeScreenMethodSet() })
 		return e.safeScreenSet[method]
 	}
 	return false
@@ -60,9 +58,7 @@ func (e *Executor) isAlwaysSendSwitch(id int) bool {
 	if cfg == nil {
 		return false
 	}
-	if e.alwaysSendSet == nil {
-		e.alwaysSendSet = cfg.AlwaysSendSwitchSet()
-	}
+	e.alwaysSendSetOnce.Do(func() { e.alwaysSendSet = cfg.AlwaysSendSwitchSet() })
 	return e.alwaysSendSet[id]
 }
 
@@ -77,9 +73,7 @@ func (e *Executor) isBlockedPluginCmd(name string) bool {
 	if _, ok := cfg.ServerExecPlugins[name]; ok {
 		return true
 	}
-	if e.blockedCmdSet == nil {
-		e.blockedCmdSet = cfg.BlockedPluginCmdSet()
-	}
+	e.blockedCmdSetOnce.Do(func() { e.blockedCmdSet = cfg.BlockedPluginCmdSet() })
 	return e.blockedCmdSet[name]
 }
 
@@ -539,22 +533,19 @@ func (e *Executor) executeList(ctx context.Context, s *player.PlayerSession, cmd
 			e.sendEffect(s, cmd)
 
 		case CmdChangeSkill:
-			// 技能变更（学习/遗忘）— 转发给客户端
-			e.sendEffect(s, cmd)
+			e.applyChangeSkill(ctx, s, cmd.Parameters)
 
 		case CmdChangeEquipment:
 			e.applyChangeEquipment(ctx, s, cmd.Parameters, opts)
 
 		case CmdChangeName:
-			// 角色名变更 — 转发给客户端
-			e.sendEffect(s, cmd)
+			e.applyChangeName(s, cmd.Parameters)
 
 		case CmdChangeClass:
 			e.applyChangeClass(ctx, s, cmd.Parameters, opts)
 
 		case CmdChangeActorImage:
-			// 角色图像变更 — 转发给客户端
-			e.sendEffect(s, cmd)
+			e.applyChangeActorImage(s, cmd.Parameters)
 
 		case CmdBattleProcessing:
 			battleResult[cmd.Indent] = e.processBattle(ctx, s, cmd.Parameters, opts)

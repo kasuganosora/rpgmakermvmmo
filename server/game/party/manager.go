@@ -83,6 +83,15 @@ func (p *Party) GetNearbyMembers(mapID, x, y, radius int) []*player.PlayerSessio
 	return result
 }
 
+// Broadcast sends a pre-encoded raw packet to all party members.
+func (p *Party) Broadcast(data []byte) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	for _, m := range p.Members {
+		m.SendRaw(data)
+	}
+}
+
 // BroadcastUpdate sends party_update to all members.
 func (p *Party) BroadcastUpdate() {
 	p.mu.RLock()

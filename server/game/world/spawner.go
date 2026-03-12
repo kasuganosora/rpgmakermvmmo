@@ -92,6 +92,16 @@ func (sp *Spawner) spawnGroup(cfgIndex int, cfg SpawnConfig) {
 		m := NewMonster(template, cfgIndex, cfg.X+i, cfg.Y)
 		m.Profile = profile
 		m.AITree = tree
+		// Set spawn config for group assist.
+		m.SpawnCfg = &cfg
+		// Wire OnDamaged callback for group assist.
+		if cfg.GroupID != "" && sp.room.groupMgr != nil {
+			spIdx := cfgIndex
+			m.OnDamaged = func(monster *MonsterRuntime, attackerCharID int64) {
+				sp.room.groupMgr.OnMemberDamaged(spIdx, attackerCharID)
+			}
+			sp.room.groupMgr.Register(cfgIndex, cfg.GroupID, cfg.GroupType, m)
+		}
 		sp.room.runtimeMonsters[m.InstID] = m
 		sp.room.monsters = append(sp.room.monsters, &MonsterInstance{
 			ID:      m.InstID,
@@ -130,6 +140,15 @@ func (sp *Spawner) RespawnAfter(cfgIndex int, delay time.Duration) {
 			return
 		}
 	}()
+}
+
+// RespawnSec returns the configured respawn delay in seconds for a spawn group.
+// Returns 0 if the cfgIndex is invalid or RespawnSec is not set (no auto-respawn).
+func (sp *Spawner) RespawnSec(cfgIndex int) int {
+	if cfgIndex < 0 || cfgIndex >= len(sp.configs) {
+		return 0
+	}
+	return sp.configs[cfgIndex].RespawnSec
 }
 
 // Stop cancels any pending respawn goroutines. Safe to call multiple times.

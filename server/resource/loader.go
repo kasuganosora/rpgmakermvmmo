@@ -923,7 +923,10 @@ type MonsterSpawnConfig struct {
 	Y          int    `json:"y"`
 	MaxCount   int    `json:"maxCount"`
 	RespawnSec int    `json:"respawnSec"`
-	AIOverride string `json:"aiOverride"` // optional: override enemy's Note AI profile
+	AIOverride  string `json:"aiOverride"`  // optional: override enemy's Note AI profile
+	GroupID     string `json:"groupId"`     // group identifier — same groupId monsters form a group
+	GroupType   string `json:"groupType"`   // "assist" | "linked" | "pack" (default: "assist")
+	AssistRange int    `json:"assistRange"` // assist call range in tiles (default: 5, assist mode only)
 }
 
 // MonsterAIProfile defines a custom AI behavior profile.
@@ -937,12 +940,61 @@ type MonsterAIProfile struct {
 	FleeHPPercent      int `json:"fleeHPPercent"`
 }
 
-// BattleMMOConfig holds battle-specific configuration (YEP plugin integration).
+// BattleMMOConfig holds battle-specific configuration (YEP plugin integration + real-time combat).
 type BattleMMOConfig struct {
 	// BaseTroopID mirrors YEP_BaseTroopEvents: the troop whose event pages are
 	// merged into every battle's TroopEventRunner at initialization time.
 	// Set to 0 (default) to disable.
 	BaseTroopID int `json:"baseTroopId"`
+
+	// CombatMode controls which combat systems are active:
+	//   "turnbased" — only RunBattle (field attacks disabled)
+	//   "realtime"  — only field attacks (RunBattle disabled)
+	//   "hybrid"    — both active (default, backward-compatible)
+	CombatMode string `json:"combatMode"`
+
+	// RealtimeGCDMs is the global cooldown in milliseconds between player attacks.
+	// Default 1000 (1 second). Only applies when field attacks are enabled.
+	RealtimeGCDMs int `json:"realtimeGCDMs"`
+
+	// RealtimeAttackRange is the max Manhattan distance for field attacks (default 1 = melee).
+	RealtimeAttackRange int `json:"realtimeAttackRange"`
+
+	// EnforceSkillCosts deducts MP/TP when using skills in field combat.
+	EnforceSkillCosts bool `json:"enforceSkillCosts"`
+
+	// DeathReviveMapID/X/Y is the respawn point after player death.
+	// If DeathReviveMapID is 0, revive on the same map at current position.
+	DeathReviveMapID int `json:"deathReviveMapId"`
+	DeathReviveX     int `json:"deathReviveX"`
+	DeathReviveY     int `json:"deathReviveY"`
+
+	// DeathPenaltyExpPct is the percentage of current-level exp lost on death (0 = none).
+	DeathPenaltyExpPct int `json:"deathPenaltyExpPct"`
+}
+
+// GetCombatMode returns the effective combat mode, defaulting to "hybrid".
+func (c *BattleMMOConfig) GetCombatMode() string {
+	if c == nil || c.CombatMode == "" {
+		return "hybrid"
+	}
+	return c.CombatMode
+}
+
+// GetGCDMs returns the effective GCD in milliseconds, defaulting to 1000.
+func (c *BattleMMOConfig) GetGCDMs() int {
+	if c == nil || c.RealtimeGCDMs <= 0 {
+		return 1000
+	}
+	return c.RealtimeGCDMs
+}
+
+// GetAttackRange returns the effective attack range, defaulting to 1.
+func (c *BattleMMOConfig) GetAttackRange() int {
+	if c == nil || c.RealtimeAttackRange <= 0 {
+		return 1
+	}
+	return c.RealtimeAttackRange
 }
 
 // BlockedPluginCmdSet returns the blocked plugin commands as a set for O(1) lookup.

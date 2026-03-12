@@ -456,6 +456,7 @@
                         actor._equips[slot].setEquip(isWeapon, eq.item_id);
                     }
                 }
+                actor.refresh();
             }
         }
 
@@ -872,17 +873,10 @@
     //    * 有 MMO 窗口开着时 ESC 优先关闭窗口，不开菜单。
     //    * 右键始终用于玩家上下文菜单（组队/交易），不触发 RMMV 菜单。
     // ═══════════════════════════════════════════════════════════
-    if (window.MMO_CLIENT_CONFIG && window.MMO_CLIENT_CONFIG.escMenu === true) {
-        // escMenu 模式：仅在无可见 MMO 窗口时响应 ESC 开菜单；
-        // 忽略右键（TouchInput.isCancelled），避免干扰 MMO 右键上下文菜单。
-        Scene_Map.prototype.isMenuCalled = function () {
-            if ($MMO._gameWindows.some(function (w) { return w.visible; })) return false;
-            return Input.isTriggered('escape') || Input.isTriggered('cancel');
-        };
-    } else {
-        Scene_Map.prototype.isMenuCalled = function () { return false; };
-        Scene_Map.prototype.callMenu = function () {};
-    }
+    // ESC/菜单由 Scene_Map.prototype.update 钩子直接处理（SceneManager.push），
+    // 禁用 RMMV 的 isMenuCalled/callMenu 路径，防止双重推送。
+    Scene_Map.prototype.isMenuCalled = function () { return false; };
+    Scene_Map.prototype.callMenu = function () {};
 
     /**
      * 全局键盘快捷键监听。
@@ -938,10 +932,12 @@
         //                  无窗口时 isMenuCalled 返回 true，RMMV 自动打开 Scene_Menu。
         if (Input.isTriggered('cancel') || Input.isTriggered('escape')) {
             if (!$MMO.closeTopWindow()) {
-                if (!(window.MMO_CLIENT_CONFIG && window.MMO_CLIENT_CONFIG.escMenu === true)) {
+                if (window.MMO_CLIENT_CONFIG && window.MMO_CLIENT_CONFIG.escMenu === true) {
+                    // 直接强制推送 RMMV 原生菜单，绕过 isMenuEnabled 检查。
+                    if (!$gameMap.isEventRunning()) SceneManager.push(Scene_Menu);
+                } else {
                     $MMO._triggerAction('system');
                 }
-                // escMenu=true 时无需额外操作，isMenuCalled 已在本帧开启 RMMV 菜单。
             }
         }
         // RMMV 对话/选项窗口或服务器事件执行时隐藏底部 MMO UI。

@@ -559,7 +559,7 @@
         { label: '技能', action: 'skills',    icon: 79,  hotkey: 'Alt+S' },
         { label: '好友', action: 'friends',   icon: 75,  hotkey: 'Alt+F' },
         { label: '公会', action: 'guild',     icon: 83,  hotkey: 'Alt+G' },
-        { label: '系统', action: 'system',    icon: 236, hotkey: 'ESC' }
+        { label: '系统', action: 'system',    icon: 236, hotkey: 'Menu' }
     ];
     /** @type {number} 列数。 */
     var AB_COLS = 3;
@@ -701,7 +701,13 @@
         if (this._hoverIdx !== oldHover) this.refresh();
         // 点击按钮触发对应操作。
         if (TouchInput.isTriggered() && this._hoverIdx >= 0) {
-            $MMO._triggerAction(AB_BTNS[this._hoverIdx].action);
+            var act = AB_BTNS[this._hoverIdx].action;
+            // escMenu 模式下「系统」按钮直接打开 RMMV 原生菜单。
+            if (act === 'system' && window.MMO_CLIENT_CONFIG && window.MMO_CLIENT_CONFIG.escMenu === true) {
+                if (!$gameMap.isEventRunning()) SceneManager.push(Scene_Menu);
+            } else {
+                $MMO._triggerAction(act);
+            }
         }
     };
 

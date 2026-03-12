@@ -422,10 +422,22 @@ func (room *MapRoom) findRandomPassablePosition(tileID int, maxAttempts int) (in
 	return -1, -1
 }
 
+// Package-level precompiled regexes for extractMeta* functions (performance).
+var (
+	reMetaRandomPosInt   = regexp.MustCompile(`<RandomPos:\s*(\d+)>`)
+	reMetaRandomFloat    = regexp.MustCompile(`<Random:\s*([\d.]+)>`)
+)
+
 // extractMetaInt extracts an integer meta value from note text.
-// Example: <RandomPos: 5> or <Random: 1>
+// Example: <RandomPos: 5>
 func extractMetaInt(note, key string) int {
-	re := regexp.MustCompile(`<` + regexp.QuoteMeta(key) + `:\s*(\d+)>`)
+	var re *regexp.Regexp
+	switch key {
+	case "RandomPos":
+		re = reMetaRandomPosInt
+	default:
+		re = regexp.MustCompile(`<` + regexp.QuoteMeta(key) + `:\s*(\d+)>`)
+	}
 	matches := re.FindStringSubmatch(note)
 	if len(matches) >= 2 {
 		if v, err := strconv.Atoi(matches[1]); err == nil {
@@ -437,7 +449,13 @@ func extractMetaInt(note, key string) int {
 
 // extractMetaFloat extracts a float meta value from note text.
 func extractMetaFloat(note, key string) float64 {
-	re := regexp.MustCompile(`<` + regexp.QuoteMeta(key) + `:\s*([\d.]+)>`)
+	var re *regexp.Regexp
+	switch key {
+	case "Random":
+		re = reMetaRandomFloat
+	default:
+		re = regexp.MustCompile(`<` + regexp.QuoteMeta(key) + `:\s*([\d.]+)>`)
+	}
 	matches := re.FindStringSubmatch(note)
 	if len(matches) >= 2 {
 		if v, err := strconv.ParseFloat(matches[1], 64); err == nil {

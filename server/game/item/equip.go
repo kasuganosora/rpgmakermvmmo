@@ -48,26 +48,22 @@ func (svc *EquipService) Equip(ctx context.Context, s *player.PlayerSession, inv
 		}
 
 		// Unequip any existing item in the same slot.
-		// Query all char items and filter in Go — the embedded DB engine
-		// doesn't reliably handle boolean or negative-value WHERE clauses.
-		var charItems []model.Inventory
-		if err := tx.Where("char_id = ?", s.CharID).Find(&charItems).Error; err != nil {
+		// Use GORM Find (model-aware scan) so bool Equipped reads correctly across DBs.
+		var others []model.Inventory
+		if err := tx.Where("char_id = ? AND id != ?", s.CharID, invID).Find(&others).Error; err != nil {
 			return err
 		}
-		for _, ci := range charItems {
-			if ci.ID != invID && ci.Equipped && ci.SlotIndex == slot {
-				ci.Equipped = false
-				ci.SlotIndex = -1
-				if err2 := tx.Save(&ci).Error; err2 != nil {
-					return err2
+		for _, c := range others {
+			if c.SlotIndex == slot && c.Equipped {
+				if err := tx.Exec("UPDATE inventories SET equipped = 0, slot_index = -1 WHERE id = ?",
+					c.ID).Error; err != nil {
+					return err
 				}
-				break
 			}
 		}
 
-		inv.Equipped = true
-		inv.SlotIndex = slot
-		return tx.Save(&inv).Error
+		return tx.Exec("UPDATE inventories SET equipped = 1, slot_index = ? WHERE id = ?",
+			slot, inv.ID).Error
 	})
 }
 

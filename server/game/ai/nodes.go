@@ -231,6 +231,10 @@ func (n *MoveToSpawn) Tick(ctx *AIContext) Status {
 		if ctx.ThreatTable != nil {
 			ctx.ThreatTable.Clear()
 		}
+		// Trigger linked group leash: all group members disengage.
+		if ctx.OnLeash != nil {
+			ctx.OnLeash()
+		}
 		return StatusSuccess
 	}
 	if !m.CanMove() {
@@ -269,6 +273,25 @@ func (n *AttackTarget) Tick(ctx *AIContext) Status {
 	// Actual damage is applied by the room/handler via DamageCallback.
 	if ctx.DamageCallback != nil {
 		ctx.DamageCallback(m, targetID)
+	}
+	return StatusSuccess
+}
+
+// FollowLeaderTarget makes pack followers adopt the pack leader's target.
+// Returns Success if a leader target was found and added to threat, Failure otherwise.
+type FollowLeaderTarget struct{}
+
+func (n *FollowLeaderTarget) Tick(ctx *AIContext) Status {
+	if ctx.GroupInfo == nil || ctx.GroupInfo.GroupType != "pack" {
+		return StatusFailure
+	}
+	target := ctx.GroupInfo.LeaderTarget
+	if target == 0 {
+		return StatusFailure
+	}
+	// Add minimal threat so the follower targets the leader's target.
+	if ctx.ThreatTable != nil && ctx.ThreatTable.Len() == 0 {
+		ctx.ThreatTable.AddThreat(target, 1)
 	}
 	return StatusSuccess
 }

@@ -35,6 +35,11 @@ type DropRuntimeEntry struct {
 	claimed  bool
 }
 
+// MonsterDamageFunc is called by monster AI when a monster attacks a player.
+// The callback is injected by the WS handler layer so the world package
+// doesn't depend on battle logic or DB access.
+type MonsterDamageFunc func(m *MonsterRuntime, targetCharID int64, room *MapRoom)
+
 // MapRoom manages a single map instance with its own game loop.
 type MapRoom struct {
 	MapID           int
@@ -51,6 +56,10 @@ type MapRoom struct {
 	res             *resource.ResourceLoader
 	state           *GameState
 	passMap         *resource.PassabilityMap
+	spawner         *Spawner // monster respawn manager (nil if no spawns configured)
+	monsterDmgFn    MonsterDamageFunc // injected callback for monster→player damage
+	threatDecayTick int              // counter for periodic threat decay (once per second)
+	groupMgr        *GroupManager    // monster group assist manager
 	broadcastQ      chan []byte
 	BroadcastDrops  int64 // 广播队列溢出丢包计数（atomic）
 	mu              sync.RWMutex
@@ -72,6 +81,7 @@ func newMapRoom(mapID int, res *resource.ResourceLoader, state *GameState, logge
 		broadcastQ:      make(chan []byte, 2048),
 		stopCh:          make(chan struct{}),
 		logger:          logger,
+		groupMgr:        NewGroupManager(),
 	}
 	if res != nil {
 		room.passMap = res.Passability[mapID]
@@ -107,6 +117,63 @@ func (room *MapRoom) Stop() {
 	default:
 		close(room.stopCh)
 	}
+}
+
+// SetSpawner associates a Spawner with this MapRoom for monster respawn management.
+func (room *MapRoom) SetSpawner(sp *Spawner) {
+	room.spawner = sp
+}
+
+// SetMonsterDamageFunc sets the callback for monster→player damage.
+func (room *MapRoom) SetMonsterDamageFunc(fn MonsterDamageFunc) {
+	room.monsterDmgFn = fn
+}
+
+// GetPlayerSession returns the PlayerSession for charID, or nil if not in the room.
+func (room *MapRoom) GetPlayerSession(charID int64) *player.PlayerSession {
+	room.mu.RLock()
+	defer room.mu.RUnlock()
+	return room.players[charID]
+}
+
+// NotifyMonsterDeath handles cleanup and respawn scheduling when a monster dies.
+// Removes the monster from the room after a short delay, then triggers the spawner
+// to respawn the slot after the configured respawn time.
+// If no spawner is configured, falls back to removing the dead monster after 30 seconds
+// with no respawn (RMMV default behavior: enemies don't respawn in standard RMMV).
+func (room *MapRoom) NotifyMonsterDeath(instID int64) {
+	room.mu.RLock()
+	m, ok := room.runtimeMonsters[instID]
+	room.mu.RUnlock()
+	if !ok {
+		return
+	}
+
+	spawnID := m.SpawnID
+	sp := room.spawner
+
+	// Unregister from group manager.
+	if room.groupMgr != nil {
+		room.groupMgr.Unregister(spawnID)
+	}
+
+	// Remove dead monster after a brief delay (let death animation play on client).
+	go func() {
+		select {
+		case <-time.After(5 * time.Second):
+			room.RemoveMonster(instID)
+			// Schedule respawn via spawner if available.
+			if sp != nil {
+				respawnSec := sp.RespawnSec(spawnID)
+				if respawnSec > 0 {
+					sp.RespawnAfter(spawnID, time.Duration(respawnSec)*time.Second)
+				}
+				// respawnSec <= 0 means no auto-respawn (RMMV default or config says 0).
+			}
+		case <-room.stopCh:
+			return
+		}
+	}()
 }
 
 // StopChan returns a channel that is closed when this room is stopped.
@@ -237,6 +304,13 @@ func (room *MapRoom) tickMonsters() {
 	}
 	room.mu.RUnlock()
 
+	// Periodic threat decay: 5% every second (every 20 ticks).
+	room.threatDecayTick++
+	doDecay := room.threatDecayTick >= 20
+	if doDecay {
+		room.threatDecayTick = 0
+	}
+
 	for _, m := range rms {
 		if m.GetState() == ai.StateDead {
 			continue
@@ -249,15 +323,49 @@ func (room *MapRoom) tickMonsters() {
 		if m.AttackTimer > 0 {
 			m.AttackTimer--
 		}
+		// Decay threat once per second.
+		if doDecay && m.Threat != nil {
+			m.Threat.Decay(5)
+		}
 		m.mu.Unlock()
 
 		if m.AITree != nil {
+			dmgFn := room.monsterDmgFn
+			var dmgCB func(ai.MonsterAccessor, int64)
+			if dmgFn != nil {
+				mRef := m // capture for closure
+				dmgCB = func(_ ai.MonsterAccessor, targetCharID int64) {
+					dmgFn(mRef, targetCharID, room)
+				}
+			}
 			ctx := &ai.AIContext{
-				Monster:     m,
-				Room:        room,
-				DeltaMS:     tickInterval.Milliseconds(),
-				Config:      m.Profile,
-				ThreatTable: m.Threat,
+				Monster:        m,
+				Room:           room,
+				DeltaMS:        tickInterval.Milliseconds(),
+				Config:         m.Profile,
+				ThreatTable:    m.Threat,
+				DamageCallback: dmgCB,
+			}
+			// Fill GroupInfo for group-aware BT nodes.
+			if m.SpawnCfg != nil && m.SpawnCfg.GroupID != "" && room.groupMgr != nil {
+				gid := m.SpawnCfg.GroupID
+				group := room.groupMgr.GetGroup(gid)
+				if group != nil {
+					gi := &ai.GroupInfo{GroupType: group.GroupType}
+					if group.GroupType == "pack" && group.LeaderID >= 0 {
+						if leader, ok := group.Members[group.LeaderID]; ok {
+							gi.LeaderTarget = leader.Threat.TopThreat()
+						}
+					}
+					ctx.GroupInfo = gi
+					// Linked group leash: when one returns to spawn, all disengage.
+					if group.GroupType == "linked" {
+						capturedGID := gid
+						ctx.OnLeash = func() {
+							room.groupMgr.ClearGroupThreats(capturedGID)
+						}
+					}
+				}
 			}
 			m.AITree.Tick(ctx)
 		}
@@ -345,8 +453,14 @@ func (room *MapRoom) AddPlayer(s *player.PlayerSession) {
 // RemovePlayer removes a PlayerSession from the MapRoom.
 func (room *MapRoom) RemovePlayer(charID int64) {
 	room.mu.Lock()
-	defer room.mu.Unlock()
 	delete(room.players, charID)
+	// Remove departing player from all monster threat tables.
+	for _, m := range room.runtimeMonsters {
+		if m.Threat != nil {
+			m.Threat.Remove(charID)
+		}
+	}
+	room.mu.Unlock()
 }
 
 // ForEachPlayer calls fn for every player in the room (under read lock).

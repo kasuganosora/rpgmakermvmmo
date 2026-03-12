@@ -1462,7 +1462,7 @@ func TestDispatch_ForwardOnlyCodes(t *testing.T) {
 	codes := []int{
 		CmdChangeTransparency, CmdPlayBGM, CmdStopBGM, CmdPlayBGS, CmdStopBGS,
 		CmdPlaySE, CmdStopSE, CmdPlayME, CmdRotatePicture, CmdErasePicture,
-		CmdEraseEvent, CmdChangeParameter, CmdChangeSkill, CmdChangeName,
+		CmdEraseEvent, CmdChangeParameter, CmdChangeName,
 		CmdChangeActorImage, CmdGameOver, CmdReturnToTitle,
 	}
 
@@ -1484,6 +1484,47 @@ func TestDispatch_ForwardOnlyCodes(t *testing.T) {
 		}
 		assert.True(t, effectFound, "code %d should forward as npc_effect", code)
 	}
+}
+
+// ========================================================================
+// Dispatch: CmdChangeSkill — learn and forget persist to DB
+// ========================================================================
+
+func TestDispatch_ChangeSkill_LearnForget(t *testing.T) {
+	store := newMockInventoryStore()
+	exec := New(store, &resource.ResourceLoader{}, nopLogger())
+	s := testSession(1)
+	s.CharID = 1
+
+	// Learn skill 42
+	learnPage := &resource.EventPage{
+		List: []*resource.EventCommand{
+			{Code: CmdChangeSkill, Indent: 0, Parameters: []interface{}{float64(0), float64(1), float64(0), float64(42)}},
+			{Code: CmdEnd, Indent: 0},
+		},
+	}
+	exec.Execute(context.Background(), s, learnPage, &ExecuteOpts{})
+	pkts := drainPackets(t, s)
+	effectFound := false
+	for _, pkt := range pkts {
+		if pkt.Type == "npc_effect" {
+			effectFound = true
+		}
+	}
+	assert.True(t, effectFound, "learn skill should forward npc_effect")
+	has, _ := store.HasSkill(context.Background(), 1, 42)
+	assert.True(t, has, "skill should be learned")
+
+	// Forget skill 42
+	forgetPage := &resource.EventPage{
+		List: []*resource.EventCommand{
+			{Code: CmdChangeSkill, Indent: 0, Parameters: []interface{}{float64(0), float64(1), float64(1), float64(42)}},
+			{Code: CmdEnd, Indent: 0},
+		},
+	}
+	exec.Execute(context.Background(), s, forgetPage, &ExecuteOpts{})
+	has, _ = store.HasSkill(context.Background(), 1, 42)
+	assert.False(t, has, "skill should be forgotten")
 }
 
 // ========================================================================

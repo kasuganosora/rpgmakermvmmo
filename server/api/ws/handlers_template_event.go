@@ -254,10 +254,19 @@ type varSetRequest struct {
 }
 
 // HandleVarSet handles updates to variable values.
-// Updates global state (for whitelist variables).
+// Only allows setting variables in the broadcastVariables whitelist to prevent
+// clients from arbitrarily modifying server-authoritative game state.
 func (h *TemplateEventHandlers) HandleVarSet(ctx context.Context, s *player.PlayerSession, raw json.RawMessage) error {
 	var req varSetRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
+		return nil
+	}
+
+	// Guard: only allow variables explicitly listed in broadcastVariables.
+	if len(h.broadcastVarSet) > 0 && !h.broadcastVarSet[req.VariableID] {
+		h.logger.Warn("var_set rejected: variable not in broadcastVariables whitelist",
+			zap.Int64("char_id", s.CharID),
+			zap.Int("variable_id", req.VariableID))
 		return nil
 	}
 
@@ -316,10 +325,19 @@ type switchSetRequest struct {
 }
 
 // HandleSwitchSet handles updates to switch values.
-// Updates global state.
+// Only allows setting switches in the broadcastSwitches whitelist to prevent
+// clients from arbitrarily modifying server-authoritative game state.
 func (h *TemplateEventHandlers) HandleSwitchSet(ctx context.Context, s *player.PlayerSession, raw json.RawMessage) error {
 	var req switchSetRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
+		return nil
+	}
+
+	// Guard: only allow switches explicitly listed in broadcastSwitches.
+	if len(h.broadcastSwitchSet) > 0 && !h.broadcastSwitchSet[req.SwitchID] {
+		h.logger.Warn("switch_set rejected: switch not in broadcastSwitches whitelist",
+			zap.Int64("char_id", s.CharID),
+			zap.Int("switch_id", req.SwitchID))
 		return nil
 	}
 
