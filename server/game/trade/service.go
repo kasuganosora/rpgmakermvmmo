@@ -98,6 +98,25 @@ func (svc *Service) AcceptTrade(a, b *player.PlayerSession) *TradeSession {
 
 // UpdateOffer updates one side's offer and notifies both parties.
 func (svc *Service) UpdateOffer(s *player.PlayerSession, itemIDs []int64, gold int64) error {
+	// Validate inputs.
+	if gold < 0 {
+		return errors.New("gold amount cannot be negative")
+	}
+	const maxTradeItems = 10
+	if len(itemIDs) > maxTradeItems {
+		return fmt.Errorf("cannot offer more than %d items", maxTradeItems)
+	}
+	// Deduplicate item IDs — prevent offering the same inventory row twice.
+	seen := make(map[int64]bool, len(itemIDs))
+	deduped := make([]int64, 0, len(itemIDs))
+	for _, id := range itemIDs {
+		if !seen[id] {
+			seen[id] = true
+			deduped = append(deduped, id)
+		}
+	}
+	itemIDs = deduped
+
 	svc.mu.RLock()
 	sess := svc.active[s.CharID]
 	svc.mu.RUnlock()
@@ -138,7 +157,13 @@ func (svc *Service) Confirm(ctx context.Context, s *player.PlayerSession) error 
 	sess.mu.Unlock()
 
 	if bothConfirmed {
-		return svc.Commit(ctx, sess)
+		err := svc.Commit(ctx, sess)
+		if err != nil {
+			// Commit already cleaned up svc.active. Notify both players.
+			svc.notifyCommitError(sess, err.Error())
+			return err
+		}
+		return nil
 	}
 	svc.broadcastState(sess, s)
 	return nil
@@ -209,6 +234,9 @@ func (svc *Service) Commit(ctx context.Context, sess *TradeSession) error {
 				First(&inv).Error; err != nil {
 				return fmt.Errorf("item %d no longer available for trader A", invID)
 			}
+			if inv.Equipped {
+				return fmt.Errorf("item %d is equipped and cannot be traded", invID)
+			}
 			// Transfer to B.
 			if err := tx.Model(&inv).Update("char_id", sess.OfferB.CharID).Error; err != nil {
 				return err
@@ -219,6 +247,9 @@ func (svc *Service) Commit(ctx context.Context, sess *TradeSession) error {
 			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND char_id = ?", invID, sess.OfferB.CharID).
 				First(&inv).Error; err != nil {
 				return fmt.Errorf("item %d no longer available for trader B", invID)
+			}
+			if inv.Equipped {
+				return fmt.Errorf("item %d is equipped and cannot be traded", invID)
 			}
 			if err := tx.Model(&inv).Update("char_id", sess.OfferA.CharID).Error; err != nil {
 				return err
@@ -273,6 +304,21 @@ func (svc *Service) Commit(ctx context.Context, sess *TradeSession) error {
 
 	svc.logger.Info("trade committed", zap.Int64("session_id", sess.ID))
 	return nil
+}
+
+func (svc *Service) notifyCommitError(sess *TradeSession, msg string) {
+	if svc.sm == nil {
+		return
+	}
+	payload, _ := json.Marshal(map[string]interface{}{
+		"phase": "error",
+		"error": msg,
+	})
+	for _, cid := range []int64{sess.OfferA.CharID, sess.OfferB.CharID} {
+		if p := svc.sm.Get(cid); p != nil {
+			p.Send(&player.Packet{Type: "trade_update", Payload: payload})
+		}
+	}
 }
 
 func (svc *Service) getOffer(sess *TradeSession, charID int64) *TradeOffer {

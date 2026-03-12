@@ -1556,9 +1556,17 @@
     });
 
     // ═══════════════════════════════════════════════════════════
-    //  Scene_Shop 服务端权威 — 购买/出售通过 WS 发送到服务端
+    //  Scene_Shop 服务端権威 — 購入/売却通过 WS 发送到服务端
     //  客户端本地也同步修改 $gameParty 以保持 UI 一致。
     // ═══════════════════════════════════════════════════════════
+
+    // ═══════════════════════════════════════════════════════════
+    //  Shop result handlers — rollback on server rejection
+    // ═══════════════════════════════════════════════════════════
+
+    /** Pending shop operation for rollback on failure. */
+    var _pendingShopBuy = null;
+    var _pendingShopSell = null;
 
     var _Scene_Shop_doBuy = Scene_Shop.prototype.doBuy;
     Scene_Shop.prototype.doBuy = function (number) {
@@ -1566,6 +1574,13 @@
         var goodsType = 0;
         if (DataManager.isWeapon(this._item)) goodsType = 1;
         else if (DataManager.isArmor(this._item)) goodsType = 2;
+
+        // Save rollback info before applying.
+        _pendingShopBuy = {
+            item: this._item,
+            qty: number,
+            cost: number * this.buyingPrice()
+        };
 
         $MMO.send('shop_buy', {
             goods_type: goodsType,
@@ -1583,6 +1598,13 @@
         if (DataManager.isWeapon(this._item)) goodsType = 1;
         else if (DataManager.isArmor(this._item)) goodsType = 2;
 
+        // Save rollback info before applying.
+        _pendingShopSell = {
+            item: this._item,
+            qty: number,
+            earned: number * Math.floor(this._item.price / 2)
+        };
+
         $MMO.send('shop_sell', {
             goods_type: goodsType,
             item_id:    this._item.id,
@@ -1597,8 +1619,53 @@
     var _Scene_Shop_terminate = Scene_Shop.prototype.terminate;
     Scene_Shop.prototype.terminate = function () {
         $MMO.send('shop_close', {});
+        _pendingShopBuy = null;
+        _pendingShopSell = null;
         _Scene_Shop_terminate.call(this);
     };
+
+    /** Handle server shop_buy_result — rollback on failure. */
+    $MMO.on('shop_buy_result', function (data) {
+        if (data && data.ok) {
+            _pendingShopBuy = null; // success, no rollback needed
+            return;
+        }
+        // Server rejected — rollback the optimistic local update.
+        if (_pendingShopBuy) {
+            $gameParty.loseItem(_pendingShopBuy.item, _pendingShopBuy.qty, false);
+            $gameParty.gainGold(_pendingShopBuy.cost);
+            _pendingShopBuy = null;
+            // Refresh shop windows if still in shop scene.
+            var scene = SceneManager._scene;
+            if (scene && scene instanceof Scene_Shop) {
+                if (scene._goldWindow) scene._goldWindow.refresh();
+                if (scene._buyWindow) scene._buyWindow.refresh();
+                if (scene._statusWindow) scene._statusWindow.refresh();
+            }
+            SoundManager.playBuzzer();
+        }
+    });
+
+    /** Handle server shop_sell_result — rollback on failure. */
+    $MMO.on('shop_sell_result', function (data) {
+        if (data && data.ok) {
+            _pendingShopSell = null;
+            return;
+        }
+        // Server rejected — rollback.
+        if (_pendingShopSell) {
+            $gameParty.gainItem(_pendingShopSell.item, _pendingShopSell.qty, false);
+            $gameParty.loseGold(_pendingShopSell.earned);
+            _pendingShopSell = null;
+            var scene = SceneManager._scene;
+            if (scene && scene instanceof Scene_Shop) {
+                if (scene._goldWindow) scene._goldWindow.refresh();
+                if (scene._sellWindow) scene._sellWindow.refresh();
+                if (scene._statusWindow) scene._statusWindow.refresh();
+            }
+            SoundManager.playBuzzer();
+        }
+    });
 
     // ═══════════════════════════════════════════════════════════
     //  YEP_MessageCore null-safe patch — escapeIconItem

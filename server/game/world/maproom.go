@@ -154,7 +154,7 @@ func (room *MapRoom) NotifyMonsterDeath(instID int64) {
 
 	// Unregister from group manager.
 	if room.groupMgr != nil {
-		room.groupMgr.Unregister(spawnID)
+		room.groupMgr.Unregister(m.InstID)
 	}
 
 	// Remove dead monster after a brief delay (let death animation play on client).

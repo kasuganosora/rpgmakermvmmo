@@ -196,26 +196,15 @@
         if (_combatMode === 'turnbased') {
             // turnbased 模式下跳过 mmo-battle.js 的攻击处理，
             // 直接调用最原始的 processMapTouch（角色移动）
-            if (this._origProcessMapTouch) {
-                this._origProcessMapTouch.call(this);
-            }
+            // _prevProcessMapTouch is mmo-battle.js's version which internally
+            // falls through to the original RMMV movement handler
+            _prevProcessMapTouch.call(this);
             return;
         }
 
         // hybrid 模式下不再调用 _prevProcessMapTouch（我们已经处理了攻击），
         // 但仍需要处理角色移动
-        if (this._origProcessMapTouch) {
-            this._origProcessMapTouch.call(this);
-        }
-    };
-
-    // 保存最原始的 processMapTouch（mmo-battle.js 之前的原版）
-    // 在 Scene_Map 创建时捕获
-    var _Scene_Map_create = Scene_Map.prototype.create;
-    Scene_Map.prototype.create = function () {
-        _Scene_Map_create.call(this);
-        // _prevProcessMapTouch 是 mmo-battle.js 的版本，它内部持有原始版本引用
-        // 我们需要绕过 mmo-battle.js 的攻击逻辑，只保留移动
+        _prevProcessMapTouch.call(this);
     };
 
     // ═══════════════════════════════════════════════════════════════
@@ -289,6 +278,7 @@
      * @param {number} targetId - 怪物 inst_id
      */
     function _sendAttack(targetId) {
+        _attackCooldown = _attackCooldownMax;
         $MMO.send('attack', { target_id: targetId, target_type: 'monster' });
     }
 
@@ -333,10 +323,14 @@
     function createTargetIndicator() {
         var sp = new Sprite(new Bitmap(56, 56));
         var bmp = sp.bitmap;
+        var ctx = bmp._context;
         var cx = 28, cy = 28, r = 24;
-        // 绘制黄色选中圈
-        bmp.drawCircle(cx, cy, r, 'rgba(255, 215, 0, 0.5)');
-        bmp.drawCircle(cx, cy, r - 2, 'rgba(0, 0, 0, 0)');  // 内圈透明
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(255, 215, 0, 0.7)';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        bmp._setDirty();
         sp.anchor.x = 0.5;
         sp.anchor.y = 0.5;
         sp.visible = false;
@@ -501,8 +495,8 @@
     var _BattleManager_setup = BattleManager.setup;
     BattleManager.setup = function (troopId, canEscape, canLose) {
         _BattleManager_setup.call(this, troopId, canEscape, canLose);
-        if (_combatMode === 'realtime') {
-            // 标记自动胜利
+        if (_combatMode === 'realtime' && !$MMO._serverBattle) {
+            // 标记自动胜利（puppet mode では無効）
             this._realtimeAutoWin = true;
         }
     };

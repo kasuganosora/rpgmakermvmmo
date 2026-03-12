@@ -96,11 +96,11 @@ func (sp *Spawner) spawnGroup(cfgIndex int, cfg SpawnConfig) {
 		m.SpawnCfg = &cfg
 		// Wire OnDamaged callback for group assist.
 		if cfg.GroupID != "" && sp.room.groupMgr != nil {
-			spIdx := cfgIndex
+			capturedInstID := m.InstID
 			m.OnDamaged = func(monster *MonsterRuntime, attackerCharID int64) {
-				sp.room.groupMgr.OnMemberDamaged(spIdx, attackerCharID)
+				sp.room.groupMgr.OnMemberDamaged(capturedInstID, attackerCharID)
 			}
-			sp.room.groupMgr.Register(cfgIndex, cfg.GroupID, cfg.GroupType, m)
+			sp.room.groupMgr.Register(m.InstID, cfg.GroupID, cfg.GroupType, m)
 		}
 		sp.room.runtimeMonsters[m.InstID] = m
 		sp.room.monsters = append(sp.room.monsters, &MonsterInstance{

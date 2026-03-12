@@ -74,13 +74,14 @@ func (m *MonsterRuntime) TakeDamage(dmg int, attackerID int64) bool {
 	if m.Threat != nil {
 		m.Threat.AddThreat(attackerID, dmg)
 	}
+	dead := m.HP == 0
 	onDamaged := m.OnDamaged
 	m.mu.Unlock()
 	// Trigger group assist callback outside the lock.
 	if onDamaged != nil {
 		onDamaged(m, attackerID)
 	}
-	return m.HP == 0
+	return dead
 }
 
 // SpawnConfig describes a monster spawn point on a map.
